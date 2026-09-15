@@ -8,6 +8,27 @@
 
 **Tech Stack:** git, GitHub CLI (`gh`), GitHub Actions
 
+---
+
+## ⚠️ 실행 후 정정 (2026-09-15)
+
+BE PR #1(머지됨)과 BE `AGENTS.md` 를 크로스체크한 결과 **아래 항목이 실제와 다르다.** 실행은 정정된 내용으로 했다.
+
+| 플랜 원문 | 실제 |
+|---|---|
+| 커밋 메시지는 영문 소문자 타입 | **한글** Conventional Commit. BE 실제 예: `chore: 초기 개발환경 설정` |
+| 브랜치명 `feat/initial-development-environment` | `feat/1-초기개발환경설정` — BE 규약은 `feat/이슈번호-기능명` |
+| `dev` 에 에이전트 설정·문서 커밋 | `dev` 는 **빈 커밋 1개**. 모든 내용이 feat 브랜치로 (사용자 지시) |
+| Task 2 / Task 3 를 별도 브랜치로 | 두 커밋 모두 같은 feat 브랜치. BE도 한 브랜치에 여러 커밋 후 PR 1개 |
+| PR 제목·본문 영문 | 제목 한글. 본문은 `주요 변경사항 / 구현 기능 / 테스트 내용·결과 / API 변경 여부 / DB 변경 여부 / Closes #N` |
+| (없음) | **GitHub Issue 선행 생성 필수.** Issue #1, #2 생성함 |
+
+또한 Task 2 Step 7 이후(`dev` 푸시, 기본 브랜치 지정)는 **실행하지 않았다.** 사용자가 오늘 푸시를 보류했다.
+
+**푸시 전에 Issue #2(API 계약 기준 확정)가 먼저 정리돼야 한다.** BE는 노션, AI는 위키 기준으로 갈려 있다 — `docs/contract-diff-wiki-vs-notion.md` 참조.
+
+---
+
 ## Global Constraints
 
 - **커밋·푸시 전에 반드시 사용자 승인을 받는다.** 이 플랜의 모든 커밋 스텝은 승인 요청에서 멈춘다.
