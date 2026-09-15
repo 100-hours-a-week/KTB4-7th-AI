@@ -43,6 +43,20 @@ RESPONSES = {
         ],
         "generatedAt": "2026-09-08T00:10:00+09:00",
     },
+    # 아래 2종은 TOOL_PATHS 에서 주석 처리돼 있어 지금은 라우트로 등록되지 않는다.
+    # Issue #2 9번이 MVP 포함으로 결정되면 TOOL_PATHS 주석만 풀면 바로 살아난다.
+    "get_profit": {
+        "netSales": 3200000,
+        "ingredientCost": 1040000,
+        "fixedCost": 1200000,
+        "netProfit": 960000,
+        "composition": [{"type": "NET_PROFIT", "amount": 960000, "ratio": 30.0}],
+    },
+    "get_review_summary": {
+        "summary": "커피 맛과 친절한 응대에 대한 긍정 반응이 많습니다.",
+        "sentiment": {"positive": 82, "neutral": 14, "negative": 4},
+        "keywords": ["커피", "친절", "대기시간"],
+    },
 }
 
 app = FastAPI(title="스텁 BE 분석 모듈")
@@ -53,6 +67,10 @@ def _register(tool: str, path: str) -> None:
     async def _handler() -> dict:
         return {"message": "조회에 성공했습니다.", "data": RESPONSES[tool]}
 
+
+_missing = set(TOOL_PATHS) - set(RESPONSES)
+if _missing:
+    raise RuntimeError(f"스텁 응답이 없는 툴: {sorted(_missing)}")
 
 for _tool, _path in TOOL_PATHS.items():
     _register(_tool, _path)
