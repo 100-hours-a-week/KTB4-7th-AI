@@ -1,0 +1,33 @@
+from anthropic import AsyncAnthropic
+
+from app.core.config import settings
+from app.core.errors import ApiError
+
+_client: AsyncAnthropic | None = None
+
+
+def _get() -> AsyncAnthropic:
+    global _client
+    if _client is None:
+        _client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return _client
+
+
+async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    """단발 생성. 솔루션·인사이트용. 스트리밍이 필요한 챗봇은 별도 경로를 쓴다."""
+    try:
+        res = await _get().messages.create(
+            model=settings.llm_model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+    except Exception as exc:
+        raise ApiError(502, "LLM_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
+
+    return res.content[0].text
+
+
+# 프롬프트 캐싱(cache_control)은 여기 붙이지 않았다. 솔루션·인사이트의 시스템 프롬프트는
+# 캐시 최소 토큰에 한참 못 미쳐서 효과가 없다. 챗봇은 시스템 프롬프트 + 매장 고정 컨텍스트 +
+# 툴 스키마가 합쳐져 충분히 커지므로 그때 붙인다 (위키 단계2 §6).
