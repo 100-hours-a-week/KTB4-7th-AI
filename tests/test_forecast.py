@@ -38,7 +38,7 @@ def test_이력이_충분하면_35일을_예측한다():
     assert res.horizonDays == 35
     assert len(res.predictions) == 35
     assert res.forecastEndDate == "2026-10-05"
-    assert res.modelVersion == "ridge_v1"
+    assert res.modelVersion == "ridge_v2"
     assert [p.date for p in res.predictions] == [
         str(d.date()) for d in pd.date_range("2026-09-01", periods=35)
     ]
@@ -90,6 +90,24 @@ def test_날짜가_누락되면_422():
 
     assert exc.value.status == 422
     assert exc.value.code == "INVALID_DAILY_SALES"
+
+
+def test_공휴일이_주말과_겹치면_쉬는날_효과를_한_번만_센다():
+    """ridge_v2 — is_offday 는 켜지고 is_holiday_weekday 는 꺼져야 한다."""
+    future = build_future_frame(
+        pd.Series(
+            {pd.Timestamp(r.date): float(r.amount) for r in _daily("2025-12-08", "2026-08-14")}
+        ),
+        pd.Timestamp("2026-08-15"),
+        5,
+    )
+    saturday_holiday = future.loc[pd.Timestamp("2026-08-15")]  # 광복절(토)
+    weekday_holiday = future.loc[pd.Timestamp("2026-08-17")]  # 대체공휴일(월)
+
+    assert saturday_holiday["is_offday"] == 1
+    assert saturday_holiday["is_holiday_weekday"] == 0
+    assert weekday_holiday["is_offday"] == 1
+    assert weekday_holiday["is_holiday_weekday"] == 1
 
 
 def test_35일_전부_시작_달의_직전_달_집계로_고정된다():
