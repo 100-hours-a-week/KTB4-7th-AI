@@ -1,3 +1,4 @@
+import anthropic
 from anthropic import AsyncAnthropic
 
 from app.core.config import settings
@@ -22,6 +23,8 @@ async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+    except anthropic.APITimeoutError as exc:
+        raise ApiError(504, "LLM_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다.") from exc
     except Exception as exc:
         raise ApiError(502, "LLM_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
 
