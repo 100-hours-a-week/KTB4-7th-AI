@@ -11,6 +11,7 @@ Backend가 전달한 데이터만 사용하며 **서비스 DB에 직접 접근�
 | 테스트 | `uv run pytest` |
 | 린트 | `uv run ruff check --fix . && uv run ruff format .` |
 | 스텁 BE | `uv run python devtools/stub_backend.py` |
+| 예측 연동 점검 | `uv run python -m devtools.forecast_check --pos <POS 엑셀>` |
 
 ## 담당 경계
 
