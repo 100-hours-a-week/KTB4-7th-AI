@@ -2,36 +2,32 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.schemas.common import Contract, Evidence, Metrics
-
-
-class SolutionContext(Contract):
-    dayOfWeek: str
-    isWeekend: bool
-    dataBasisPeriod: str
-    isHoliday: bool | None = None  # v2
+from app.schemas.common import Contract, Metrics
 
 
 class SolutionRequest(Contract):
     storeId: int
-    salesAnalysisId: int
+    # UPLOAD 트리거만 필수. SCHEDULED(00:00 배치)는 이 값을 보내지 않는다 — docs/api정의서.md 참고.
+    salesAnalysisId: int | None = None
     targetDate: str
     triggerType: Literal["UPLOAD", "SCHEDULED"]
-    context: SolutionContext
     metrics: Metrics
 
 
 class SolutionCard(Contract):
-    rank: int
+    rankNo: int
     title: str
-    evidence: Evidence
-    detailContent: str = Field(max_length=1000)
+    summaryText: str
+    detailText: str = Field(max_length=1000)
+
+
+class SolutionData(Contract):
+    targetDate: str
+    solutionCards: list[SolutionCard]
+    modelVersion: str
+    promptVersion: str
 
 
 class SolutionResponse(Contract):
-    status: Literal["SUCCESS"] = "SUCCESS"
-    targetDate: str
-    solutionCards: list[SolutionCard]
-    aiInsight: str
-    modelVersion: str
-    promptVersion: str
+    message: str = "솔루션을 생성했습니다."
+    data: SolutionData

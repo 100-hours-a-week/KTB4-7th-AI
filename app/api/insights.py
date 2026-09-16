@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.core.auth import verify_internal_key
 from app.schemas.insight import InsightRequest, InsightResponse
 from app.services import insight as insight_service
 
-router = APIRouter(prefix="/internal/ai", dependencies=[Depends(verify_internal_key)])
+router = APIRouter(prefix="/internal/v1/ai")
 
 
-@router.post("/insights/generate", response_model=InsightResponse)
+@router.post(
+    "/sales-insights",
+    response_model=InsightResponse,
+    response_model_exclude_none=True,
+)
 async def generate_insight(req: InsightRequest) -> InsightResponse:
     return await insight_service.generate(req)

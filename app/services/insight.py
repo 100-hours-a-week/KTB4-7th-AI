@@ -1,53 +1,45 @@
-"""위키 [AI] 단계1 §7.3. 관찰형 인사이트 — 행동 처방은 하지 않는다.
+"""위키 [AI] 단계1 §7.3 / docs/api정의서.md SALES-04. 관찰형 인사이트 — 행동 처방은 하지 않는다.
 
-dataDays 14일 미만은 LLM을 호출하지 않고 코드단에서 즉시 INSUFFICIENT_DATA 를 반환한다.
-그 외 재시도 규칙은 solution.py 와 동일 (파싱 실패 1회 재시도).
+데이터 부족(14일 미만) 판단은 BE 가 호출 전에 한다 — 이 요청엔 dataDays 가 없어 AI 는
+스스로 판단할 수 없다. AI 는 항상 생성을 시도하고, 파싱 실패 시 1회만 재시도한다.
 """
 
 import json
 
 from app.clients import llm
-from app.core.config import settings
 from app.core.errors import ApiError
-from app.prompts import insight_v1
-from app.schemas.insight import Insight, InsightRequest, InsightResponse
+from app.prompts import insight_v2 as insight_prompt
+from app.schemas.insight import InsightData, InsightRequest, InsightResponse
 
-MIN_DATA_DAYS = 14
 MAX_RETRY = 1
 
 
-def _parse(raw: str) -> list[Insight] | None:
+def _parse(raw: str) -> list[str] | None:
     try:
         data = json.loads(raw)
-        return [Insight(**item) for item in data["insights"]]
+        insights = data["insights"]
+        if not isinstance(insights, list) or not all(isinstance(i, str) for i in insights):
+            return None
+        return insights
     except Exception:
         return None
 
 
 async def generate(req: InsightRequest) -> InsightResponse:
-    if req.dataDays < MIN_DATA_DAYS:
-        return InsightResponse(
-            status="INSUFFICIENT_DATA",
-            insights=[],
-            modelVersion=settings.llm_model,
-            promptVersion=insight_v1.VERSION,
-        )
-
-    prompt = insight_v1.build(req.metrics.model_dump())
+    prompt = insight_prompt.build(req.metrics.model_dump(), req.maxInsightCount)
 
     insights = None
     for _ in range(MAX_RETRY + 1):
-        raw = await llm.complete(insight_v1.SYSTEM, prompt)
+        raw = await llm.complete(insight_prompt.SYSTEM, prompt)
         insights = _parse(raw)
         if insights is not None:
             break
 
     if insights is None:
-        raise ApiError(500, "INSIGHT_GENERATION_FAILED", "인사이트 생성에 실패했습니다.")
+        raise ApiError(500, "INSIGHT_GENERATION_FAILED", "매출 분석 인사이트 생성에 실패했습니다.")
 
     return InsightResponse(
-        status="SUCCESS",
-        insights=insights,
-        modelVersion=settings.llm_model,
-        promptVersion=insight_v1.VERSION,
+        message="매출 AI 인사이트를 생성했습니다.",
+        status="COMPLETED",
+        data=InsightData(targetMonth=req.targetMonth, insights=insights),
     )

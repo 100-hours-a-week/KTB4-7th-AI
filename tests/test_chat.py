@@ -42,7 +42,7 @@ async def _post(body: dict, headers=_UNSET) -> httpx.Response:
         headers = {"X-Internal-Api-Key": "test-key"}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post("/internal/ai/chat/messages", json=body, headers=headers)
+        return await client.post("/internal/v1/ai/chat/messages", json=body, headers=headers)
 
 
 def _answer_chunks(text: str) -> list[str]:
@@ -54,7 +54,7 @@ def _answer_chunks(text: str) -> list[str]:
         payload = line[len("data: ") :]
         if payload == "[DONE]":
             continue
-        chunks.append(json.loads(payload)["answerChunk"])
+        chunks.append(json.loads(payload)["data"]["content"])
     return chunks
 
 
@@ -115,13 +115,14 @@ async def test_툴이_2회_연속_실패하면_실패_문구를_반환한다(mon
     assert chat_graph.FAILURE_PHRASE in "".join(_answer_chunks(res.text))
 
 
-async def test_인증키가_없으면_401():
+async def test_요청에_인증헤더가_없어도_통과한다(monkeypatch):
+    _patch_model(monkeypatch, [AIMessage(content="괜찮아요.")])
     res = await _post(REQUEST_BODY, headers={})
-    assert res.status_code == 401
+    assert res.status_code == 200
 
 
 async def test_필수_필드가_없으면_422():
     body = {k: v for k, v in REQUEST_BODY.items() if k != "context"}
     res = await _post(body)
     assert res.status_code == 422
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert res.json()["message"]

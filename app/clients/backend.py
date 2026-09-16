@@ -4,23 +4,16 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fi
 from app.core.config import settings
 from app.core.errors import ApiError
 
-# 계약 미확정 구간. 위키 [AI] 단계1 기준이며 노션과 경로가 다르다 (Issue #2 8번).
-# 기준이 정해지면 이 딕셔너리만 고치면 된다.
-#
-#   툴                       위키 (현재)                          노션
-#   get_hourly_profile       /internal/v1/sales/hourly-profile    .../hourly-profiles
-#   get_forecast             /internal/v1/forecast                /internal/v1/sales/forecasts
-#   get_profit               /internal/v1/profit                  /internal/v1/sales/profit-analyses
-#   get_review_summary       /internal/v1/reviews/summary         /internal/v1/review-summaries
+# docs/api정의서.md 확정 반영 (2026-09-16). v1 MVP는 4종만 활성화한다 —
+# 순이익·리뷰는 API 정의서에 있지만 원본 데이터를 만드는 백엔드 잡이 아직 v1에 없어
+# 호출해도 항상 빈 값이다(계약 대조표 §6 참고). 스텁 응답은 devtools/stub_backend.py 에 준비돼 있다.
 TOOL_PATHS = {
     "get_sales_summary": "/internal/v1/sales/summary",
     "get_category_breakdown": "/internal/v1/sales/categories",
-    "get_hourly_profile": "/internal/v1/sales/hourly-profile",
-    "get_forecast": "/internal/v1/forecast",
-    # 아래 2종은 위키상 MVP 범위 밖이다 (순이익 v2, 리뷰 v3). 노션은 둘 다 v1로 본다 — Issue #2 9번.
-    # MVP 포함으로 결정되면 주석만 풀면 된다. 스텁 응답은 devtools/stub_backend.py 에 준비돼 있다.
-    # "get_profit": "/internal/v1/profit",
-    # "get_review_summary": "/internal/v1/reviews/summary",
+    "get_hourly_profile": "/internal/v1/sales/hourly-profiles",
+    "get_forecast": "/internal/v1/sales/forecasts",
+    # "get_profit": "/internal/v1/sales/profit-analyses",
+    # "get_review_summary": "/internal/v1/review-summaries",
 }
 
 

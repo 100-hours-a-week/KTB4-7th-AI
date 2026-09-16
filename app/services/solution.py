@@ -1,46 +1,54 @@
-"""위키 [AI] 단계4 §3 파이프라인 B. 카드 3장+인사이트를 1회 호출로 동시 생성.
+"""위키 [AI] 단계4 §3 파이프라인 B. 카드 3장을 1회 호출로 생성.
 
 파싱 실패 시 1회만 재시도한다 (재호출 비교 검증은 두지 않음 — 단계4 §3.3).
 """
 
 import json
+from datetime import date
 
 from app.clients import llm
 from app.core.config import settings
 from app.core.errors import ApiError
-from app.prompts import solution_v1
-from app.schemas.solution import SolutionCard, SolutionRequest, SolutionResponse
+from app.prompts import solution_v2 as solution_prompt
+from app.schemas.solution import SolutionCard, SolutionData, SolutionRequest, SolutionResponse
 
 MAX_RETRY = 1
+_WEEKDAY_CODES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
 
-def _parse(raw: str) -> tuple[list[SolutionCard], str] | None:
+def _day_facts(target_date: str) -> tuple[str, bool]:
+    code = _WEEKDAY_CODES[date.fromisoformat(target_date).weekday()]
+    return code, code in ("SAT", "SUN")
+
+
+def _parse(raw: str) -> list[SolutionCard] | None:
     try:
         data = json.loads(raw)
-        cards = [SolutionCard(**card) for card in data["solutionCards"]]
-        return cards, data["aiInsight"]
+        return [SolutionCard(**card) for card in data["solutionCards"]]
     except Exception:
         return None
 
 
 async def generate(req: SolutionRequest) -> SolutionResponse:
-    prompt = solution_v1.build(req.metrics.model_dump(), req.context.model_dump())
+    day_of_week, is_weekend = _day_facts(req.targetDate)
+    metrics = req.metrics.model_dump()
+    prompt = solution_prompt.build(metrics, req.targetDate, day_of_week, is_weekend)
 
-    result = None
+    cards = None
     for _ in range(MAX_RETRY + 1):
-        raw = await llm.complete(solution_v1.SYSTEM, prompt)
-        result = _parse(raw)
-        if result:
+        raw = await llm.complete(solution_prompt.SYSTEM, prompt)
+        cards = _parse(raw)
+        if cards:
             break
 
-    if result is None:
+    if cards is None:
         raise ApiError(500, "SOLUTION_GENERATION_FAILED", "솔루션 생성에 실패했습니다.")
 
-    cards, ai_insight = result
     return SolutionResponse(
-        targetDate=req.targetDate,
-        solutionCards=cards,
-        aiInsight=ai_insight,
-        modelVersion=settings.llm_model,
-        promptVersion=solution_v1.VERSION,
+        data=SolutionData(
+            targetDate=req.targetDate,
+            solutionCards=cards,
+            modelVersion=settings.llm_model,
+            promptVersion=solution_prompt.VERSION,
+        )
     )
