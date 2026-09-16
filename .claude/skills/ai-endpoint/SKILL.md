@@ -15,7 +15,9 @@ description: AI 서버에 내부 엔드포인트를 추가하는 표준 절차. 
 ### 1. 스키마
 `app/schemas/<name>.py` 에 요청·응답 모델을 쓴다.
 
-- `app/schemas/common.py` 의 `Contract` 를 상속한다 (`extra="forbid"` — 위키 규약상 정의되지 않은 필드는 422).
+- `app/schemas/common.py` 의 `Contract` 를 상속한다 (`extra="ignore"` — 2026-09-16 팀 결정. BE/AI가
+  따로 배포되므로 한쪽이 필드를 먼저 추가해도 다른 쪽이 422로 막지 않는다. 정의되지 않은 필드는
+  무시되고, 필수 필드 누락만 422가 된다).
 - 필드명은 **camelCase 그대로**. snake_case로 바꾸지 않는다.
 - 금액은 `int`(원), 비율은 `float`(0.62 형태, 퍼센트 아님), 날짜는 `str` (YYYY-MM-DD).
 - 이미 있는 `Evidence` / `Metrics` 를 재사용한다. 비슷한 걸 새로 만들지 않는다.
