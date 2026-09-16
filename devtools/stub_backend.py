@@ -2,9 +2,8 @@
 
     uv run python devtools/stub_backend.py
 
-응답 값은 노션 API 정의서의 예시를 옮기되, **비율은 소수 표기**로 바꿨다(0.125, 0.563).
-퍼센트 표기(12.5, 56.3)와는 100배 차이가 나는데 둘 다 숫자라 스키마 검증을 통과해버린다 —
-Issue #2 6번 결정에 따라 소수로 통일한다(2026-09-16).
+응답 값은 API 정의서(docs/api정의서.md) 예시를 옮기되, **비율은 정수 퍼센트**로 바꿨다(12, 56).
+소수 표기(0.125, 0.563) 대신 정수를 쓰기로 팀이 확정했다(2026-09-16).
 """
 
 import uvicorn
@@ -18,10 +17,10 @@ RESPONSES = {
         "netSales": 3200000,
         "orderCount": 420,
         "averageOrderValue": 7619,
-        "changeRate": 0.125,
+        "changeRate": 12,
     },
     "get_category_breakdown": {
-        "categories": [{"categoryName": "커피", "netSales": 1800000, "ratio": 0.563}],
+        "categories": [{"categoryName": "커피", "netSales": 1800000, "ratio": 56}],
         "menuRankings": [
             {"rank": 1, "menuName": "아메리카노", "netSales": 800000, "quantity": 250}
         ],
@@ -37,7 +36,7 @@ RESPONSES = {
         "forecasts": [
             {
                 "targetDate": "2026-09-09",
-                "predictedSales": 420000,
+                "predictedSalesAmount": 420000,
                 "lowerBound": 360000,
                 "upperBound": 480000,
             }
@@ -45,17 +44,17 @@ RESPONSES = {
         "generatedAt": "2026-09-08T00:10:00+09:00",
     },
     # 아래 2종은 TOOL_PATHS 에서 주석 처리돼 있어 지금은 라우트로 등록되지 않는다.
-    # Issue #2 9번이 MVP 포함으로 결정되면 TOOL_PATHS 주석만 풀면 바로 살아난다.
+    # v1 MVP 포함으로 결정되면 TOOL_PATHS 주석만 풀면 바로 살아난다.
     "get_profit": {
         "netSales": 3200000,
         "ingredientCost": 1040000,
         "fixedCost": 1200000,
         "netProfit": 960000,
-        "composition": [{"type": "NET_PROFIT", "amount": 960000, "ratio": 0.30}],
+        "composition": [{"type": "NET_PROFIT", "amount": 960000, "ratio": 30}],
     },
     "get_review_summary": {
         "summary": "커피 맛과 친절한 응대에 대한 긍정 반응이 많습니다.",
-        "sentiment": {"positive": 0.82, "neutral": 0.14, "negative": 0.04},
+        "sentiment": {"positive": 82, "neutral": 14, "negative": 4},
         "keywords": ["커피", "친절", "대기시간"],
     },
 }

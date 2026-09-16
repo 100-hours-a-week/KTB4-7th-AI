@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.core.auth import verify_internal_key
 from app.schemas.solution import SolutionRequest, SolutionResponse
 from app.services import solution as solution_service
 
-router = APIRouter(prefix="/internal/ai", dependencies=[Depends(verify_internal_key)])
+router = APIRouter(prefix="/internal/v1/ai")
 
 
 @router.post("/solutions/generate", response_model=SolutionResponse)

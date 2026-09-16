@@ -1,4 +1,6 @@
-"""위키 [AI] 단계1 §7.4. SSE 스트리밍 챗봇 답변.
+"""SSE 스트리밍 챗봇 답변. 청크 포맷은 노션 API 정의서 기준 확정 —
+docs/contract-diff-wiki-vs-notion.md §5 참고 (위키의 플랫 {"answerChunk":...} 대신
+{"event":"answerChunk","data":{"content":...,"evidence":...}} 중첩 구조를 쓴다).
 
 에이전트 루프(app/services/chat/graph.py)를 먼저 끝까지 돌려 완성된 답변을 얻은 뒤
 그 텍스트를 청크로 나눠 SSE 로 내보낸다 (모델 토큰 단위 스트리밍은 아직 아님 — docs/STATE.md 참고).
@@ -7,17 +9,16 @@
 
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.core.auth import verify_internal_key
 from app.prompts import chat_v1
 from app.schemas.chat import ChatMessage, ChatRequest
 from app.services.chat import graph as chat_graph
 from app.services.chat.tools import build_tools
 
-router = APIRouter(prefix="/internal/ai", dependencies=[Depends(verify_internal_key)])
+router = APIRouter(prefix="/internal/v1/ai")
 
 CHUNK_SIZE = 40
 
@@ -28,7 +29,10 @@ def _to_lc_messages(history: list[ChatMessage]) -> list:
 
 
 def _sse(answer_chunk: str) -> str:
-    body = json.dumps({"answerChunk": answer_chunk, "evidence": None}, ensure_ascii=False)
+    body = json.dumps(
+        {"event": "answerChunk", "data": {"content": answer_chunk, "evidence": None}},
+        ensure_ascii=False,
+    )
     return f"data: {body}\n\n"
 
 

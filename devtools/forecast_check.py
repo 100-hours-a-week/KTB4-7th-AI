@@ -25,8 +25,6 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
-from app.core.config import settings
-
 EMOJI = re.compile("[\U0001f300-\U0001faff☀-➿️‍]")
 NON_MENU_EXACT = {
     "배달비",
@@ -91,9 +89,8 @@ def next_day(date: str) -> str:
 class Ai:
     """--url 이 없으면 서버 없이 앱을 직접 호출한다."""
 
-    def __init__(self, url: str | None, api_key: str):
+    def __init__(self, url: str | None):
         self.base = url or "http://ai"
-        self.headers = {"X-Internal-Api-Key": api_key}
         if url:
             self.transport = None
         else:
@@ -111,9 +108,7 @@ class Ai:
         async with httpx.AsyncClient(
             transport=self.transport, base_url=self.base, timeout=30
         ) as client:
-            return await client.post(
-                "/internal/ai/forecast/batch", json=payload, headers=self.headers
-            )
+            return await client.post("/internal/v1/ai/forecast/batch", json=payload)
 
 
 def compare_with_be(mine: list[dict], be_path: Path) -> None:
@@ -148,38 +143,49 @@ async def run(rows: list[dict], ai: Ai) -> None:
     res = await ai.post(rows)
     body = res.json()
     report(res.status_code == 200, "200 응답", f"status={res.status_code}")
-    if res.status_code == 200 and body.get("status") == "SUCCESS":
-        preds = body["predictions"]
-        dates = [p["date"] for p in preds]
-        expected = [str(d.date()) for d in pd.date_range(body["forecastStartDate"], periods=35)]
+    if res.status_code == 200 and "status" not in body:
+        data = body["data"]
+        preds = data["predictions"]
+        dates = [p["targetDate"] for p in preds]
+        expected = [str(d.date()) for d in pd.date_range(data["forecastStartDate"], periods=35)]
         report(len(preds) == 35, "예측 35건", f"{len(preds)}건")
         report(dates == expected, "날짜 연속·시작일 일치")
         report(
-            body.get("forecastEndDate") == expected[-1],
+            data.get("forecastEndDate") == expected[-1],
             "forecastEndDate",
-            str(body.get("forecastEndDate")),
+            str(data.get("forecastEndDate")),
         )
         report(
-            "monthlyTotal" not in body and "dowAverage" not in body,
+            "monthlyTotal" not in data and "dowAverage" not in data,
             "월 합계·요일 평균 없음(BE 집계)",
         )
-        report(all(p["predictedAmount"] >= 0 for p in preds), "예측값 0 이상")
+        report(all(p["predictedSalesAmount"] >= 0 for p in preds), "예측값 0 이상")
+        report(
+            all(isinstance(p["predictedSalesAmount"], int) for p in preds),
+            "예측값 정수(원)",
+        )
     else:
-        report(False, "SUCCESS 응답", json.dumps(body, ensure_ascii=False)[:120])
+        report(False, "성공 응답", json.dumps(body, ensure_ascii=False)[:120])
 
     print("\n[2] 이력 부족 (앞 60일만)")
     res = await ai.post(rows[:60])
     body = res.json()
+    data = body.get("data") or {}
+    report(res.status_code == 200, "200 응답(422 아님)", f"status={res.status_code}")
     report(
-        body.get("status") == "INSUFFICIENT_HISTORY",
-        "INSUFFICIENT_HISTORY",
+        body.get("status") == "INSUFFICIENT_DATA",
+        "status=INSUFFICIENT_DATA",
         str(body.get("status")),
     )
-    report(body.get("predictions") == [], "predictions 빈 배열")
+    report(
+        data.get("missingData") == ["INSUFFICIENT_HISTORY"],
+        "missingData=[INSUFFICIENT_HISTORY]",
+        str(data.get("missingData")),
+    )
     print(
-        f"      학습 행 {body.get('providedTrainingRows')}"
-        f" / 필요 {body.get('requiredTrainingRows')}"
-        f", 불완전한 달 {body.get('incompleteMonths')}"
+        f"      학습 행 {data.get('providedTrainingRows')}"
+        f" / 필요 {data.get('requiredTrainingRows')}"
+        f", 불완전한 달 {data.get('incompleteMonths')}"
     )
 
     print("\n[3] 날짜 누락")
@@ -213,16 +219,17 @@ async def run(rows: list[dict], ai: Ai) -> None:
     print(f"      업로드 1: ~{earlier} 말일 / 업로드 2: ~{later} 말일")
     a = (await ai.post(first_cut)).json()
     b = (await ai.post(second_cut)).json()
-    if a.get("status") == "SUCCESS" and b.get("status") == "SUCCESS":
-        overlap = {p["date"] for p in a["predictions"]} & {p["date"] for p in b["predictions"]}
+    if "status" not in a and "status" not in b:
+        first, second = a["data"]["predictions"], b["data"]["predictions"]
+        overlap = {p["targetDate"] for p in first} & {p["targetDate"] for p in second}
         report(
             len(overlap) > 0,
             "겹치는 예측 날짜 존재",
             f"{len(overlap)}일 — BE는 최신 예측으로 교체해야 함",
         )
         for date in sorted(overlap)[:3]:
-            old = next(p["predictedAmount"] for p in a["predictions"] if p["date"] == date)
-            new = next(p["predictedAmount"] for p in b["predictions"] if p["date"] == date)
+            old = next(p["predictedSalesAmount"] for p in first if p["targetDate"] == date)
+            new = next(p["predictedSalesAmount"] for p in second if p["targetDate"] == date)
             print(f"      {date}  이전 {old:,} → 최신 {new:,}")
     else:
         print("      두 업로드 중 하나가 이력 부족이라 건너뜀")
@@ -233,7 +240,6 @@ def main() -> int:
     parser.add_argument("--pos", type=Path, required=True, help="POS 매출리포트 엑셀 경로")
     parser.add_argument("--url", help="AI 서버 주소 (생략하면 앱을 직접 호출)")
     parser.add_argument("--be-daily", type=Path, help="BE 가 만든 일별 집계 JSON")
-    parser.add_argument("--api-key", default=settings.internal_api_key)
     parser.add_argument("--dump", type=Path, help="생성한 dailySales 를 JSON 으로 저장")
     args = parser.parse_args()
 
@@ -245,7 +251,7 @@ def main() -> int:
         print("\n[BE 집계 대조]")
         compare_with_be(rows, args.be_daily)
 
-    asyncio.run(run(rows, Ai(args.url, args.api_key)))
+    asyncio.run(run(rows, Ai(args.url)))
     print(f"\n{'실패 ' + str(failures) + '건' if failures else '전체 통과'}")
     return 1 if failures else 0
 

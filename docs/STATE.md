@@ -1,68 +1,83 @@
 # 작업 상태
 
 마지막 갱신: 2026-09-16
-브랜치: `feat/6-chat-api` (Issue #6)
+브랜치: `feat/21-contract-sync` (Issue #21, `dev` 기준)
 
 ## 지금 어디
 
-담당 엔드포인트 4개(예측 제외) 중 마지막인 챗봇까지 구현 완료. 네 브랜치가 전부 `dev`(a69898b)에서
-독립적으로 갈라져 있다.
+BE와 최종 합의한 계약(`docs/api정의서.md`, `docs/ERD정의서.md` — 사용자가 직접 붙여넣음)을
+solutions/insights/chat 코드에 반영했다. `docs/contract-diff-wiki-vs-notion.md`(이전 세션이 작성한
+요약본)는 일부 항목이 실제 API 정의서와 달라서(§3 rank/aiInsight, §4 요청·응답 구조) **참고용으로만
+쓰고 원본 파일을 기준으로 다시 확인하며 작업했다.**
 
-- `feat/1-초기개발환경설정` (#1) — BE 초기환경 정렬 완료, **PR(#3)은 사용자가 계약 협의 위해 보류**.
-- `feat/4-solutions-api` (#4) — 구현·커밋 완료, **push 안 함**.
-- `feat/5-insights-api` (#5) — 구현·커밋 완료, **push 안 함**.
-- `feat/6-chat-api` (#6, 현재 브랜치) — 구현 완료, **커밋 전**.
+Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 워크스페이스)이 BE가 보는 팀
+워크스페이스 페이지(`3d57f3fa…`, `3d07f3fa…`)에 접근할 수 없어서 실패했다 — 사용자가 `docs/`에
+`api정의서.md`·`ERD정의서.md`를 직접 복사해 넣어줘서 그걸로 대조했다.
 
-계약 미확정 상태라 세 기능 API 전부 **위키 기준으로 우선 진행**하기로 사용자와 합의됨(반복 기록).
+## 이번에 반영한 것
+
+- **공통 에러 포맷**: `{"success":false,"error":{code,message,traceId}}` → `{"message":"..."}`
+  (+ 특정 상황에만 `failReason`). `app/core/errors.py`의 `ApiError`에 `fail_reason` 옵션 추가
+  (기존 호출부는 안 건드림 — 위치 인자라 하위호환).
+- **서버 간 인증 삭제**: solutions/insights/chat 라우터에서 `Depends(verify_internal_key)` 제거.
+  `app/core/auth.py` 자체는 `forecast.py`가 아직 쓰고 있어서 남겨둠 — **헥터도 지워야 완전히 끝남.**
+- **라우터 prefix**: `/internal/ai` → `/internal/v1/ai` (solutions/insights/chat).
+  ⚠️ **`app/api/forecast.py`는 아직 `/internal/ai/forecast/batch`로 v1이 안 붙어있다** —
+  헥터에게 알릴 것 (방금 사용자가 `/internal/v1/ai/forecast/batch`로 확정한다고 확인해줌).
+- **비율 표기**: 소수(0.62) → 정수 퍼센트(62). `app/schemas/common.py`의
+  `SalesSummary.vsPrevPeriod`, `CategoryPoint.share/vsPrevPeriod`, `devtools/stub_backend.py` 반영.
+- **솔루션 생성** (`POST /internal/v1/ai/solutions/generate`):
+  - `context`(dayOfWeek/isWeekend/dataBasisPeriod) 요청 필드 삭제 — 서비스가 `targetDate`로
+    요일·주말 여부를 코드로 계산한다(달력 계산이라 환각 위험 없음).
+  - 카드 필드 `rank`→`rankNo`, `detailContent`→`detailText`, `summaryText` 신규 추가.
+  - 최상위 `aiInsight` 삭제 — 매출 AI 인사이트는 별도 엔드포인트 담당.
+  - `evidence` 필드 삭제 — ERD `solutions` 테이블에 evidence 컬럼이 없음(확인 완료).
+  - 응답이 `{"message":...,"data":{...}}` 래퍼로 변경.
+  - `salesAnalysisId`는 `SCHEDULED` 트리거일 땐 안 온다 — Optional로 변경.
+  - 프롬프트 `solution_v2.py` 신규(파일명=`promptVersion` 규칙, v1은 이력으로 남김).
+- **매출분석 인사이트**: 경로가 `/internal/ai/insights/generate` → `/internal/v1/ai/sales-insights`로
+  완전히 바뀜. 요청도 `uploadId`/`dataDays` → `salesAnalysisId`/`targetMonth`/`triggerType`/
+  `maxInsightCount`로 전면 교체. 응답도 `insights[]`(객체+evidence) → `data.insights`(문자열 배열)로
+  단순화. 14일 게이트는 BE가 호출 전에 판단하므로(`dataDays` 자체가 요청에 없음) AI 쪽 게이트 로직은
+  전부 제거했다 — `INSUFFICIENT_DATA` 상태값은 스키마엔 있지만 서비스는 항상 `COMPLETED`만 반환한다.
+  프롬프트 `insight_v2.py` 신규.
+- **챗봇**: SSE 청크를 `{"answerChunk":...,"evidence":...}` 플랫 → `{"event":"answerChunk","data":
+  {"content":...,"evidence":...}}` 중첩으로 변경. `question` 길이 검증(`max_length=300`) 제거 — BE가
+  이미 검증하므로 AI는 재검증하지 않는다.
+- **툴 경로**: `hourly-profile`→`hourly-profiles`(복수), `forecast`→`sales/forecasts`,
+  `predictedSales`→`predictedSalesAmount`(stub).
+- 기존 테스트(`test_solutions.py`/`test_insights.py`/`test_chat.py`) 전부 새 계약으로 재작성.
+  401 테스트는 "인증 없어도 통과" 테스트로 대체.
 
 ## 마지막으로 통과한 것
 
-- `doc-digger`로 위키 3개 절 원문 확인: 단계1 §7.4(요청/SSE 응답/에러 표), 단계3 §2.1(agent↔tools
-  사이클, **툴 실패 2회 후 실패문구** — 이 규칙은 단계4가 아니라 단계3에 있었음), 단계4 §4(툴 6종
-  설계 제약, LangGraph 상태관리). 기존 `app/schemas/chat.py`·`app/prompts/chat_v1.py`와 필드 일치 확인.
-- `INTERNAL_API_KEY=test-key uv run pytest -q` — 16 passed
-  (`tests/test_chat.py` 5건: 컨텍스트만으로 응답/툴호출후응답/툴2회실패→실패문구/401/422)
+- `uv run pytest -q` — 34 passed
 - `uv run ruff check --fix . && uv run ruff format .` — 통과
-- 서버 실기동 후 curl: 401·422·`/openapi.json` 라우트 노출 확인
-- **미검증**: 실제 Claude 호출 경로 전체(`ANTHROPIC_API_KEY` 미설정). LangGraph 에이전트 루프는
-  `FakeModel`(고정 응답 큐)로만 검증했다 — 실제 Anthropic 툴콜 포맷과 100% 같다는 보장은 없다.
-
-## 이번 구현에서 의도적으로 단순화한 것 (다음 사람이 알아야 함)
-
-- **토큰 단위 스트리밍이 아니다.** 위키는 "토큰 단위로 스트리밍"을 요구하지만, 지금은
-  `app/services/chat/graph.py`의 LangGraph 루프를 `ainvoke`로 끝까지 돌려 완성된 답변을 얻은 뒤
-  `app/api/chat.py`에서 40자 단위로 잘라 SSE로 보낸다. TTFB 이득이 없다. 실제 모델 스트리밍
-  (`astream` + 콘텐츠 블록 타입으로 tool_use/text 구분)으로 바꾸는 게 다음 개선 과제.
-  대신 이 방식 덕에 그래프 실행 중 502/504/500 이 스트림이 열리기 **전에** 일반 HTTP 에러로
-  깨끗하게 나간다 — 진짜 토큰 스트리밍으로 바꾸면 이 에러 처리도 다시 설계해야 한다.
-- **위키의 `400`(질문 형식 오류)을 따로 구현하지 않았다.** 솔루션·인사이트와 동일하게 Pydantic
-  검증 실패는 전부 `422`로 나간다. 위키 챗봇 절만 유일하게 400을 표로 갖고 있는데, 트리거 조건이
-  명시돼 있지 않아 임의로 구분하지 않았다.
-- **`422`(매출 데이터 없어 컨텍스트 구성 불가)도 구현 안 함.** `context`는 BE가 이미 채워서 보내는
-  값이라 AI 쪽에서 이 실패를 판정할 지점이 불명확하다. BE에 트리거 조건 확인 필요.
-- evidence는 항상 `null`로 나간다. 어느 청크에 근거를 붙일지의 기준이 위키에 없다.
+- 서버 실기동 후 curl: 3개 라우트(`solutions/generate`, `sales-insights`, `chat/messages`) 전부
+  새 경로로 노출, 422 응답이 새 플랫 포맷(`{"message":...}`)인지 확인
+- **미검증**: 실제 Claude 호출 (여전히 `ANTHROPIC_API_KEY` 없음, monkeypatch로만 검증)
 
 ## 다음 한 걸음
 
-- `feat/6-chat-api` 커밋 (사용자 승인 대기 — 제안: `feat: 챗봇 메시지 API 구현`, `Closes #6`)
-- `feat/4`, `feat/5`, `feat/6` 세 브랜치 전부 push·PR 안 됨 — 사용자가 순서·시점 정할 것
-- 담당 범위 엔드포인트 4개(solutions/insights/chat 전부, forecast는 헥터 담당) 구현 완료.
-  다음은 위 "단순화한 것" 항목 중 토큰 스트리밍 전환이 가장 체감 효과 큼
+- 커밋 승인 대기 (`feat/21-contract-sync`, Issue #21)
+- **헥터에게 알릴 것**: (1) `forecast.py` 라우터 prefix에 `/v1` 누락, (2) `verify_internal_key`
+  삭제 결정이 `forecast.py`에도 적용되는지, (3) `Metrics`에 순이익 필드가 없어 BE가 solutions
+  요청에 순이익 지표를 넣어 보내도 `extra="ignore"`때문에 조용히 버려짐(설계 원칙 문서엔 "순이익·리뷰
+  요약"도 metrics에 포함된다고 돼 있음 — 실제로 필요한 시점에 필드 추가 필요)
 
 ## 미해결 결정
 
-- Issue #2의 13건(위키 vs 노션 계약 통일) — 기한 9/16(오늘) 지났으나 팀 확정 소식 없음. 사용자가
-  승민(BE)과 별도 협의 중. 확정 즉시 `app/schemas/*` · 라우터 prefix · `app/core/errors.py` ·
-  `app/clients/backend.py` · `app/services/chat/tools.py`(툴 이름·params) 일괄 수정 필요.
-- 챗봇 400/422 트리거 조건 — 위 "단순화" 항목 참고.
+- **챗봇 데이터 부족 처리**: 사용자가 "예측·인사이트·챗봇 모두 200+`status:INSUFFICIENT_DATA`+
+  `data.missingData`로 통일"이라고 확정했다. 예측·인사이트는 반영했지만(인사이트는 애초에 AI가 판단할
+  신호가 없어 무조건 COMPLETED만 반환), **챗봇은 이 상태를 코드에서 판단할 명확한 트리거가 없어서
+  구현하지 않았다** — 지금은 LLM이 시스템 프롬프트 지시("데이터가 부족하면 부족하다고 말하세요")로
+  자연어로만 표현한다. 언제 이 상태를 코드로 판정할지 BE와 조건 정의 필요.
+- **솔루션 metrics의 순이익/리뷰 요약**: 설계 설명엔 포함된다고 돼 있는데 스키마에 필드가 없다(위 참고).
 
 ## 함정
 
-- `app/core/errors.py`의 `JSONResponse(status, body)` 인자 순서 버그는 `feat/4`·`feat/5`·`feat/6`
-  **세 브랜치 모두에서 각자 고쳤다** — 전부 `dev`에서 독립적으로 갈라져서 그렇다. 머지 순서 상관없이
-  같은 diff라 충돌 없이 합쳐질 것이다.
-- LangGraph `MessagesState`를 상속해 커스텀 필드(`failures: int`)를 추가할 때 리듀서를 따로
-  안 걸면 "마지막 쓴 값으로 덮어쓰기"로 동작한다(메시지 리스트만 `add_messages`로 누적). 의도한
-  동작이라 문제는 없었지만 다음에 상태 필드를 늘릴 때 리듀서 기본 동작을 헷갈리지 말 것.
-- 로컬 8000 포트에 이전 세션의 stale uvicorn 프로세스가 남아있던 적이 있다. curl 검증 전
-  `lsof -i :8000`으로 먼저 확인할 것.
+- Notion 연동 워크스페이스가 개인 계정이라 팀 공유 페이지에 접근이 안 된다 — 이번처럼 사용자가
+  `docs/`에 파일로 복사해 넣어주는 방식이 제일 빠르다.
+- `app/core/errors.py`의 `JSONResponse` 인자 순서 버그는 이번에 포맷을 아예 새로 짜면서 같이
+  정리됐다(과거 세 브랜치가 각자 고쳤던 그 버그).
+- 로컬 8000 포트에 stale uvicorn이 남는 경우가 잦다 — curl 검증 전 `lsof -i :8000` 확인 습관화.
