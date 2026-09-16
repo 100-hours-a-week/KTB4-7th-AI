@@ -125,18 +125,17 @@ diff 작성 시점엔 위키에 없던 엔드포인트 — 노션·ERD(`sales_ai
 | 2 | 예측 금액 반올림(정수 vs `DECIMAL(14,2)`) | BE(승민) | ⏳ 확인 필요 |
 | 3 | 인사이트 `evidence` 저장 여부·컬럼 | 제나 ↔ 승민 | ⏳ 협의 필요 |
 | 4 | 솔루션 `evidence` DB 저장 여부·컬럼 | 제나 ↔ 승민 | ⏳ 협의 필요 |
-| 5 | 챗봇 403 vs 422 (데이터 부족 처리) | 승민 | 📌 체크만 해둠, BE 판단 영역 |
+| 5 | 챗봇 데이터 부족 처리 — 예측·인사이트처럼 200+`status:INSUFFICIENT_DATA`+`data.missingData`로 통일하기로 했으나, AI가 이 상태를 코드로 판정할 트리거(신호 필드)가 아직 없다. 현재는 LLM이 시스템 프롬프트 지시로 자연어로만 표현 | 제나 ↔ 승민 | ⏳ 판정 조건 정의 필요 |
 | 6 | 툴 6종 최종 경로 확정(BE 구현 대상) | 승민 | ⏳ 확인 필요 |
+| 7 | 솔루션 생성(`solutions/generate`) `metrics`에 순이익·리뷰 요약이 포함된다고 설계 설명엔 있으나, `app/schemas/common.py`의 `Metrics`엔 필드가 없다. BE가 보내도 `extra="ignore"`로 조용히 버려진다 — 필드 스펙(순이익 구조, 리뷰 요약 구조) 확정 필요 | 제나 ↔ 승민 | ⏳ 필드 스펙 확인 필요 |
 
 ---
 
-## 9. AI 서버 구현 반영 필요 (결정 완료, 코드 미반영)
+## 9. AI 서버 구현 반영 상태 (2026-09-16 갱신)
 
-`app/schemas/`는 현재 위키 기준으로 작성돼 있고 원격 미푸시 상태(로컬 커밋만). 이번 라운드 결정사항 반영 시 변경 범위:
+`app/schemas/*.py`(필드명·래퍼), `app/api/*.py`(prefix `/internal/v1/ai`, 인증 제거),
+`app/core/errors.py`(오류 포맷), `app/clients/backend.py`(툴 경로)까지 solutions/insights/chat은
+모두 반영 완료했다(`feat/21-contract-sync`). forecast도 헥터가 별도로 반영했다
+(`feat/22-forecast-v1-경로와-인증-정리`, `feat/24-forecast-응답-노션-계약-반영`).
 
-- `app/schemas/*.py` — 필드명·래퍼 변경(`predictedAmount`→`predictedSalesAmount`, `rank`→`rankNo` 등)
-- `app/api/*.py` — 라우터 prefix `/internal/v1/ai`로, `verify_internal_key` 의존성 제거(섹션 7 인증 삭제 결정)
-- `app/core/errors.py` — 오류 포맷(`failReason` 값들: forecast는 `INSUFFICIENT_HISTORY`, insights는 `DATA_INSUFFICIENT`)
-- `app/clients/backend.py` — 툴 6종 경로 상수(아직 미작성)
-
-스키마가 한곳에 모여 있어 반나절 내 반영 가능. 기준이 흔들리기 전에는 엔드포인트를 더 쌓지 않는다.
+남은 건 위 8절의 미해결 항목(#5 챗봇 데이터부족 트리거, #7 솔루션 metrics 순이익·리뷰 필드)뿐이다.
