@@ -2,14 +2,21 @@
 
 from fastapi import APIRouter
 
-from app.schemas.forecast import ForecastRequest, ForecastResponse
+from app.schemas.forecast import (
+    ForecastRequest,
+    ForecastResponse,
+    InsufficientHistoryResponse,
+)
 from app.services.forecast import run_forecast
 
 router = APIRouter(prefix="/internal/v1/ai", tags=["forecast"])
 
 
-@router.post("/forecast/batch", response_model=ForecastResponse)
-def forecast_batch(req: ForecastRequest) -> ForecastResponse:
+@router.post(
+    "/forecast/batch",
+    response_model=ForecastResponse | InsufficientHistoryResponse,
+)
+def forecast_batch(req: ForecastRequest) -> ForecastResponse | InsufficientHistoryResponse:
     """업로드 시 1회 호출. 학습과 추론이 동기 CPU 작업이라 async 가 아닌 def 로 둔다.
 
     def 로 두면 FastAPI 가 스레드풀에서 실행하므로, 같은 서버의 챗봇 SSE 스트리밍이

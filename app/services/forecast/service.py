@@ -1,6 +1,6 @@
 """매출 예측 배치 — 요청 검증, 이력 조건 판정, 학습·예측 오케스트레이션.
 
-계약 기준: 위키 [AI] 단계1 §3.3·§7.1
+계약 기준: 노션 API 정의서 `POST /internal/v1/ai/forecast/batch`, 위키 [AI] 단계1 §3.3
 """
 
 import pandas as pd
@@ -10,8 +10,11 @@ from app.schemas.forecast import (
     HORIZON_DAYS,
     MIN_TRAINING_ROWS,
     DailySale,
+    ForecastData,
     ForecastRequest,
     ForecastResponse,
+    InsufficientHistoryData,
+    InsufficientHistoryResponse,
     Prediction,
 )
 from app.services.forecast.features import build_future_frame, build_training_frame
@@ -78,7 +81,7 @@ def _incomplete_months(series: pd.Series, start: pd.Timestamp) -> list[str]:
     return sorted(incomplete)
 
 
-def run_forecast(req: ForecastRequest) -> ForecastResponse:
+def run_forecast(req: ForecastRequest) -> ForecastResponse | InsufficientHistoryResponse:
     series = _to_series(req.dailySales)
     start = _start_date(req, series)
 
@@ -88,32 +91,30 @@ def run_forecast(req: ForecastRequest) -> ForecastResponse:
     # 첫 데이터 월은 전월 피처가 없어 학습 행에서 빠진다.
     # 그래서 실질적으로 "첫 달 + 완전한 2개월"이 필요하다.
     if incomplete or len(train) < MIN_TRAINING_ROWS:
-        return ForecastResponse(
-            status="INSUFFICIENT_HISTORY",
-            forecastStartDate=req.forecastStartDate,
-            predictions=[],
-            incompleteMonths=incomplete,
-            requiredTrainingRows=MIN_TRAINING_ROWS,
-            providedTrainingRows=len(train),
+        return InsufficientHistoryResponse(
+            data=InsufficientHistoryData(
+                missingData=["INSUFFICIENT_HISTORY"],
+                incompleteMonths=incomplete,
+                requiredTrainingRows=MIN_TRAINING_ROWS,
+                providedTrainingRows=len(train),
+            )
         )
 
     future = build_future_frame(series, start, HORIZON_DAYS)
     predicted = fit_predict(train, future)
 
     return ForecastResponse(
-        status="SUCCESS",
-        forecastStartDate=req.forecastStartDate,
-        forecastEndDate=str(future.index[-1].date()),
-        horizonDays=HORIZON_DAYS,
-        predictions=[
-            Prediction(
-                date=str(day.date()),
-                predictedAmount=int(amount),
-                isHoliday=bool(is_holiday),
-            )
-            for day, amount, is_holiday in zip(
-                future.index, predicted, future["is_holiday"], strict=True
-            )
-        ],
-        modelVersion=MODEL_VERSION,
+        data=ForecastData(
+            forecastStartDate=req.forecastStartDate,
+            forecastEndDate=str(future.index[-1].date()),
+            horizonDays=HORIZON_DAYS,
+            predictions=[
+                Prediction(
+                    targetDate=str(day.date()),
+                    predictedSalesAmount=int(amount),
+                    modelVersion=MODEL_VERSION,
+                )
+                for day, amount in zip(future.index, predicted, strict=True)
+            ],
+        )
     )
