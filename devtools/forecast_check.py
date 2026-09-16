@@ -25,8 +25,6 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
-from app.core.config import settings
-
 EMOJI = re.compile("[\U0001f300-\U0001faff☀-➿️‍]")
 NON_MENU_EXACT = {
     "배달비",
@@ -91,9 +89,8 @@ def next_day(date: str) -> str:
 class Ai:
     """--url 이 없으면 서버 없이 앱을 직접 호출한다."""
 
-    def __init__(self, url: str | None, api_key: str):
+    def __init__(self, url: str | None):
         self.base = url or "http://ai"
-        self.headers = {"X-Internal-Api-Key": api_key}
         if url:
             self.transport = None
         else:
@@ -111,9 +108,7 @@ class Ai:
         async with httpx.AsyncClient(
             transport=self.transport, base_url=self.base, timeout=30
         ) as client:
-            return await client.post(
-                "/internal/ai/forecast/batch", json=payload, headers=self.headers
-            )
+            return await client.post("/internal/v1/ai/forecast/batch", json=payload)
 
 
 def compare_with_be(mine: list[dict], be_path: Path) -> None:
@@ -233,7 +228,6 @@ def main() -> int:
     parser.add_argument("--pos", type=Path, required=True, help="POS 매출리포트 엑셀 경로")
     parser.add_argument("--url", help="AI 서버 주소 (생략하면 앱을 직접 호출)")
     parser.add_argument("--be-daily", type=Path, help="BE 가 만든 일별 집계 JSON")
-    parser.add_argument("--api-key", default=settings.internal_api_key)
     parser.add_argument("--dump", type=Path, help="생성한 dailySales 를 JSON 으로 저장")
     args = parser.parse_args()
 
@@ -245,7 +239,7 @@ def main() -> int:
         print("\n[BE 집계 대조]")
         compare_with_be(rows, args.be_daily)
 
-    asyncio.run(run(rows, Ai(args.url, args.api_key)))
+    asyncio.run(run(rows, Ai(args.url)))
     print(f"\n{'실패 ' + str(failures) + '건' if failures else '전체 통과'}")
     return 1 if failures else 0
 

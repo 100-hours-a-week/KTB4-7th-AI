@@ -1,23 +1,21 @@
-"""매출 예측 배치 라우터 — 위키 [AI] 단계1 §7.1."""
+"""매출 예측 배치 라우터 — 노션 API 정의서 `POST /internal/v1/ai/forecast/batch`."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.core.auth import verify_internal_key
 from app.schemas.forecast import ForecastRequest, ForecastResponse
 from app.services.forecast import run_forecast
 
-router = APIRouter(prefix="/internal/ai", tags=["forecast"])
+router = APIRouter(prefix="/internal/v1/ai", tags=["forecast"])
 
 
-@router.post(
-    "/forecast/batch",
-    response_model=ForecastResponse,
-    dependencies=[Depends(verify_internal_key)],
-)
+@router.post("/forecast/batch", response_model=ForecastResponse)
 def forecast_batch(req: ForecastRequest) -> ForecastResponse:
     """업로드 시 1회 호출. 학습과 추론이 동기 CPU 작업이라 async 가 아닌 def 로 둔다.
 
     def 로 두면 FastAPI 가 스레드풀에서 실행하므로, 같은 서버의 챗봇 SSE 스트리밍이
     학습 중에 멈추지 않는다.
+
+    앱 레벨 인증은 두지 않는다 — 인바운드를 BE 로만 제한하는 보안 그룹이 경계다
+    (2026-09-16 팀 결정). AI → BE 툴 호출의 `X-Internal-Api-Key` 는 그대로 유지한다.
     """
     return run_forecast(req)

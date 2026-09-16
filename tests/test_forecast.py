@@ -4,12 +4,13 @@ import httpx
 import pandas as pd
 import pytest
 
-from app.core.config import settings
 from app.core.errors import ApiError
 from app.main import app
 from app.schemas.forecast import DailySale, ForecastRequest
 from app.services.forecast import run_forecast
 from app.services.forecast.features import build_future_frame, month_stats
+
+PATH = "/internal/v1/ai/forecast/batch"
 
 
 def _daily(first: str, last: str) -> list[DailySale]:
@@ -123,24 +124,20 @@ def test_35일_전부_시작_달의_직전_달_집계로_고정된다():
     assert future["prev_growth"].nunique() == 1
 
 
-async def test_인증키가_없으면_401():
+async def test_필수_필드가_없으면_422():
+    """인증 헤더 없이도 라우트에 도달한다 — 경계는 보안 그룹이다."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        res = await client.post("/internal/ai/forecast/batch", json={})
-    assert res.status_code == 401
+        res = await client.post(PATH, json={})
+    assert res.status_code == 422
 
 
-async def test_라우터가_예측_응답을_돌려준다(monkeypatch):
-    monkeypatch.setattr(settings, "internal_api_key", "test-key")
+async def test_라우터가_예측_응답을_돌려준다():
     payload = _request("2025-12-08", "2026-08-31", "2026-09-01").model_dump()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        res = await client.post(
-            "/internal/ai/forecast/batch",
-            json=payload,
-            headers={"X-Internal-Api-Key": "test-key"},
-        )
+        res = await client.post(PATH, json=payload)
 
     assert res.status_code == 200
     body = res.json()
