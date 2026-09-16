@@ -10,9 +10,9 @@ import pandas as pd
 
 FEATURES = [
     "dow",
-    "is_weekend",
+    "is_offday",
+    "is_holiday_weekday",
     "day_of_month",
-    "is_holiday",
     "prev_month_mean",
     "prev_month_dow_mean",
     "prev_growth",
@@ -24,12 +24,25 @@ _KR = holidays.KR()
 
 
 def _calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
-    """날짜만으로 확정되는 달력 피처."""
+    """날짜만으로 확정되는 달력 피처.
+
+    주말과 공휴일을 각각 플래그로 두면 둘이 겹치는 날(예: 토요일 광복절)에 두 효과가
+    더해져 과대예측이 난다. 실측에서도 겹치는 날 예측/실제 배율이 1.23이었고, 그 여파로
+    공휴일 계수가 눌려 평일 공휴일은 오히려 0.88로 과소예측됐다.
+    그래서 "쉬는 날"은 `is_offday` 하나로 한 번만 반영하고, 평일 공휴일이 주말과 다른
+    부분만 `is_holiday_weekday` 로 따로 학습한다 (ridge_v2, 위키 단계2 §5.11).
+
+    `is_holiday` 는 모델 피처가 아니라 응답의 `predictions[].isHoliday` 용이다.
+    """
+    weekend = index.dayofweek >= 5
+    holiday = [d in _KR for d in index]
+
     df = pd.DataFrame(index=index)
     df["dow"] = index.dayofweek
-    df["is_weekend"] = (df["dow"] >= 5).astype(int)
     df["day_of_month"] = index.day
-    df["is_holiday"] = [int(d in _KR) for d in index]
+    df["is_holiday"] = [int(h) for h in holiday]
+    df["is_offday"] = [int(h or w) for h, w in zip(holiday, weekend, strict=True)]
+    df["is_holiday_weekday"] = [int(h and not w) for h, w in zip(holiday, weekend, strict=True)]
     return df
 
 
