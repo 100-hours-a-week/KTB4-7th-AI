@@ -1,67 +1,68 @@
 # 작업 상태
 
-마지막 갱신: 2026-09-15
-브랜치: `feat/1-초기개발환경설정` (Issue #1)
+마지막 갱신: 2026-09-16
+브랜치: `feat/6-chat-api` (Issue #6)
 
 ## 지금 어디
 
-레포 초기 세팅 완료, **아직 원격에 푸시하지 않았다.** 원격 브랜치 0개.
+담당 엔드포인트 4개(예측 제외) 중 마지막인 챗봇까지 구현 완료. 네 브랜치가 전부 `dev`(a69898b)에서
+독립적으로 갈라져 있다.
 
-```
-* 2441a31 (feat/1-초기개발환경설정)  chore: FastAPI 초기 개발환경 설정
-* b0874e2                            docs: AI 개발 규약과 세션 스킬 추가
-* 877b26d (dev)                      chore: 저장소 초기화   ← 파일 0개
-```
+- `feat/1-초기개발환경설정` (#1) — BE 초기환경 정렬 완료, **PR(#3)은 사용자가 계약 협의 위해 보류**.
+- `feat/4-solutions-api` (#4) — 구현·커밋 완료, **push 안 함**.
+- `feat/5-insights-api` (#5) — 구현·커밋 완료, **push 안 함**.
+- `feat/6-chat-api` (#6, 현재 브랜치) — 구현 완료, **커밋 전**.
 
-`dev` 는 빈 커밋 하나뿐이다. 모든 실제 내용은 feat 브랜치에 있고 PR로 올린다.
+계약 미확정 상태라 세 기능 API 전부 **위키 기준으로 우선 진행**하기로 사용자와 합의됨(반복 기록).
 
 ## 마지막으로 통과한 것
 
-- `uv run pytest -q` — 1 passed (test_health)
-- `uv run ruff check .` / `ruff format --check .` — 통과
-- 서버 실기동 후 `curl localhost:8000/health` → `{"status":"ok"}`
-- **미검증**: Docker 이미지 빌드 (로컬 데몬 꺼져 있음). PR CI의 docker job은 push 전용이라 `dev` 머지 후에야 실증된다.
+- `doc-digger`로 위키 3개 절 원문 확인: 단계1 §7.4(요청/SSE 응답/에러 표), 단계3 §2.1(agent↔tools
+  사이클, **툴 실패 2회 후 실패문구** — 이 규칙은 단계4가 아니라 단계3에 있었음), 단계4 §4(툴 6종
+  설계 제약, LangGraph 상태관리). 기존 `app/schemas/chat.py`·`app/prompts/chat_v1.py`와 필드 일치 확인.
+- `INTERNAL_API_KEY=test-key uv run pytest -q` — 16 passed
+  (`tests/test_chat.py` 5건: 컨텍스트만으로 응답/툴호출후응답/툴2회실패→실패문구/401/422)
+- `uv run ruff check --fix . && uv run ruff format .` — 통과
+- 서버 실기동 후 curl: 401·422·`/openapi.json` 라우트 노출 확인
+- **미검증**: 실제 Claude 호출 경로 전체(`ANTHROPIC_API_KEY` 미설정). LangGraph 에이전트 루프는
+  `FakeModel`(고정 응답 큐)로만 검증했다 — 실제 Anthropic 툴콜 포맷과 100% 같다는 보장은 없다.
 
-## 🔴 최대 블로커 — API 계약 기준이 갈렸다 (확인됨, 추측 아님)
+## 이번 구현에서 의도적으로 단순화한 것 (다음 사람이 알아야 함)
 
-BE `AGENTS.md`: "API 구현은 API 정의서(노션)" / AI: 위키 기준으로 `app/schemas/` 작성 완료.
-
-대조표: `docs/contract-diff-wiki-vs-notion.md` · 추적: **Issue #2** (결정 필요 13건)
-
-가장 위험한 3가지:
-1. **비율 표기가 100배 다르다** — 위키 `0.62` vs 노션 `62.0`. 둘 다 숫자라 스키마 검증을 통과한다. 에러 없이 틀린 값이 점주에게 간다.
-2. **AI→BE 툴 경로 3건 불일치** — BE가 구현하는 쪽이라 안 맞으면 챗봇 툴 호출 전부 404.
-3. **노션에 서버 간 인증 규약이 없다** — `X-Internal-Api-Key` 0건. AI는 이미 검증 구현됨 → BE가 안 보내면 전부 401.
-
-**계약이 확정되기 전에 엔드포인트를 더 쌓지 말 것.** 지금은 수정 범위가 `app/schemas/` + 라우터 prefix + `errors.py` + 툴 경로 상수뿐이라 반나절이면 뒤집을 수 있다. 엔드포인트가 늘면 그만큼 커진다.
+- **토큰 단위 스트리밍이 아니다.** 위키는 "토큰 단위로 스트리밍"을 요구하지만, 지금은
+  `app/services/chat/graph.py`의 LangGraph 루프를 `ainvoke`로 끝까지 돌려 완성된 답변을 얻은 뒤
+  `app/api/chat.py`에서 40자 단위로 잘라 SSE로 보낸다. TTFB 이득이 없다. 실제 모델 스트리밍
+  (`astream` + 콘텐츠 블록 타입으로 tool_use/text 구분)으로 바꾸는 게 다음 개선 과제.
+  대신 이 방식 덕에 그래프 실행 중 502/504/500 이 스트림이 열리기 **전에** 일반 HTTP 에러로
+  깨끗하게 나간다 — 진짜 토큰 스트리밍으로 바꾸면 이 에러 처리도 다시 설계해야 한다.
+- **위키의 `400`(질문 형식 오류)을 따로 구현하지 않았다.** 솔루션·인사이트와 동일하게 Pydantic
+  검증 실패는 전부 `422`로 나간다. 위키 챗봇 절만 유일하게 400을 표로 갖고 있는데, 트리거 조건이
+  명시돼 있지 않아 임의로 구분하지 않았다.
+- **`422`(매출 데이터 없어 컨텍스트 구성 불가)도 구현 안 함.** `context`는 BE가 이미 채워서 보내는
+  값이라 AI 쪽에서 이 실패를 판정할 지점이 불명확하다. BE에 트리거 조건 확인 필요.
+- evidence는 항상 `null`로 나간다. 어느 청크에 근거를 붙일지의 기준이 위키에 없다.
 
 ## 다음 한 걸음
 
-계약 확정을 기다리는 동안 **계약에 의존하지 않는 것**부터 한다.
-
-1. `devtools/stub_backend.py` — 툴 6종 스텁. 경로는 상수 하나로 빼서 계약 확정 시 한 줄로 바꾸게.
-2. `app/prompts/solution_v1.py` — 프롬프트는 계약과 무관. 위키 단계4 원문 그대로.
-3. `app/services/chat/graph.py` — LangGraph `agent ↔ tools` 골격. 툴 시그니처만 나중에 맞춤.
+- `feat/6-chat-api` 커밋 (사용자 승인 대기 — 제안: `feat: 챗봇 메시지 API 구현`, `Closes #6`)
+- `feat/4`, `feat/5`, `feat/6` 세 브랜치 전부 push·PR 안 됨 — 사용자가 순서·시점 정할 것
+- 담당 범위 엔드포인트 4개(solutions/insights/chat 전부, forecast는 헥터 담당) 구현 완료.
+  다음은 위 "단순화한 것" 항목 중 토큰 스트리밍 전환이 가장 체감 효과 큼
 
 ## 미해결 결정
 
-- **Issue #2 의 13건** — 계약 관련. 여기 중복해서 적지 않는다.
-- 클라우드 팀 통보 필요: 헬스체크 `GET /health`, 리스닝 포트 `8000`. 두 문서 어디에도 없어 AI가 정했다.
-- 클라우드 팀 질문: CI의 ECR push 스텝 — 리포지토리 이름, 인증 방식(OIDC role vs access key). 확정 전까지 비워 둠.
-- 헥터 확인: 예측 신뢰구간(Issue #2 11번), 월 합계·요일 평균을 누가 계산하는지(12번).
-- 승인 방식: BE 규약은 "최종 승인 1회 후 commit → push → PR 연속 진행"인데, 제나 지시는 커밋마다 요청이다. 현재는 **제나 지시를 따르는 중**.
+- Issue #2의 13건(위키 vs 노션 계약 통일) — 기한 9/16(오늘) 지났으나 팀 확정 소식 없음. 사용자가
+  승민(BE)과 별도 협의 중. 확정 즉시 `app/schemas/*` · 라우터 prefix · `app/core/errors.py` ·
+  `app/clients/backend.py` · `app/services/chat/tools.py`(툴 이름·params) 일괄 수정 필요.
+- 챗봇 400/422 트리거 조건 — 위 "단순화" 항목 참고.
 
 ## 함정
 
-- **GitHub 위키는 WebFetch가 실패한다.** JS 렌더라 "There was an error while loading"만 나온다. `curl -sL` + `markdown-body` 파싱을 써야 한다. `doc-digger` 에이전트가 이걸 안다.
-- **노션 API 정의서는 90,000자**라 `notion-fetch` 가 통째로 못 읽고 파일로 떨어진다. grep으로 위치 찾고 슬라이스할 것.
-- **BE가 보는 노션 페이지 ID가 제나가 준 링크와 다르다** (`3d57f3fa…` vs `3dcbdeb9…`). BE 쪽은 다른 워크스페이스라 접근이 안 된다. 같은 문서인지 미확인 — Issue #2 1번.
-- 로컬 시스템 python은 3.9다. 반드시 `uv run` 을 거친다.
-- 팀 표기는 **`memme`** 다. BE가 `mammae` → `memme` 로 개명했다(PR #1).
-
-## 팀 규약 (BE `AGENTS.md` 기준)
-
-- 기능 개발은 GitHub Issue로 시작 → `feat/이슈번호-기능명` → `dev` 대상 PR → 본문에 `Closes #N`
-- 커밋은 **한글** Conventional Commit. PR 제목도 한글.
-- PR 본문: 주요 변경사항 / 구현 기능 / 테스트 내용·결과 / API 변경 여부 / DB 변경 여부 / `Closes #N`
-- 하나의 PR은 하나의 목적만.
+- `app/core/errors.py`의 `JSONResponse(status, body)` 인자 순서 버그는 `feat/4`·`feat/5`·`feat/6`
+  **세 브랜치 모두에서 각자 고쳤다** — 전부 `dev`에서 독립적으로 갈라져서 그렇다. 머지 순서 상관없이
+  같은 diff라 충돌 없이 합쳐질 것이다.
+- LangGraph `MessagesState`를 상속해 커스텀 필드(`failures: int`)를 추가할 때 리듀서를 따로
+  안 걸면 "마지막 쓴 값으로 덮어쓰기"로 동작한다(메시지 리스트만 `add_messages`로 누적). 의도한
+  동작이라 문제는 없었지만 다음에 상태 필드를 늘릴 때 리듀서 기본 동작을 헷갈리지 말 것.
+- 로컬 8000 포트에 이전 세션의 stale uvicorn 프로세스가 남아있던 적이 있다. curl 검증 전
+  `lsof -i :8000`으로 먼저 확인할 것.
