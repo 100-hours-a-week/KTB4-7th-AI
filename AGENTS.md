@@ -104,3 +104,5 @@ Karpathy Guidelines (MIT) 를 이 프로젝트에 맞게 축약했다.
 
 기본 브랜치는 `dev` 다. `main` 은 만들지 않는다 — `KTB4-7th-BE` 와 같은 구성이다.
 브랜치명은 `feat/<kebab-case>`, 커밋 메시지는 Conventional Commits 영문 소문자 타입을 쓴다.
+
+기능 작업은 GitHub Issue 생성 또는 기존 Issue 확인으로 시작한다. PR 본문에 `Closes #이슈번호`를 적어 병합 시 Issue가 자동으로 닫히게 한다.
