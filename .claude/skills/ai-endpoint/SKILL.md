@@ -21,7 +21,7 @@ BE와 합의한 최종 계약이다(위키·`contract-diff-wiki-vs-notion.md`는
   따로 배포되므로 한쪽이 필드를 먼저 추가해도 다른 쪽이 422로 막지 않는다. 정의되지 않은 필드는
   무시되고, 필수 필드 누락만 422가 된다).
 - 필드명은 **camelCase 그대로**. snake_case로 바꾸지 않는다.
-- 금액은 `int`(원), 비율은 `int`(퍼센트 정수, 예: 62 — 2026-09-16 팀 결정으로 소수(0.62) 대신 정수), 날짜는 `str`(YYYY-MM-DD).
+- 금액은 `int`(원), 비율·증감률은 `float`(소수, 예: 62%는 `0.62` — 2026-09-17 BE 확인, API 정의서 기준), 날짜는 `str`(YYYY-MM-DD).
 - 이미 있는 `Evidence` / `Metrics` 를 재사용한다. 비슷한 걸 새로 만들지 않는다.
 
 → **확인**: API 정의서의 표와 필드명·타입·필수여부가 전부 일치하는가
@@ -80,7 +80,7 @@ curl -s -X POST localhost:8000/internal/v1/ai/<path> \
 curl -s -X POST localhost:8000/internal/v1/ai/<path> -d '{}'
 ```
 
-→ **확인**: 오류 응답이 `{"message":"..."}` 형태인가(특정 상황에만 `failReason` 추가)
+→ **확인**: 오류 응답이 `{"message":"...","data":null}` 형태인가(특정 상황에만 `failReason` 추가)
 
 ### 6. 마무리
 - `uv run ruff check --fix . && uv run ruff format .`
@@ -94,4 +94,5 @@ curl -s -X POST localhost:8000/internal/v1/ai/<path> -d '{}'
 - 라우터에서 직접 LLM 호출 — 서비스로 내린다
 - 성공 응답을 플랫으로 반환 — API 정의서 기준은 `{"message":"...", "data": {...}}` 래퍼다
 - `INSUFFICIENT_*`/`INSUFFICIENT_DATA` 상태를 4xx로 반환 — **200**이다
+- 실패 응답에 `data` 키 빠뜨리기 — API 정의서 전역 규칙상 실패 응답은 항상 `"data":null`을 포함한다
 - `Depends(verify_internal_key)` 되살리기 — 서버 간 인증은 앱 레벨에서 안 한다(4절 참고)

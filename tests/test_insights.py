@@ -12,11 +12,11 @@ REQUEST_BODY = {
     "triggerType": "UPLOAD",
     "maxInsightCount": 3,
     "metrics": {
-        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -12},
+        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
         "hourlyProfile": [
             {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
         ],
-        "categoryBreakdown": [{"name": "커피", "share": 62, "vsPrevPeriod": -12}],
+        "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
     },
 }
 

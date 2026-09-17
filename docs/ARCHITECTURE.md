@@ -181,7 +181,7 @@ monkeypatch.setattr(llm, "complete", fake_complete)
 | 에러 포맷 | `{"success":false,"error":{code,message,traceId}}` | `{"message":"...", "failReason"?}` |
 | 인증 | 앱 레벨 `X-Internal-Api-Key` 검증 | 삭제 — 클라우드 보안그룹이 경계 |
 | 경로 | `/internal/ai/...` | `/internal/v1/ai/...` |
-| 비율 표기 | 소수 (`0.62`) | 정수 퍼센트 (`62`) |
+| 비율 표기 | (변경 없음) | `float` 소수(`0.62`) 유지 — 한때 정수 퍼센트로 바꿨다가 API 정의서 재확인 후 원복(2026-09-17) |
 | 솔루션 카드 | `rank`/`detailContent`/`aiInsight` | `rankNo`/`summaryText`/`detailText`, `aiInsight` 제거 |
 | 인사이트 | `uploadId`/`dataDays`, `insights[].{text,evidence}` | `salesAnalysisId`/`targetMonth`/`triggerType`, `data.insights`(문자열 배열) |
 | 챗봇 SSE | `{"answerChunk":...,"evidence":...}` | `{"event":"answerChunk","data":{"content":...,"evidence":...}}` |

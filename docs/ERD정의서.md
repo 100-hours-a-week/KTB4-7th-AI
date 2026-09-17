@@ -1,4 +1,4 @@
-## 1. 문서 정보
+stores, store_business_hours, store_holidays, menus, menu_images, menu_image_items## 1. 문서 정보
 
 - ERD: https://www.erdcloud.com/d/YCaxgrtSfbvMcQCHM
 - 설계 목적: 매장 단위 매출 업로드, 분석, AI 솔루션, 랭킹, 알림 기능을 지원한다. MVP에서는 업로드·분석·당일 솔루션 생성을 동기 처리하고, 향후 처리 시간과 작업량이 증가하면 큐·워커 기반 비동기 처리로 확장한다.
@@ -14,7 +14,7 @@
 
 | 도메인 코드 | 도메인명 | 테이블 |
 | --- | --- | --- |
-| AUTH | 인증·계정 | users, user_auth_providers, user_sessions, password_reset_tokens |
+| AUTH | 인증·계정 | users, signup_drafts, user_auth_providers, user_sessions, password_reset_tokens |
 | STORE | 매장 | stores, store_business_hours, store_holidays, menus, menu_images, menu_image_items |
 | SOL | 솔루션 | solution_bundles, solutions, saved_solutions, chat_messages |
 | SALES | 매출 분석 | sales_uploads, sales_orders, sales_order_items, store_menu_categories, sales_daily_summaries, sales_hourly_summaries, sales_daily_category_summaries, sales_daily_menu_summaries, sales_forecasts, analysis_runs, sales_analyses, sales_ai_insights, analysis_metrics, menu_analysis_results, review_analyses, store_cost_items, reviews, weather_observations |
@@ -36,12 +36,29 @@
 | 사용자 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 사용자 식별자 |
 | 이메일 | `email` | NOT NULL, UNIQUE | VARCHAR(100) | 로그인 및 계정 식별용 이메일 |
 | 비밀번호 해시 | `password_hash` | NOT NULL | VARCHAR(255) | 암호화된 비밀번호 해시값 |
-| 이름 | `name` | NOT NULL | VARCHAR(50) | 사용자 실명 또는 표시 이름 |
 | 휴대폰 번호 | `phone` | NOT NULL, UNIQUE | VARCHAR(20) | 사용자 휴대폰 번호 |
 | 마지막 로그인 일시 | `last_login_at` | NULL 허용 | DATETIME | 가장 최근 로그인 시각 |
 | 탈퇴 일시 | `deleted_at` | NULL 허용 | DATETIME | 회원 탈퇴 처리 시각 |
 | 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 계정 생성 시각 |
 | 수정 일시 | `updated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP, ON UPDATE CURRENT_TIMESTAMP | DATETIME | 계정 정보 최종 수정 시각 |
+
+### ✅signup_drafts - 임시 회원가입 정보
+
+회원가입 1단계에서 검증된 계정 정보와 필수 약관 동의 상태를 가입 완료 전까지 보관한다. signupToken 원문은 저장하지 않고 SHA-256 해시만 저장하며, 만료된 초안은 최종 가입에 사용할 수 없다.
+
+| 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
+| --- | --- | --- | --- | --- |
+| 임시 가입 ID | id | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 임시 가입 초안 식별자 |
+| 가입 토큰 해시 | signup_token_hash | NOT NULL, UNIQUE | CHAR(64) | 클라이언트에 반환한 signupToken의 SHA-256 해시값 |
+| 이메일 | email | NOT NULL | VARCHAR(100) | 최종 가입 전 다시 중복 검증할 이메일 |
+| 비밀번호 해시 | password_hash | NOT NULL | VARCHAR(255) | 단방향 해시 처리한 비밀번호 |
+| 휴대폰 번호 | phone | NOT NULL | VARCHAR(20) | 최종 가입 전 다시 중복 검증할 휴대폰 번호 |
+| 이용약관 동의 여부 | terms_of_service_agreed | NOT NULL | BOOLEAN | 필수 이용약관 동의 여부 |
+| 이용약관 버전 | terms_of_service_version | NOT NULL | VARCHAR(50) | 동의한 이용약관 버전 |
+| 개인정보 처리방침 동의 여부 | privacy_policy_agreed | NOT NULL | BOOLEAN | 필수 개인정보 처리방침 동의 여부 |
+| 개인정보 처리방침 버전 | privacy_policy_version | NOT NULL | VARCHAR(50) | 동의한 개인정보 처리방침 버전 |
+| 만료 일시 | expires_at | NOT NULL | DATETIME | signupToken 발급 시각부터 1시간 후의 만료 시각 |
+| 생성 일시 | created_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 임시 가입 정보 생성 시각 |
 
 ### ✅user_auth_providers - 외부 본인인증 식별값 연동
 
@@ -456,11 +473,11 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 매장 ID | `store_id` | FK → `stores.id`, NOT NULL | BIGINT UNSIGNED | 예측 대상 매장 |
 | 예측 대상 일자 | `target_date` | NOT NULL | DATE | 매출을 예측하는 날짜 |
 | 예측 기준 일자 | `basis_date` | NOT NULL | DATE | 예측 생성 시점의 기준 날짜 |
-| 예상 매출액 | `predicted_sales_amount` | NOT NULL, CHECK (`predicted_sales_amount` &gt;= 0) | DECIMAL(14,2) | 예측된 매출 금액 |
-| 예측 모델 버전 | `model_version` | NOT NULL | VARCHAR(50) | 예측에 사용한 모델 버전 |
+| 예상 매출액 | `predicted_sales_amount` | NOT NULL, CHECK (`predicted_sales_amount` &gt;= 0) | BIGINT UNSIGNED | 원 단위 정수로 저장하는 예측 매출 금액 |
+| 예측 모델 버전 | `model_version` | NOT NULL | VARCHAR(50) | 예측에 사용한 모델 식별자. 모델명-YYYY-MM-DD 형식(예: ridge-2026-09-16), 최대 50자. 팀 기능 릴리스 버전과 무관하며 최신 업로드 판별에 사용하지 않는다. |
 | 예측 생성 일시 | `generated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 예측 결과 생성 시각 |
 
-테이블 제약: UNIQUE (`store_id`, `target_date`, `model_version`).
+테이블 제약: UNIQUE (`store_id`, `target_date`). 매장·날짜별 최신 업로드 예측 1건을 유지한다. `model_version`은 키가 아닌 모델 추적용 일반 컬럼이며, 교체 시 `predicted_sales_amount`, `model_version`, `basis_date`, `generated_at`을 함께 갱신한다. 모델 버전 문자열이나 AI 응답 완료 시각으로 최신 업로드를 판단하지 않는다.
 
 ### 분석
 
@@ -579,11 +596,11 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 비용 기준 월 | cost_month | NOT NULL | DATE | 비용 적용 월. 해당 월의 첫째 날로 저장 |
 | 임대료 | rent_amount | NOT NULL, DEFAULT 0 | BIGINT UNSIGNED | 월 임대료(원) |
 | 인건비 | labor_amount | NOT NULL, DEFAULT 0 | BIGINT UNSIGNED | 월 인건비(원) |
-| 원가율 | ingredient_cost_rate | NOT NULL | DECIMAL(5,2) | 매출 대비 재료비 비율(%) |
+| 원가율 | ingredient_cost_rate | NOT NULL | DECIMAL(5,4) | 매출 대비 재료비 비율. 0 이상 1 이하, 소수점 넷째 자리까지. API·DB 모두 0.325로 표현하며 화면에서 32.5%로 표시한다. |
 | 생성 일시 | created_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 비용 정보 생성 시각 |
 | 수정 일시 | updated_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP, ON UPDATE CURRENT_TIMESTAMP | DATETIME | 비용 정보 최종 수정 시각 |
 
-테이블 제약: UNIQUE(store_id, cost_month), CHECK(ingredient_cost_rate BETWEEN 0 AND 100).
+테이블 제약: UNIQUE(store_id, cost_month), CHECK(ingredient_cost_rate BETWEEN 0 AND 1).
 
 ### ✅reviews - 리뷰
 
@@ -743,7 +760,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | RANK | BR-RANK-05 ~ 10 | ranking_profiles, ranking_snapshots, ranking_entries |
 | NOTI | BR-NOTI-02 ~ 07 | notifications, notification_preferences |
 
-## 11. MySQL 8.0 기준 수정 DDL
+## 11. MySQL 8.4 LTS 기준 수정 DDL
 
 첨부된 초안의 `DEFAULT AS`, 금액 컬럼의 `TIMESTAMP`, 누락된 PK·FK·UNIQUE·CHECK 제약을 수정했다. 금액 데이터와 업로드 데이터의 정합성을 위해 주문·주문항목·일별 집계·분석 실행에 필요한 키와 인덱스를 포함한다.
 
@@ -754,7 +771,6 @@ CREATE TABLE users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   email VARCHAR(100) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
-  name VARCHAR(50) NOT NULL,
   phone VARCHAR(20) NOT NULL,
   last_login_at DATETIME NULL,
   deleted_at DATETIME NULL,
@@ -763,6 +779,23 @@ CREATE TABLE users (
   PRIMARY KEY (id),
   UNIQUE KEY uk_users_email (email),
   UNIQUE KEY uk_users_phone (phone)
+) ENGINE=InnoDB;
+
+CREATE TABLE signup_drafts (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  signup_token_hash CHAR(64) NOT NULL,
+  email VARCHAR(100) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  phone VARCHAR(20) NOT NULL,
+  terms_of_service_agreed BOOLEAN NOT NULL,
+  terms_of_service_version VARCHAR(50) NOT NULL,
+  privacy_policy_agreed BOOLEAN NOT NULL,
+  privacy_policy_version VARCHAR(50) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_signup_drafts_token_hash (signup_token_hash),
+  KEY idx_signup_drafts_expires_at (expires_at)
 ) ENGINE=InnoDB;
 
 CREATE TABLE user_auth_providers (
@@ -1081,7 +1114,7 @@ CREATE TABLE sales_forecasts (
   store_id BIGINT UNSIGNED NOT NULL,
   target_date DATE NOT NULL,
   basis_date DATE NOT NULL,
-  predicted_sales_amount DECIMAL(14,2) NOT NULL,
+  predicted_sales_amount BIGINT UNSIGNED NOT NULL,
   model_version VARCHAR(50) NOT NULL,
   generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -1090,8 +1123,8 @@ CREATE TABLE sales_forecasts (
     REFERENCES stores(id)
     ON DELETE RESTRICT
     ON UPDATE RESTRICT,
-  CONSTRAINT uk_sales_forecast_store_target_model
-    UNIQUE (store_id, target_date, model_version),
+  CONSTRAINT uk_sales_forecast_store_target
+    UNIQUE (store_id, target_date),
   CONSTRAINT ck_sales_forecast_amount
     CHECK (predicted_sales_amount >= 0)
 ) ENGINE=InnoDB;
@@ -1136,7 +1169,7 @@ CREATE TABLE sales_ai_insights (
   store_id BIGINT UNSIGNED NOT NULL,
   sales_analysis_id BIGINT UNSIGNED NOT NULL,
   target_month DATE NOT NULL,
-  content TEXT NOT NULL,
+  insights JSON NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
   generated_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1147,6 +1180,7 @@ CREATE TABLE sales_ai_insights (
   KEY idx_sales_ai_insight_store_month_status (store_id, target_month, status),
   CONSTRAINT fk_sales_ai_insight_store FOREIGN KEY (store_id) REFERENCES stores(id),
   CONSTRAINT fk_sales_ai_insight_analysis FOREIGN KEY (sales_analysis_id) REFERENCES sales_analyses(id),
+  CONSTRAINT ck_sales_ai_insight_array CHECK (JSON_TYPE(insights) = 'ARRAY'),
   CONSTRAINT ck_sales_ai_insight_status CHECK (status IN ('PENDING','GENERATING','COMPLETED','FAILED'))
 ) ENGINE=InnoDB;
 
@@ -1198,13 +1232,13 @@ CREATE TABLE store_cost_items (
   cost_month DATE NOT NULL,
   rent_amount BIGINT UNSIGNED NOT NULL DEFAULT 0,
   labor_amount BIGINT UNSIGNED NOT NULL DEFAULT 0,
-  ingredient_cost_rate DECIMAL(5,2) NOT NULL,
+  ingredient_cost_rate DECIMAL(5,4) NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uk_cost_store_month (store_id, cost_month),
   CONSTRAINT fk_cost_store FOREIGN KEY (store_id) REFERENCES stores(id),
-  CONSTRAINT ck_ingredient_cost_rate CHECK (ingredient_cost_rate BETWEEN 0 AND 100)
+  CONSTRAINT ck_ingredient_cost_rate CHECK (ingredient_cost_rate BETWEEN 0 AND 1)
 ) ENGINE=InnoDB;
 
 CREATE TABLE reviews (

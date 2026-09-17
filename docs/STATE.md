@@ -16,16 +16,20 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 
 ## 이번에 반영한 것
 
-- **공통 에러 포맷**: `{"success":false,"error":{code,message,traceId}}` → `{"message":"..."}`
+- **공통 에러 포맷**: `{"success":false,"error":{code,message,traceId}}` → `{"message":"...","data":null}`
   (+ 특정 상황에만 `failReason`). `app/core/errors.py`의 `ApiError`에 `fail_reason` 옵션 추가
-  (기존 호출부는 안 건드림 — 위치 인자라 하위호환).
+  (기존 호출부는 안 건드림 — 위치 인자라 하위호환). `data:null`은 2026-09-17에 추가 — API 정의서
+  67번 줄 전역 규칙("실패 응답은 기본적으로 `{"message":...,"data":null}`")과 문서 전체 40여 개
+  실제 예시로 확인, `_body()`에 빠져 있던 걸 헥터가 지적해서 반영했다.
 - **서버 간 인증 삭제**: solutions/insights/chat 라우터에서 `Depends(verify_internal_key)` 제거.
   `app/core/auth.py` 자체는 `forecast.py`가 아직 쓰고 있어서 남겨둠 — **헥터도 지워야 완전히 끝남.**
 - **라우터 prefix**: `/internal/ai` → `/internal/v1/ai` (solutions/insights/chat).
   ⚠️ **`app/api/forecast.py`는 아직 `/internal/ai/forecast/batch`로 v1이 안 붙어있다** —
   헥터에게 알릴 것 (방금 사용자가 `/internal/v1/ai/forecast/batch`로 확정한다고 확인해줌).
-- **비율 표기**: 소수(0.62) → 정수 퍼센트(62). `app/schemas/common.py`의
-  `SalesSummary.vsPrevPeriod`, `CategoryPoint.share/vsPrevPeriod`, `devtools/stub_backend.py` 반영.
+- **비율 표기**: 한때 소수(0.62)→정수 퍼센트(62)로 바꿨었는데, 2026-09-17 API 정의서 재확인 +
+  BE 확인 결과 **소수가 맞는 것으로 원복**했다(`app/schemas/common.py`의
+  `SalesSummary.vsPrevPeriod`, `CategoryPoint.share/vsPrevPeriod`, `devtools/stub_backend.py`,
+  테스트 픽스처 3곳). 금액(`netSales`/`amount`)·시간(`hour`)은 그대로 `int`.
 - **솔루션 생성** (`POST /internal/v1/ai/solutions/generate`):
   - `context`(dayOfWeek/isWeekend/dataBasisPeriod) 요청 필드 삭제 — 서비스가 `targetDate`로
     요일·주말 여부를 코드로 계산한다(달력 계산이라 환각 위험 없음).
@@ -68,11 +72,18 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 ## 미해결 결정
 
 - **챗봇 데이터 부족 처리**: 사용자가 "예측·인사이트·챗봇 모두 200+`status:INSUFFICIENT_DATA`+
-  `data.missingData`로 통일"이라고 확정했다. 예측·인사이트는 반영했지만(인사이트는 애초에 AI가 판단할
-  신호가 없어 무조건 COMPLETED만 반환), **챗봇은 이 상태를 코드에서 판단할 명확한 트리거가 없어서
-  구현하지 않았다** — 지금은 LLM이 시스템 프롬프트 지시("데이터가 부족하면 부족하다고 말하세요")로
-  자연어로만 표현한다. 언제 이 상태를 코드로 판정할지 BE와 조건 정의 필요.
+  `data.missingData`로 통일"이라고 확정했다. 챗봇은 이 상태를 코드에서 판단할 명확한 트리거가
+  없어서 아직 구현하지 않았다 — 지금은 LLM이 시스템 프롬프트 지시("데이터가 부족하면 부족하다고
+  말하세요")로 자연어로만 표현한다. 언제 이 상태를 코드로 판정할지 BE와 조건 정의 필요.
 - **솔루션 metrics의 순이익/리뷰 요약**: 설계 설명엔 포함된다고 돼 있는데 스키마에 필드가 없다(위 참고).
+
+## 설계상 확정된 사실 (미해결 아님 — 혼동 방지용)
+
+- **인사이트는 항상 `status: COMPLETED`만 반환한다.** 스키마엔 `COMPLETED | INSUFFICIENT_DATA`
+  둘 다 있지만, 데이터 부족(14일 미만) 판단은 **BE가 호출 전에** 한다 — 요청에 `dataDays` 자체가
+  없어서 AI는 판단할 신호가 없다. `INSUFFICIENT_DATA`는 계약상 값 존재만 보장하는 자리이고,
+  `app/services/insight.py`가 이 상태를 만들 일은 설계상 없다. 나중에 "왜 여기 게이트가 없지?"
+  하고 다시 파고들지 않도록 기록해 둔다.
 
 ## 함정
 

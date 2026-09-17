@@ -11,13 +11,13 @@ REQUEST_BODY = {
     "targetDate": "2026-08-31",  # 월요일
     "triggerType": "UPLOAD",
     "metrics": {
-        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -12},
+        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
         "predictedSalesToday": 1250000,
         "hourlyProfile": [
             {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
             {"dayType": "WEEKEND", "hour": 14, "amount": 92000},
         ],
-        "categoryBreakdown": [{"name": "커피", "share": 62, "vsPrevPeriod": -12}],
+        "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
         "reviewSummary": None,
     },
 }
