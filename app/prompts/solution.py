@@ -1,6 +1,6 @@
 """솔루션 카드 3장을 LLM 1회 호출로 생성한다.
 
-v2: docs/api정의서.md·docs/ERD정의서.md 확정 반영 (2026-09-16).
+2026-09-16: docs/api정의서.md·docs/ERD정의서.md 확정 반영.
 - 요청에서 context(dayOfWeek/isWeekend/dataBasisPeriod)가 빠졌다. 서비스가 targetDate 로부터
   요일·주말 여부를 코드로 계산해 넘긴다 — 달력 계산이라 환각 위험이 없다(매출 수치 계산과는 다르다).
 - 카드 필드는 ERD 컬럼명(rankNo/summaryText/detailText)을 쓴다. evidence 는 없다
