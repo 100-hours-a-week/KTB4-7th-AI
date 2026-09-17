@@ -91,3 +91,16 @@ def build_future_frame(history: pd.Series, start: pd.Timestamp, horizon: int) ->
     # 직전 달에 특정 요일이 하나도 없으면(휴무 등) 그 달 평균으로 대체한다.
     df["prev_month_dow_mean"] = df["prev_month_dow_mean"].fillna(means[base])
     return df
+
+
+def incomplete_months(history: pd.Series, start: pd.Timestamp) -> list[str]:
+    """예측 시작 달의 직전 두 달 중 완전하지 않은 달을 돌려준다."""
+    first, last = history.index[0], history.index[-1]
+    start_period = start.to_period("M")
+    incomplete = []
+    for back in (1, 2):
+        period = start_period - back
+        covered = first <= period.start_time and last >= period.end_time.normalize()
+        if not covered:
+            incomplete.append(str(period))
+    return sorted(incomplete)

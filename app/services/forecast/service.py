@@ -17,12 +17,17 @@ from app.schemas.forecast import (
     InsufficientHistoryResponse,
     Prediction,
 )
-from app.services.forecast.features import build_future_frame, build_training_frame
+from app.services.forecast.features import (
+    build_future_frame,
+    build_training_frame,
+    incomplete_months,
+)
+from app.services.forecast.intervals import bounds, residual_quantiles
 from app.services.forecast.model import MODEL_VERSION, fit_predict
 
 
 def _invalid(message: str) -> ApiError:
-    return ApiError(422, "INVALID_DAILY_SALES", message)
+    return ApiError(422, "INVALID_DAILY_SALES", message, fail_reason="INVALID_DAILY_SALES")
 
 
 def _to_series(daily_sales: list[DailySale]) -> pd.Series:
@@ -55,7 +60,10 @@ def _start_date(req: ForecastRequest, series: pd.Series) -> pd.Timestamp:
         start = pd.Timestamp(req.forecastStartDate)
     except ValueError as exc:
         raise ApiError(
-            422, "INVALID_FORECAST_START_DATE", "forecastStartDate 형식은 YYYY-MM-DD 여야 합니다."
+            422,
+            "INVALID_FORECAST_START_DATE",
+            "forecastStartDate 형식은 YYYY-MM-DD 여야 합니다.",
+            fail_reason="INVALID_FORECAST_START_DATE",
         ) from exc
 
     expected = series.index[-1] + pd.Timedelta(days=1)
@@ -64,28 +72,16 @@ def _start_date(req: ForecastRequest, series: pd.Series) -> pd.Timestamp:
             422,
             "INVALID_FORECAST_START_DATE",
             f"forecastStartDate 는 dailySales 마지막 날짜 다음 날({expected.date()})이어야 합니다.",
+            fail_reason="INVALID_FORECAST_START_DATE",
         )
     return start
-
-
-def _incomplete_months(series: pd.Series, start: pd.Timestamp) -> list[str]:
-    """예측 시작 달의 직전 두 달 중 완전하지 않은 달을 돌려준다."""
-    first, last = series.index[0], series.index[-1]
-    start_period = start.to_period("M")
-    incomplete = []
-    for back in (1, 2):
-        period = start_period - back
-        covered = first <= period.start_time and last >= period.end_time.normalize()
-        if not covered:
-            incomplete.append(str(period))
-    return sorted(incomplete)
 
 
 def run_forecast(req: ForecastRequest) -> ForecastResponse | InsufficientHistoryResponse:
     series = _to_series(req.dailySales)
     start = _start_date(req, series)
 
-    incomplete = _incomplete_months(series, start)
+    incomplete = incomplete_months(series, start)
     train = build_training_frame(series)
 
     # 첫 데이터 월은 전월 피처가 없어 학습 행에서 빠진다.
@@ -102,6 +98,7 @@ def run_forecast(req: ForecastRequest) -> ForecastResponse | InsufficientHistory
 
     future = build_future_frame(series, start, HORIZON_DAYS)
     predicted = fit_predict(train, future)
+    lower, upper = bounds(predicted, residual_quantiles(series))
 
     return ForecastResponse(
         data=ForecastData(
@@ -112,9 +109,13 @@ def run_forecast(req: ForecastRequest) -> ForecastResponse | InsufficientHistory
                 Prediction(
                     targetDate=str(day.date()),
                     predictedSalesAmount=int(amount),
+                    lowerBound=int(low),
+                    upperBound=int(high),
                     modelVersion=MODEL_VERSION,
                 )
-                for day, amount in zip(future.index, predicted, strict=True)
+                for day, amount, low, high in zip(
+                    future.index, predicted, lower, upper, strict=True
+                )
             ],
         )
     )

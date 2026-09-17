@@ -164,6 +164,12 @@ async def run(rows: list[dict], ai: Ai) -> None:
             all(isinstance(p["predictedSalesAmount"], int) for p in preds),
             "예측값 정수(원)",
         )
+        report(
+            all(p["lowerBound"] <= p["predictedSalesAmount"] <= p["upperBound"] for p in preds),
+            "예측구간이 예측값을 감쌈",
+        )
+        widths = [(p["upperBound"] - p["lowerBound"]) / p["predictedSalesAmount"] for p in preds]
+        print(f"      80% 예측구간 폭 중앙값 {sorted(widths)[len(widths) // 2]:.0%}")
     else:
         report(False, "성공 응답", json.dumps(body, ensure_ascii=False)[:120])
 
@@ -189,17 +195,18 @@ async def run(rows: list[dict], ai: Ai) -> None:
     )
 
     print("\n[3] 날짜 누락")
-    broken = rows[:100] + rows[101:]
+    gap = len(rows) // 2
+    broken = rows[:gap] + rows[gap + 1 :]
     res = await ai.post(broken, start=next_day(rows[-1]["date"]))
     report(res.status_code == 422, "422 응답", f"status={res.status_code}")
-    report(res.json().get("error", {}).get("code") == "INVALID_DAILY_SALES", "INVALID_DAILY_SALES")
+    report(res.json().get("failReason") == "INVALID_DAILY_SALES", "failReason=INVALID_DAILY_SALES")
 
     print("\n[4] 시작일 불일치")
     res = await ai.post(rows, start=next_day(next_day(rows[-1]["date"])))
     report(res.status_code == 422, "422 응답", f"status={res.status_code}")
     report(
-        res.json().get("error", {}).get("code") == "INVALID_FORECAST_START_DATE",
-        "INVALID_FORECAST_START_DATE",
+        res.json().get("failReason") == "INVALID_FORECAST_START_DATE",
+        "failReason=INVALID_FORECAST_START_DATE",
     )
 
     print("\n[5] 연속 업로드 겹침")
