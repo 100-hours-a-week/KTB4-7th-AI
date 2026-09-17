@@ -1,4 +1,4 @@
-stores, store_business_hours, store_holidays, menus, menu_images, menu_image_items## 1. 문서 정보
+## 1. 문서 정보
 
 - ERD: https://www.erdcloud.com/d/YCaxgrtSfbvMcQCHM
 - 설계 목적: 매장 단위 매출 업로드, 분석, AI 솔루션, 랭킹, 알림 기능을 지원한다. MVP에서는 업로드·분석·당일 솔루션 생성을 동기 처리하고, 향후 처리 시간과 작업량이 증가하면 큐·워커 기반 비동기 처리로 확장한다.
@@ -474,10 +474,12 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 예측 대상 일자 | `target_date` | NOT NULL | DATE | 매출을 예측하는 날짜 |
 | 예측 기준 일자 | `basis_date` | NOT NULL | DATE | 예측 생성 시점의 기준 날짜 |
 | 예상 매출액 | `predicted_sales_amount` | NOT NULL, CHECK (`predicted_sales_amount` &gt;= 0) | BIGINT UNSIGNED | 원 단위 정수로 저장하는 예측 매출 금액 |
+| 예측 하한 | `lower_bound` | NOT NULL | BIGINT UNSIGNED | 80% 예측구간의 하한 금액(원 단위 정수) |
+| 예측 상한 | `upper_bound` | NOT NULL | BIGINT UNSIGNED | 80% 예측구간의 상한 금액(원 단위 정수) |
 | 예측 모델 버전 | `model_version` | NOT NULL | VARCHAR(50) | 예측에 사용한 모델 식별자. 모델명-YYYY-MM-DD 형식(예: ridge-2026-09-16), 최대 50자. 팀 기능 릴리스 버전과 무관하며 최신 업로드 판별에 사용하지 않는다. |
 | 예측 생성 일시 | `generated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 예측 결과 생성 시각 |
 
-테이블 제약: UNIQUE (`store_id`, `target_date`). 매장·날짜별 최신 업로드 예측 1건을 유지한다. `model_version`은 키가 아닌 모델 추적용 일반 컬럼이며, 교체 시 `predicted_sales_amount`, `model_version`, `basis_date`, `generated_at`을 함께 갱신한다. 모델 버전 문자열이나 AI 응답 완료 시각으로 최신 업로드를 판단하지 않는다.
+테이블 제약: UNIQUE (`store_id`, `target_date`), CHECK (`lower_bound` <= `predicted_sales_amount` <= `upper_bound`). 매장·날짜별 최신 업로드 예측 1건을 유지한다. `model_version`은 키가 아닌 모델 추적용 일반 컬럼이며, 교체 시 `predicted_sales_amount`, `lower_bound`, `upper_bound`, `model_version`, `basis_date`, `generated_at`을 함께 갱신한다. 모델 버전 문자열이나 AI 응답 완료 시각으로 최신 업로드를 판단하지 않는다.
 
 ### 분석
 
@@ -596,7 +598,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 비용 기준 월 | cost_month | NOT NULL | DATE | 비용 적용 월. 해당 월의 첫째 날로 저장 |
 | 임대료 | rent_amount | NOT NULL, DEFAULT 0 | BIGINT UNSIGNED | 월 임대료(원) |
 | 인건비 | labor_amount | NOT NULL, DEFAULT 0 | BIGINT UNSIGNED | 월 인건비(원) |
-| 원가율 | ingredient_cost_rate | NOT NULL | DECIMAL(5,4) | 매출 대비 재료비 비율. 0 이상 1 이하, 소수점 넷째 자리까지. API·DB 모두 0.325로 표현하며 화면에서 32.5%로 표시한다. |
+| 원가율 | ingredient_cost_rate | NOT NULL, CHECK (ingredient_cost_rate BETWEEN 0 AND 1) | DECIMAL(5,4) | 매출 대비 재료비 비율. 0 이상 1 이하, 소수점 넷째 자리까지. API·DB 모두 0.325로 표현하며 화면에서 32.5%로 표시한다. |
 | 생성 일시 | created_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 비용 정보 생성 시각 |
 | 수정 일시 | updated_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP, ON UPDATE CURRENT_TIMESTAMP | DATETIME | 비용 정보 최종 수정 시각 |
 
@@ -1115,6 +1117,8 @@ CREATE TABLE sales_forecasts (
   target_date DATE NOT NULL,
   basis_date DATE NOT NULL,
   predicted_sales_amount BIGINT UNSIGNED NOT NULL,
+  lower_bound BIGINT UNSIGNED NOT NULL,
+  upper_bound BIGINT UNSIGNED NOT NULL,
   model_version VARCHAR(50) NOT NULL,
   generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -1126,7 +1130,10 @@ CREATE TABLE sales_forecasts (
   CONSTRAINT uk_sales_forecast_store_target
     UNIQUE (store_id, target_date),
   CONSTRAINT ck_sales_forecast_amount
-    CHECK (predicted_sales_amount >= 0)
+    CHECK (
+      lower_bound <= predicted_sales_amount
+      AND predicted_sales_amount <= upper_bound
+    )
 ) ENGINE=InnoDB;
 
 CREATE TABLE analysis_runs (
