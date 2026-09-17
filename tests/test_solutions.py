@@ -36,19 +36,11 @@ LLM_SUCCESS = json.dumps(
     ensure_ascii=False,
 )
 
-_UNSET = object()
 
-
-async def _post(body: dict, headers=_UNSET) -> httpx.Response:
-    if headers is _UNSET:
-        headers = {"X-Internal-Api-Key": "test-key"}
+async def _post(body: dict) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post(
-            "/internal/v1/ai/solutions/generate",
-            json=body,
-            headers=headers,
-        )
+        return await client.post("/internal/v1/ai/solutions/generate", json=body)
 
 
 async def test_정상_요청이_솔루션카드를_반환한다(monkeypatch):
@@ -67,18 +59,6 @@ async def test_정상_요청이_솔루션카드를_반환한다(monkeypatch):
     assert body["data"]["solutionCards"][0]["summaryText"]
     assert body["data"]["modelVersion"]
     assert body["data"]["promptVersion"] == "v2"
-
-
-async def test_요청에_인증헤더가_없어도_통과한다(monkeypatch):
-    """서버 간 인증은 클라우드 SG로 처리하기로 하고 애플리케이션 레벨 검증은 제거했다."""
-
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
-        return LLM_SUCCESS
-
-    monkeypatch.setattr(llm, "complete", fake_complete)
-
-    res = await _post(REQUEST_BODY, headers={})
-    assert res.status_code == 200
 
 
 async def test_필수_필드가_없으면_422():

@@ -37,7 +37,6 @@ async def call_tool(tool: str, params: dict) -> dict:
         async with httpx.AsyncClient(
             base_url=settings.backend_base_url,
             timeout=settings.backend_timeout_seconds,
-            headers={"X-Internal-Api-Key": settings.internal_api_key},
         ) as client:
             res = await client.get(path, params=params)
     except httpx.HTTPError as exc:
