@@ -30,7 +30,7 @@ def _calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
     더해져 과대예측이 난다. 실측에서도 겹치는 날 예측/실제 배율이 1.23이었고, 그 여파로
     공휴일 계수가 눌려 평일 공휴일은 오히려 0.88로 과소예측됐다.
     그래서 "쉬는 날"은 `is_offday` 하나로 한 번만 반영하고, 평일 공휴일이 주말과 다른
-    부분만 `is_holiday_weekday` 로 따로 학습한다 (ridge_v2, 위키 단계2 §5.11).
+    부분만 `is_holiday_weekday` 로 따로 학습한다 (위키 단계2 §5.11).
 
     `is_holiday` 는 모델 피처가 아니라 응답의 `predictions[].isHoliday` 용이다.
     """
