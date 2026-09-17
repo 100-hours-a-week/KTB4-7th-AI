@@ -11,7 +11,15 @@ REQUEST_BODY = {
     "userId": 1,
     "storeId": 1024,
     "question": "오늘 솔루션 왜 이렇게 나왔어?",
-    "context": {"type": "SOLUTION_DETAIL", "content": "오늘 생성된 솔루션 상세보기 전체 내용"},
+    "context": [
+        {
+            "rankNo": 1,
+            "title": "점심 시간대 할인",
+            "summaryText": "점심 할인 프로모션을 제안합니다.",
+            "detailText": "12시부터 14시까지 할인 행사를 진행하세요.",
+            "evidence": "12~14시 주문 수가 전주 대비 감소했습니다.",
+        }
+    ],
     "history": [],
 }
 
@@ -77,8 +85,13 @@ async def test_부족하면_툴을_호출한_뒤_답한다(monkeypatch):
 
     async def fake_call_tool(tool: str, params: dict) -> dict:
         assert tool == "get_sales_summary"
-        assert params == {"storeId": 1024, "period": "TODAY"}
-        return {"netSales": 320000}
+        assert params == {
+            "storeId": 1024,
+            "period": "TODAY",
+            "startDate": None,
+            "endDate": None,
+        }
+        return {"totalSales": 320000}
 
     monkeypatch.setattr(backend, "call_tool", fake_call_tool)
 
@@ -115,3 +128,19 @@ async def test_필수_필드가_없으면_422():
     res = await _post(body)
     assert res.status_code == 422
     assert res.json()["message"]
+
+
+async def test_history의_role이_BE_DB값인_대문자여도_통과한다(monkeypatch):
+    _patch_model(monkeypatch, [AIMessage(content="이전 질문 이어서 답할게요.")])
+
+    body = {
+        **REQUEST_BODY,
+        "history": [
+            {"role": "USER", "content": "어제 매출 어땠어?"},
+            {"role": "ASSISTANT", "content": "어제 매출은 28만원이었어요."},
+        ],
+    }
+    res = await _post(body)
+
+    assert res.status_code == 200
+    assert "이전 질문 이어서" in "".join(_answer_chunks(res.text))

@@ -33,12 +33,14 @@ async def call_tool(tool: str, params: dict) -> dict:
     if path is None:
         raise ApiError(500, "UNKNOWN_TOOL", f"등록되지 않은 툴입니다: {tool}")
 
+    query = {k: v for k, v in params.items() if v is not None}
+
     try:
         async with httpx.AsyncClient(
             base_url=settings.backend_base_url,
             timeout=settings.backend_timeout_seconds,
         ) as client:
-            res = await client.get(path, params=params)
+            res = await client.get(path, params=query)
     except httpx.HTTPError as exc:
         raise BackendError(f"{tool} 호출 실패: {exc}") from exc
 

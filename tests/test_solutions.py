@@ -58,7 +58,7 @@ async def test_정상_요청이_솔루션카드를_반환한다(monkeypatch):
     assert body["data"]["solutionCards"][0]["rankNo"] == 1
     assert body["data"]["solutionCards"][0]["summaryText"]
     assert body["data"]["modelVersion"]
-    assert body["data"]["promptVersion"] == "v2"
+    assert "promptVersion" not in body["data"]
 
 
 async def test_필수_필드가_없으면_422():

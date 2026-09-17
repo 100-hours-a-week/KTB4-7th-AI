@@ -15,22 +15,22 @@ from app.clients.backend import TOOL_PATHS
 RESPONSES = {
     "get_sales_summary": {
         "period": {"type": "THIS_MONTH", "startDate": "2026-09-01", "endDate": "2026-09-08"},
-        "netSales": 3200000,
+        "totalSales": 3200000,
         "orderCount": 420,
         "averageOrderValue": 7619,
         "changeRate": 0.125,
     },
     "get_category_breakdown": {
-        "categories": [{"categoryName": "커피", "netSales": 1800000, "ratio": 0.563}],
+        "categories": [{"categoryName": "커피", "menuSales": 1800000, "ratio": 0.563}],
         "menuRankings": [
-            {"rank": 1, "menuName": "아메리카노", "netSales": 800000, "quantity": 250}
+            {"rank": 1, "menuName": "아메리카노", "menuSales": 800000, "quantity": 250}
         ],
     },
     "get_hourly_profile": {
         "hourlyProfiles": [
-            {"hour": 12, "netSales": 420000, "orderCount": 55},
-            {"hour": 13, "netSales": 380000, "orderCount": 49},
-            {"hour": 15, "netSales": 90000, "orderCount": 11},
+            {"hour": 12, "menuSales": 420000, "orderCount": 55},
+            {"hour": 13, "menuSales": 380000, "orderCount": 49},
+            {"hour": 15, "menuSales": 90000, "orderCount": 11},
         ]
     },
     "get_forecast": {

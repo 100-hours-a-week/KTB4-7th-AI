@@ -49,6 +49,5 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
             targetDate=req.targetDate,
             solutionCards=cards,
             modelVersion=settings.llm_model,
-            promptVersion=solution_prompt.VERSION,
         )
     )

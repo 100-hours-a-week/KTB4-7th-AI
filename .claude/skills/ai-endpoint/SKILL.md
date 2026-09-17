@@ -90,7 +90,9 @@ curl -s -X POST localhost:8000/internal/v1/ai/<path> -d '{}'
 
 ## 자주 틀리는 것
 
-- 응답에 `modelVersion`·`promptVersion` 빠뜨리기 — solutions는 필수, insights는 없음(엔드포인트마다 다르니 API 정의서 확인)
+- 응답에 `modelVersion` 빠뜨리기 — solutions는 필수, insights는 없음(엔드포인트마다 다르니 API
+  정의서 확인). `promptVersion`은 2026-09-17부로 응답에서 뺐다(배포 버전과 헷갈려서) —
+  `VERSION` 상수는 프롬프트 파일 안에 날짜식으로만 남기고 응답에 넣지 않는다.
 - 라우터에서 직접 LLM 호출 — 서비스로 내린다
 - 성공 응답을 플랫으로 반환 — API 정의서 기준은 `{"message":"...", "data": {...}}` 래퍼다
 - `INSUFFICIENT_*`/`INSUFFICIENT_DATA` 상태를 4xx로 반환 — **200**이다

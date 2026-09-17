@@ -24,7 +24,7 @@ CHUNK_SIZE = 40
 
 
 def _to_lc_messages(history: list[ChatMessage]) -> list:
-    role_map = {"user": HumanMessage, "assistant": AIMessage}
+    role_map = {"USER": HumanMessage, "ASSISTANT": AIMessage}
     return [role_map[m.role](m.content) for m in history]
 
 
@@ -52,7 +52,7 @@ async def chat_messages(req: ChatRequest) -> StreamingResponse:
     model = chat_graph.get_model(tools)
     compiled = chat_graph.build_graph(model, tools)
 
-    system = chat_prompt.build_system(req.context.type, req.context.content)
+    system = chat_prompt.build_system([card.model_dump() for card in req.context])
     messages = [SystemMessage(system), *_to_lc_messages(req.history), HumanMessage(req.question)]
 
     result = await compiled.ainvoke({"messages": messages, "failures": 0})

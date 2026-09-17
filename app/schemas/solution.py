@@ -25,7 +25,6 @@ class SolutionData(Contract):
     targetDate: str
     solutionCards: list[SolutionCard]
     modelVersion: str
-    promptVersion: str
 
 
 class SolutionResponse(Contract):
