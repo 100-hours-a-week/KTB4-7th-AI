@@ -456,7 +456,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 매장 ID | `store_id` | FK → `stores.id`, NOT NULL | BIGINT UNSIGNED | 예측 대상 매장 |
 | 예측 대상 일자 | `target_date` | NOT NULL | DATE | 매출을 예측하는 날짜 |
 | 예측 기준 일자 | `basis_date` | NOT NULL | DATE | 예측 생성 시점의 기준 날짜 |
-| 예상 매출액 | `predicted_sales_amount` | NOT NULL, CHECK (`predicted_sales_amount` &gt;= 0) | DECIMAL(14,2) | 예측된 매출 금액 |
+| 예상 매출액 | `predicted_sales_amount` | NOT NULL, CHECK (`predicted_sales_amount` &gt;= 0) | BIGINT UNSIGNED | 원 단위 정수로 저장하는 예측 매출 금액 |
 | 예측 모델 버전 | `model_version` | NOT NULL | VARCHAR(50) | 예측에 사용한 모델 버전 |
 | 예측 생성 일시 | `generated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 예측 결과 생성 시각 |
 
@@ -1081,7 +1081,7 @@ CREATE TABLE sales_forecasts (
   store_id BIGINT UNSIGNED NOT NULL,
   target_date DATE NOT NULL,
   basis_date DATE NOT NULL,
-  predicted_sales_amount DECIMAL(14,2) NOT NULL,
+  predicted_sales_amount BIGINT UNSIGNED NOT NULL,
   model_version VARCHAR(50) NOT NULL,
   generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
