@@ -72,11 +72,11 @@ LLM에는 원본 거래 데이터가 아니라 **BE가 이미 계산해 둔 확�
 ```python
 # app/schemas/common.py
 class Metrics(Contract):
-    salesSummary: SalesSummary              # 순매출, 전기 대비 증감률
-    hourlyProfile: list[HourlyPoint]        # 시간대별 매출 분포
+    salesSummary: SalesSummary  # 순매출, 전기 대비 증감률
+    hourlyProfile: list[HourlyPoint]  # 시간대별 매출 분포
     categoryBreakdown: list[CategoryPoint]  # 카테고리별 매출 비중·증감률
     predictedSalesToday: int | None = None  # 오늘 예측 매출(예측 모델 결과)
-    reviewSummary: dict | None = None       # 리뷰 감성 요약
+    reviewSummary: dict | None = None  # 리뷰 감성 요약
 ```
 
 - **환각 방지**: LLM이 매출 합계나 증감률을 직접 계산하게 두면 숫자를 틀리게 만들어낼 위험이 있다.
