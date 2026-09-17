@@ -31,7 +31,7 @@ app/
 ├── schemas/              계약의 단일 진실 원천 (Pydantic)
 │   ├── common.py         Contract 베이스, Evidence, Metrics — 전 엔드포인트 공유
 │   ├── solution.py / insight.py / chat.py / forecast.py
-├── prompts/              LLM 프롬프트. 파일당 VERSION 상수로 버전을 표시한다(4.4절)
+├── prompts/              LLM 프롬프트
 │   ├── solution.py, insight.py, chat.py
 ├── clients/              외부 호출 래퍼
 │   ├── llm.py            Anthropic 단발 생성 (솔루션·인사이트용)
@@ -68,6 +68,16 @@ flowchart LR
 ### 4.1 "계산은 코드, 해석은 모델"
 
 LLM에는 원본 거래 데이터가 아니라 **BE가 이미 계산해 둔 확정 지표**(`Metrics`)만 넘긴다.
+
+```python
+# app/schemas/common.py
+class Metrics(Contract):
+    salesSummary: SalesSummary              # 순매출, 전기 대비 증감률
+    hourlyProfile: list[HourlyPoint]        # 시간대별 매출 분포
+    categoryBreakdown: list[CategoryPoint]  # 카테고리별 매출 비중·증감률
+    predictedSalesToday: int | None = None  # 오늘 예측 매출(예측 모델 결과)
+    reviewSummary: dict | None = None       # 리뷰 감성 요약
+```
 
 - **환각 방지**: LLM이 매출 합계나 증감률을 직접 계산하게 두면 숫자를 틀리게 만들어낼 위험이 있다.
   계산은 코드가 하고, LLM은 "이미 맞는 숫자"를 문장으로 바꾸기만 한다.
@@ -106,24 +116,7 @@ class Contract(BaseModel):
 실패는 `{"message": "...", "failReason"?: "..."}`. `traceId`처럼 노션 계약에 없는 필드는 뺐다
 (`app/core/errors.py`).
 
-### 4.4 프롬프트 버전은 상수 하나로 관리한다
-
-```python
-# app/prompts/solution.py
-VERSION = "2026-09-17"
-```
-
-처음엔 프롬프트가 바뀔 때마다 새 버전 파일(`solution_v1.py`, `solution_v2.py`처럼)을 만들고
-옛 파일을 남기는 방식이었다. 그런데 실제로 옛 파일(`solution_v1.py`)은 어디서도 안 쓰이는
-죽은 코드가 됐고, git이 이미 파일 히스토리를 갖고 있어서 옛 버전 내용은 `git log`로 언제든
-볼 수 있다 — 워킹 트리에 살려둘 이유가 없었다. 그래서 파일은 하나만 두고 `VERSION` 상수를
-프롬프트가 바뀔 때 올리는 방식으로 단순화했다(2026-09-17).
-
-값은 `v1`/`v2`가 아니라 날짜(`YYYY-MM-DD`)로 적는다 — API 배포 버전(`/internal/v1/ai/...`)과
-같은 표기라 서로 헷갈렸다(2026-09-17). 이 값은 응답에 노출하지 않는다 — 솔루션 응답의
-`promptVersion` 필드는 삭제했다. BE와의 계약 확인은 별도로 진행 중이다.
-
-### 4.5 챗봇만 다른 구조 — LangGraph 에이전트
+### 4.4 챗봇만 다른 구조 — LangGraph 에이전트
 
 솔루션·인사이트는 "지표 받고 → LLM 1번 → 반환"으로 끝나지만, 챗봇은 **질문에 답하는 데 필요한
 지표가 무엇일지 미리 알 수 없다.** 그래서 챗봇만 LangGraph로 `agent ↔ tools` 사이클을 돌린다.
@@ -147,7 +140,7 @@ graph.add_conditional_edges("tools", _route_after_tools, {"agent": "agent", "giv
 덕분에 그래프 실행 중 생긴 오류(502/504/500)가 스트림이 열리기 **전에** 일반 HTTP 에러로 깔끔하게
 나간다.
 
-### 4.6 테스트 — LLM·BE 호출은 항상 가짜로 막는다
+### 4.5 테스트 — LLM·BE 호출은 항상 가짜로 막는다
 
 실제 Claude API나 BE 서버를 두드리는 테스트는 없다. `monkeypatch`로 항상 대체한다.
 
@@ -164,41 +157,22 @@ monkeypatch.setattr(llm, "complete", fake_complete)
 (예: LLM 파싱 계속 실패 → 500, 재시도 정확히 1회). 서버 간 인증을 앱 레벨에서 제거하면서 요청에
 인증 헤더를 아예 안 붙이는 걸로 테스트도 단순해졌다(전엔 401 테스트가 있었다).
 
-## 5. 오늘 한 일 — 계약 동기화(contract sync)
+## 5. 알려진 미완성 지점 (정직하게 공유할 것)
 
-가장 시간을 많이 쓴 작업. 배경:
-
-- 처음엔 **GitHub 위키**([AI] 단계1~4) 기준으로 스키마를 짰다.
-- BE는 **노션 API 정의서**를 기준으로 구현했다. 두 문서의 경로·응답 포맷·인증 방식이 달랐다.
-- 팀이 노션 기준으로 통일하기로 결정했고(`docs/contract-diff-wiki-vs-notion.md`), 그 결정을
-  코드에 반영하는 게 오늘의 핵심 작업이었다.
-- 중간에 이 대조표 자체가 실제 노션 원문과 다른 부분이 있다는 걸 발견해서(솔루션 카드 필드명,
-  인사이트 요청·응답 구조), 사용자가 팀 워크스페이스의 `api정의서.md`/`ERD정의서.md`를 직접
-  `docs/`에 복사해줬고 그걸 최종 기준으로 다시 대조했다. **문서끼리 충돌하면 추측하지 않고
-  원본을 찾아 대조한다**는 원칙을 그대로 따른 사례다.
-
-반영한 변경 (자세한 내용은 `docs/STATE.md`, `docs/contract-diff-wiki-vs-notion.md` 참고):
-
-| 영역 | 전 | 후 |
-|---|---|---|
-| 에러 포맷 | `{"success":false,"error":{code,message,traceId}}` | `{"message":"...", "failReason"?}` |
-| 인증 | 앱 레벨 `X-Internal-Api-Key` 검증 | 삭제 — 클라우드 보안그룹이 경계 |
-| 경로 | `/internal/ai/...` | `/internal/v1/ai/...` |
-| 비율 표기 | (변경 없음) | `float` 소수(`0.62`) 유지 — 한때 정수 퍼센트로 바꿨다가 API 정의서 재확인 후 원복(2026-09-17) |
-| 솔루션 카드 | `rank`/`detailContent`/`aiInsight` | `rankNo`/`summaryText`/`detailText`, `aiInsight` 제거 |
-| 인사이트 | `uploadId`/`dataDays`, `insights[].{text,evidence}` | `salesAnalysisId`/`targetMonth`/`triggerType`, `data.insights`(문자열 배열) |
-| 챗봇 SSE | `{"answerChunk":...,"evidence":...}` | `{"event":"answerChunk","data":{"content":...,"evidence":...}}` |
-
-인증 삭제는 BE→AI 수신 쪽(`Depends(verify_internal_key)`)만 먼저 지웠고, AI→BE 발신 쪽
-(`app/clients/backend.py`가 BE 툴 호출 때 붙이던 `X-Internal-Api-Key` 헤더)은 후속 커밋에서
-마저 지웠다. 그 김에 완전히 죽어버린 `app/core/auth.py`, `settings.internal_api_key`,
-CI/`.env.example`의 `INTERNAL_API_KEY`도 같이 정리했다.
-
-## 6. 알려진 미완성 지점 (정직하게 공유할 것)
-
-- **챗봇 진짜 토큰 스트리밍 아님** — 완성된 답을 잘라서 보낸다 (4.5절).
+- **챗봇 진짜 토큰 스트리밍 아님** — 완성된 답을 잘라서 보낸다 (4.4절).
 - **챗봇 "데이터 부족" 상태를 코드로 판정 못함** — 예측·인사이트처럼 `200 + INSUFFICIENT_DATA`로
   통일하기로 했지만, 그걸 판단할 신호가 챗봇 요청엔 없다. 지금은 LLM이 프롬프트 지시로 자연어로만
   표현한다.
 - **솔루션 요청 `metrics`에 순이익·리뷰 요약 필드가 없다** — 설계 설명엔 포함된다고 돼 있는데
   스키마엔 없어서, BE가 보내도 `extra="ignore"`로 조용히 버려진다.
+
+## 6. 배포 로드맵 — v1 → v2 → v3
+
+BE api정의서 기준. 같은 엔드포인트(`POST .../solutions/generate`)에 지표를 선택 필드로
+얹어가는 방식이라 클라이언트 변경이 최소화된다.
+
+| 배포 | 버전 | 추가되는 지표/필드 | 비고 |
+|---|---|---|---|
+| 1차 (현재) | v1 | 매출 요약·시간대·카테고리·예측 지표 | 순이익·리뷰 조회는 챗봇 툴로는 있으나 MVP 범위 밖(비활성화) |
+| 2차 | v2 | `weatherContext`(날씨), `holidayContext`(공휴일), `districtBenchmark`(상권 벤치마크) | `metrics`에 선택 필드로 추가하는 하위호환 확장. 외부 데이터를 BE가 수집할지 AI가 직접 호출할지는 팀 확정 필요 |
+| 3차 | v3 | `reviewContext`(리뷰 분석 결과 — 감성 요약·관련 리뷰) | 리뷰 수집 실패(`FAILED`/`EMPTY`)해도 v2 수준으로 폴백 |
