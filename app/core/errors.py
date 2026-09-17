@@ -16,7 +16,7 @@ class ApiError(Exception):
 
 
 def _body(message: str, fail_reason: str | None = None) -> dict:
-    body = {"message": message}
+    body = {"message": message, "data": None}
     if fail_reason:
         body["failReason"] = fail_reason
     return body

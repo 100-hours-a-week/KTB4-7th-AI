@@ -2,8 +2,9 @@
 
     uv run python devtools/stub_backend.py
 
-응답 값은 API 정의서(docs/api정의서.md) 예시를 옮기되, **비율은 정수 퍼센트**로 바꿨다(12, 56).
-소수 표기(0.125, 0.563) 대신 정수를 쓰기로 팀이 확정했다(2026-09-16).
+응답 값은 API 정의서(docs/api정의서.md)의 예시를 그대로 옮겼다 — 비율·증감률은 소수 표기다
+(2026-09-17 BE 확인: 금액은 정수, 비율은 소수). 스텁이 명세와 어긋나면 테스트가 틀린 계약을
+검증하게 되므로 예시 값과 타입을 명세에 맞춘다.
 """
 
 import uvicorn
@@ -14,22 +15,22 @@ from app.clients.backend import TOOL_PATHS
 RESPONSES = {
     "get_sales_summary": {
         "period": {"type": "THIS_MONTH", "startDate": "2026-09-01", "endDate": "2026-09-08"},
-        "netSales": 3200000,
+        "totalSales": 3200000,
         "orderCount": 420,
         "averageOrderValue": 7619,
-        "changeRate": 12,
+        "changeRate": 0.125,
     },
     "get_category_breakdown": {
-        "categories": [{"categoryName": "커피", "netSales": 1800000, "ratio": 56}],
+        "categories": [{"categoryName": "커피", "menuSales": 1800000, "ratio": 0.563}],
         "menuRankings": [
-            {"rank": 1, "menuName": "아메리카노", "netSales": 800000, "quantity": 250}
+            {"rank": 1, "menuName": "아메리카노", "menuSales": 800000, "quantity": 250}
         ],
     },
     "get_hourly_profile": {
         "hourlyProfiles": [
-            {"hour": 12, "netSales": 420000, "orderCount": 55},
-            {"hour": 13, "netSales": 380000, "orderCount": 49},
-            {"hour": 15, "netSales": 90000, "orderCount": 11},
+            {"hour": 12, "menuSales": 420000, "orderCount": 55},
+            {"hour": 13, "menuSales": 380000, "orderCount": 49},
+            {"hour": 15, "menuSales": 90000, "orderCount": 11},
         ]
     },
     "get_forecast": {
@@ -50,11 +51,11 @@ RESPONSES = {
         "ingredientCost": 1040000,
         "fixedCost": 1200000,
         "netProfit": 960000,
-        "composition": [{"type": "NET_PROFIT", "amount": 960000, "ratio": 30}],
+        "composition": [{"type": "NET_PROFIT", "amount": 960000, "ratio": 0.3}],
     },
     "get_review_summary": {
         "summary": "커피 맛과 친절한 응대에 대한 긍정 반응이 많습니다.",
-        "sentiment": {"positive": 82, "neutral": 14, "negative": 4},
+        "sentiment": {"positive": 0.82, "neutral": 0.14, "negative": 0.04},
         "keywords": ["커피", "친절", "대기시간"],
     },
 }

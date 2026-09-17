@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 
 from app.clients import backend
 from app.core.errors import ApiError
@@ -28,7 +28,7 @@ async def test_모든_툴이_스텁에서_응답한다(monkeypatch):
 async def test_data_래퍼를_벗겨서_반환한다(monkeypatch):
     _use(monkeypatch, stub_app)
     data = await backend.call_tool("get_sales_summary", {"storeId": 1, "period": "TODAY"})
-    assert data["netSales"] == 3200000
+    assert data["totalSales"] == 3200000
     assert "message" not in data
 
 
@@ -43,6 +43,23 @@ async def test_404는_빈_결과로_처리한다(monkeypatch):
     """조회할 데이터가 없는 경우. 재시도하지 않고 빈 dict 를 준다."""
     _use(monkeypatch, FastAPI())  # 라우트가 없으니 전부 404
     assert await backend.call_tool("get_forecast", {"storeId": 1}) == {}
+
+
+async def test_None_값_파라미터는_쿼리에서_빠진다(monkeypatch):
+    """챗봇 툴이 선택 파라미터를 안 채우면 None 으로 넘어온다.
+    httpx 는 None 을 빈 문자열로 직렬화하므로 call_tool 이 미리 걸러야 한다."""
+    captured = {}
+    echo_app = FastAPI()
+
+    @echo_app.get(backend.TOOL_PATHS["get_forecast"])
+    async def _echo(request: Request) -> dict:
+        captured.update(request.query_params)
+        return {"message": "조회에 성공했습니다.", "data": {}}
+
+    _use(monkeypatch, echo_app)
+    await backend.call_tool("get_forecast", {"storeId": 1, "targetDate": None})
+
+    assert captured == {"storeId": "1"}
 
 
 async def test_5xx는_재시도_후_실패한다(monkeypatch):

@@ -11,13 +11,13 @@ REQUEST_BODY = {
     "targetDate": "2026-08-31",  # 월요일
     "triggerType": "UPLOAD",
     "metrics": {
-        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -12},
+        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
         "predictedSalesToday": 1250000,
         "hourlyProfile": [
             {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
             {"dayType": "WEEKEND", "hour": 14, "amount": 92000},
         ],
-        "categoryBreakdown": [{"name": "커피", "share": 62, "vsPrevPeriod": -12}],
+        "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
         "reviewSummary": None,
     },
 }
@@ -36,19 +36,11 @@ LLM_SUCCESS = json.dumps(
     ensure_ascii=False,
 )
 
-_UNSET = object()
 
-
-async def _post(body: dict, headers=_UNSET) -> httpx.Response:
-    if headers is _UNSET:
-        headers = {"X-Internal-Api-Key": "test-key"}
+async def _post(body: dict) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post(
-            "/internal/v1/ai/solutions/generate",
-            json=body,
-            headers=headers,
-        )
+        return await client.post("/internal/v1/ai/solutions/generate", json=body)
 
 
 async def test_정상_요청이_솔루션카드를_반환한다(monkeypatch):
@@ -66,19 +58,7 @@ async def test_정상_요청이_솔루션카드를_반환한다(monkeypatch):
     assert body["data"]["solutionCards"][0]["rankNo"] == 1
     assert body["data"]["solutionCards"][0]["summaryText"]
     assert body["data"]["modelVersion"]
-    assert body["data"]["promptVersion"] == "v2"
-
-
-async def test_요청에_인증헤더가_없어도_통과한다(monkeypatch):
-    """서버 간 인증은 클라우드 SG로 처리하기로 하고 애플리케이션 레벨 검증은 제거했다."""
-
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
-        return LLM_SUCCESS
-
-    monkeypatch.setattr(llm, "complete", fake_complete)
-
-    res = await _post(REQUEST_BODY, headers={})
-    assert res.status_code == 200
+    assert "promptVersion" not in body["data"]
 
 
 async def test_필수_필드가_없으면_422():

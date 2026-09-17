@@ -16,16 +16,20 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 
 ## 이번에 반영한 것
 
-- **공통 에러 포맷**: `{"success":false,"error":{code,message,traceId}}` → `{"message":"..."}`
+- **공통 에러 포맷**: `{"success":false,"error":{code,message,traceId}}` → `{"message":"...","data":null}`
   (+ 특정 상황에만 `failReason`). `app/core/errors.py`의 `ApiError`에 `fail_reason` 옵션 추가
-  (기존 호출부는 안 건드림 — 위치 인자라 하위호환).
+  (기존 호출부는 안 건드림 — 위치 인자라 하위호환). `data:null`은 2026-09-17에 추가 — API 정의서
+  67번 줄 전역 규칙("실패 응답은 기본적으로 `{"message":...,"data":null}`")과 문서 전체 40여 개
+  실제 예시로 확인, `_body()`에 빠져 있던 걸 헥터가 지적해서 반영했다.
 - **서버 간 인증 삭제**: solutions/insights/chat 라우터에서 `Depends(verify_internal_key)` 제거.
   `app/core/auth.py` 자체는 `forecast.py`가 아직 쓰고 있어서 남겨둠 — **헥터도 지워야 완전히 끝남.**
 - **라우터 prefix**: `/internal/ai` → `/internal/v1/ai` (solutions/insights/chat).
   ⚠️ **`app/api/forecast.py`는 아직 `/internal/ai/forecast/batch`로 v1이 안 붙어있다** —
   헥터에게 알릴 것 (방금 사용자가 `/internal/v1/ai/forecast/batch`로 확정한다고 확인해줌).
-- **비율 표기**: 소수(0.62) → 정수 퍼센트(62). `app/schemas/common.py`의
-  `SalesSummary.vsPrevPeriod`, `CategoryPoint.share/vsPrevPeriod`, `devtools/stub_backend.py` 반영.
+- **비율 표기**: 한때 소수(0.62)→정수 퍼센트(62)로 바꿨었는데, 2026-09-17 API 정의서 재확인 +
+  BE 확인 결과 **소수가 맞는 것으로 원복**했다(`app/schemas/common.py`의
+  `SalesSummary.vsPrevPeriod`, `CategoryPoint.share/vsPrevPeriod`, `devtools/stub_backend.py`,
+  테스트 픽스처 3곳). 금액(`netSales`/`amount`)·시간(`hour`)은 그대로 `int`.
 - **솔루션 생성** (`POST /internal/v1/ai/solutions/generate`):
   - `context`(dayOfWeek/isWeekend/dataBasisPeriod) 요청 필드 삭제 — 서비스가 `targetDate`로
     요일·주말 여부를 코드로 계산한다(달력 계산이라 환각 위험 없음).
@@ -44,8 +48,46 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 - **챗봇**: SSE 청크를 `{"answerChunk":...,"evidence":...}` 플랫 → `{"event":"answerChunk","data":
   {"content":...,"evidence":...}}` 중첩으로 변경. `question` 길이 검증(`max_length=300`) 제거 — BE가
   이미 검증하므로 AI는 재검증하지 않는다.
+- **챗봇 `history[].role` 대문자로 변경** (2026-09-17): `Literal["user","assistant"]` →
+  `Literal["USER","ASSISTANT"]`. API 정의서 1088번 줄 GET 메시지 목록 응답 예시가 DB 값 그대로
+  `"role":"USER"`를 보여줌 — `history`도 같은 DB 컬럼에서 나오므로 동일 표기로 판단했다.
+  `app/api/chat.py`의 `role_map`도 같이 대문자로 맞췄다.
+- **챗봇 `context` 필드 전면 재정의** (2026-09-17): `{type: Literal["SOLUTION_SUMMARY"|...],
+  content: str}` 스키마는 실제 계약 어디에도 근거가 없었다(`SOLUTION_SUMMARY` 등 문자열이
+  api정의서·ERD정의서·contract-diff 문서 전부에 0건). API 정의서 1135번 줄 "context(필수 —
+  SOL-02 전체 내용: 카드별 rank/title/detail)" 기준으로 SOL-02 실제 응답 모양(964번 줄
+  `items:[{rankNo,title,summaryText,detailText,evidence}]`)을 그대로 재사용해
+  `context: list[ChatContextCard]`로 교체했다(사용자 확인 완료 — evidence 포함).
+  `app/prompts/chat.py`의 `build_system`도 `(context_type, context_content)` 두 문자열 인자 대신
+  카드 리스트 하나를 받아 `json.dumps`로 넘기도록 변경(솔루션 프롬프트와 동일한 패턴).
 - **툴 경로**: `hourly-profile`→`hourly-profiles`(복수), `forecast`→`sales/forecasts`,
   `predictedSales`→`predictedSalesAmount`(stub).
+- **챗봇 툴 파라미터 보강** (2026-09-17): API 정의서 25~27번 줄 기준으로 4종 툴에 빠진 파라미터를
+  추가했다.
+  - `get_sales_summary`/`get_category_breakdown`: `startDate`/`endDate`(선택, `period=CUSTOM`일 때
+    BE가 필수로 검증) 추가.
+  - `get_hourly_profile`: 위 두 개 + `dayOfWeek`(선택) 추가.
+  - `get_forecast`: 원래 파라미터가 아예 없었는데, 명세상 `period`가 아니라 `targetDate`(선택,
+    YYYY-MM-DD)를 받는다 — 시그니처를 통째로 교체했다.
+  - `app/clients/backend.py`의 `call_tool`이 `None` 값 파라미터를 쿼리에서 제거하도록 수정
+    (httpx가 `None`을 빈 문자열로 직렬화해서 `?targetDate=`가 나가는 걸 막음).
+- **스텁 필드명 정정** (2026-09-17): `devtools/stub_backend.py`가 세 개 툴 응답에서 실제 명세와
+  다른 필드명을 쓰고 있었다 — API 정의서 706/738/769번 줄 리터럴 예시로 확인.
+  - `get_sales_summary`: `netSales` → `totalSales`
+  - `get_category_breakdown`: `categories[].netSales`/`menuRankings[].netSales` → `menuSales`
+  - `get_hourly_profile`: `hourlyProfiles[].netSales` → `menuSales`
+  - `get_profit`(`netSales` 그대로)·`get_forecast`는 명세와 이미 일치해서 안 건드림.
+  - `tests/test_backend_client.py`·`tests/test_chat.py`의 관련 픽스처도 같이 맞췄다.
+  - (참고) 이 필드들은 챗봇 전용 조회 툴 응답이라 예측 모델과 무관하다 — 예측 모델
+    (`app/services/forecast/`, 헥터 담당)은 `dailySales[].amount`(일별 합계) 하나만 쓰고
+    메뉴·카테고리·시간대 세부 데이터는 아예 요구하지 않는다(코드로 확인 완료).
+- **프롬프트 버전 표기를 날짜식으로 전환, `promptVersion` 응답 필드 삭제** (2026-09-17):
+  `VERSION="v1"/"v2"`가 API 배포 버전(`/internal/v1/ai/...`)과 헷갈린다는 지적으로
+  `VERSION="2026-09-17"` 형태로 세 프롬프트 파일(`solution.py`/`insight.py`/`chat.py`) 전부
+  변경. 동시에 솔루션 응답의 `promptVersion` 필드 자체를 삭제했다(`app/schemas/solution.py`,
+  `app/services/solution.py`) — `VERSION` 상수는 이제 응답에 노출되지 않는 순수 내부 값이다.
+  **주의**: `docs/api정의서.md` 580/610번 줄은 아직 `promptVersion`을 필수 응답 필드로 보여준다 —
+  사용자가 BE와 별도로 확인하기로 함. BE가 여전히 필요하다고 하면 이 삭제를 되돌려야 한다.
 - 기존 테스트(`test_solutions.py`/`test_insights.py`/`test_chat.py`) 전부 새 계약으로 재작성.
   401 테스트는 "인증 없어도 통과" 테스트로 대체.
 
@@ -68,11 +110,22 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 ## 미해결 결정
 
 - **챗봇 데이터 부족 처리**: 사용자가 "예측·인사이트·챗봇 모두 200+`status:INSUFFICIENT_DATA`+
-  `data.missingData`로 통일"이라고 확정했다. 예측·인사이트는 반영했지만(인사이트는 애초에 AI가 판단할
-  신호가 없어 무조건 COMPLETED만 반환), **챗봇은 이 상태를 코드에서 판단할 명확한 트리거가 없어서
-  구현하지 않았다** — 지금은 LLM이 시스템 프롬프트 지시("데이터가 부족하면 부족하다고 말하세요")로
-  자연어로만 표현한다. 언제 이 상태를 코드로 판정할지 BE와 조건 정의 필요.
+  `data.missingData`로 통일"이라고 확정했다. 챗봇은 이 상태를 코드에서 판단할 명확한 트리거가
+  없어서 아직 구현하지 않았다 — 지금은 LLM이 시스템 프롬프트 지시("데이터가 부족하면 부족하다고
+  말하세요")로 자연어로만 표현한다. 언제 이 상태를 코드로 판정할지 BE와 조건 정의 필요.
 - **솔루션 metrics의 순이익/리뷰 요약**: 설계 설명엔 포함된다고 돼 있는데 스키마에 필드가 없다(위 참고).
+- **솔루션 응답의 `promptVersion` 삭제가 BE와 합의됐는지**: 코드는 이미 뺐지만(위 참고)
+  `docs/api정의서.md`는 아직 이 필드를 필수로 명시한다. 사용자가 BE와 확인 예정.
+- **인사이트 metrics의 정확한 MENU 전용 필드명**: "menu_net_amount와 MENU 전용 일별·요일별·
+  시간대별·카테고리별 지표"라는 서술만 있고 리터럴 JSON 예시가 없다. BE 확인 필요.
+
+## 설계상 확정된 사실 (미해결 아님 — 혼동 방지용)
+
+- **인사이트는 항상 `status: COMPLETED`만 반환한다.** 스키마엔 `COMPLETED | INSUFFICIENT_DATA`
+  둘 다 있지만, 데이터 부족(14일 미만) 판단은 **BE가 호출 전에** 한다 — 요청에 `dataDays` 자체가
+  없어서 AI는 판단할 신호가 없다. `INSUFFICIENT_DATA`는 계약상 값 존재만 보장하는 자리이고,
+  `app/services/insight.py`가 이 상태를 만들 일은 설계상 없다. 나중에 "왜 여기 게이트가 없지?"
+  하고 다시 파고들지 않도록 기록해 둔다.
 
 ## 함정
 

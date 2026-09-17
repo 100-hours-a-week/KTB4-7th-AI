@@ -102,7 +102,7 @@ email (필수) password (필수)
 
 | status | body |
 | --- | --- |
-| 200 | `{"message":"로그인에 성공했습니다.","data":{"user":{"id":1,"email":"example@email.com","name":"홍길동"}}}` |
+| 200 | `{"message":"로그인에 성공했습니다.","data":{"user":{"id":1,"email":"example@email.com"}}}` |
 | 401 | `{"message":"이메일 또는 비밀번호가 올바르지 않습니다.","data":null}` |
 | 423 | `{"message":"로그인 시도가 많아 10분 동안 제한됩니다.","retryAfterSeconds":600,"data":null}` |
 
@@ -155,7 +155,7 @@ agreements.privacyPolicyVersion (필수)
 
 **설명**
 
-회원가입 1단계의 휴대폰 번호, 이메일, 비밀번호와 FE에 고정 노출된 필수 약관의 동의 여부·버전을 검증하고 가입 정보를 임시 저장한다. 이 단계에서는 `users` 계정을 생성하지 않는다. 성공 시 ST-01 매장·사업자 정보 등록에 사용할 만료형 `signupToken`을 반환한다.
+회원가입 1단계의 휴대폰 번호, 이메일, 비밀번호와 FE에 고정 노출된 필수 약관의 동의 여부·버전을 검증하고 가입 정보를 임시 저장한다. 이 단계에서는 `users` 계정을 생성하지 않는다. 성공 시 ST-01 매장·사업자 정보 등록에 사용할 발급 시각부터 1시간 동안 유효한 만료형 `signupToken`을 반환하며, 응답의 `expiresAt`은 해당 만료 시각이다.
 
 **설계 근거**
 
@@ -189,7 +189,7 @@ FR-AUTH-015에 따라 AU-02 완료만으로 정식 계정을 생성하지 않는
 
 | status | body |
 | --- | --- |
-| 200 | `{"message":"조회에 성공했습니다.","data":{"user":{"id":1,"email":"example@email.com","name":"홍길동","phone":"01012345678","storeName":"맴매카페"}}}` |
+| 200 | `{"message":"조회에 성공했습니다.","data":{"user":{"id":1,"email":"example@email.com","phone":"01012345678","storeName":"맴매카페"}}}` |
 | 401 | `{"message":"로그인이 필요합니다.","data":null}` |
 
 ---
@@ -331,7 +331,7 @@ businessHours.closeTime (필수, HH:mm, 10분 단위)
 
 **설계 근거**
 
-FR-AUTH-015와 FR-STORE-009에 따라 AU-02에서는 정식 계정을 만들지 않고 ST-01 성공 시 계정과 매장을 함께 생성한다. 일부 저장 후 실패하는 상태를 막기 위해 전체 생성을 하나의 트랜잭션으로 처리한다. `signupToken`과 `businessVerificationId`는 만료 여부와 입력한 사업자등록번호의 일치 여부를 검증한다.
+FR-AUTH-015와 FR-STORE-009에 따라 AU-02에서는 정식 계정을 만들지 않고 ST-01 성공 시 계정과 매장을 함께 생성한다. 일부 저장 후 실패하는 상태를 막기 위해 전체 생성을 하나의 트랜잭션으로 처리한다. `signupToken`은 발급 시각부터 1시간 동안만 유효하며, `signupToken`과 `businessVerificationId`는 만료 여부와 입력한 사업자등록번호의 일치 여부를 검증한다. 만료된 `signupToken`으로 요청하면 410을 반환한다.
 
 **응답**
 

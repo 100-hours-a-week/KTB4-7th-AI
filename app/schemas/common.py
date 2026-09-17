@@ -20,7 +20,7 @@ class Evidence(Contract):
 
 class SalesSummary(Contract):
     netSales: int
-    vsPrevPeriod: int
+    vsPrevPeriod: float
 
 
 class HourlyPoint(Contract):
@@ -31,8 +31,8 @@ class HourlyPoint(Contract):
 
 class CategoryPoint(Contract):
     name: str
-    share: int
-    vsPrevPeriod: int
+    share: float
+    vsPrevPeriod: float
 
 
 class Metrics(Contract):

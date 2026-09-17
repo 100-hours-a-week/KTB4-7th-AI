@@ -1,10 +1,12 @@
 """챗봇 시스템 프롬프트.
 
-위키 [AI] 단계3·4 기준. context(오늘 솔루션 상세)만으로 답할 수 있으면 툴을 부르지 않는다.
+context(오늘 생성된 솔루션 상세보기 카드 배열)만으로 답할 수 있으면 툴을 부르지 않는다.
 계산은 코드가, 해석만 모델이 한다 — 환각 수치를 원천 차단하기 위함이다.
 """
 
-VERSION = "v1"
+import json
+
+VERSION = "2026-09-17"
 
 SYSTEM = """당신은 카페 점주를 돕는 매출 분석 어시스턴트입니다.
 
@@ -16,9 +18,9 @@ SYSTEM = """당신은 카페 점주를 돕는 매출 분석 어시스턴트입�
 - 점주에게 말하듯 자연스럽게, 간결하게 답하세요.
 - 데이터가 부족하면 부족하다고 말하고 무엇이 더 필요한지 알려주세요.
 
-지금 보고 있는 솔루션 ({context_type})
-{context_content}"""
+지금 보고 있는 솔루션
+{context}"""
 
 
-def build_system(context_type: str, context_content: str) -> str:
-    return SYSTEM.format(context_type=context_type, context_content=context_content)
+def build_system(context: list[dict]) -> str:
+    return SYSTEM.format(context=json.dumps(context, ensure_ascii=False))

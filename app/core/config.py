@@ -4,7 +4,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    internal_api_key: str
     anthropic_api_key: str = ""
     llm_model: str = "claude-sonnet-4-5"
     backend_base_url: str = "http://localhost:9000"
