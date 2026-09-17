@@ -12,6 +12,7 @@ from app.main import app
 from app.schemas.forecast import DailySale, ForecastRequest
 from app.services.forecast import run_forecast
 from app.services.forecast.features import build_future_frame, month_stats
+from app.services.forecast.model import MODEL_VERSION
 
 PATH = "/internal/v1/ai/forecast/batch"
 
@@ -46,7 +47,7 @@ def test_이력이_충분하면_35일을_예측한다():
         str(d.date()) for d in pd.date_range("2026-09-01", periods=35)
     ]
     assert all(p.predictedSalesAmount > 0 for p in res.data.predictions)
-    assert {p.modelVersion for p in res.data.predictions} == {"ridge_v2"}
+    assert {p.modelVersion for p in res.data.predictions} == {MODEL_VERSION}
 
 
 def test_학습_행이_60행_미만이면_이력부족이다():
@@ -96,7 +97,7 @@ def test_날짜가_누락되면_422():
 
 
 def test_공휴일이_주말과_겹치면_쉬는날_효과를_한_번만_센다():
-    """ridge_v2 — is_offday 는 켜지고 is_holiday_weekday 는 꺼져야 한다."""
+    """공휴일 인코딩 — is_offday 는 켜지고 is_holiday_weekday 는 꺼져야 한다."""
     future = build_future_frame(
         pd.Series(
             {pd.Timestamp(r.date): float(r.amount) for r in _daily("2025-12-08", "2026-08-14")}
