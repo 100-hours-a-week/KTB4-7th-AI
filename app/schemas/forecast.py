@@ -23,8 +23,15 @@ class ForecastRequest(Contract):
 
 
 class Prediction(Contract):
+    """lowerBound·upperBound 는 80% 예측구간이다(`services/forecast/intervals.py`).
+
+    비대칭이라 `predictedSalesAmount ± x` 로 복원할 수 없다. 두 값을 그대로 저장해야 한다.
+    """
+
     targetDate: str
     predictedSalesAmount: int
+    lowerBound: int
+    upperBound: int
     modelVersion: str
 
 

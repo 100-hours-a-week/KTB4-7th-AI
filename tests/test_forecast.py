@@ -4,6 +4,7 @@
 """
 
 import httpx
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -12,6 +13,7 @@ from app.main import app
 from app.schemas.forecast import DailySale, ForecastRequest
 from app.services.forecast import run_forecast
 from app.services.forecast.features import build_future_frame, month_stats
+from app.services.forecast.intervals import DEFAULT_QUANTILES, bounds, residual_quantiles
 from app.services.forecast.model import MODEL_VERSION
 
 PATH = "/internal/v1/ai/forecast/batch"
@@ -150,6 +152,8 @@ async def test_라우터가_예측_응답을_돌려준다():
     assert set(body["data"]["predictions"][0]) == {
         "targetDate",
         "predictedSalesAmount",
+        "lowerBound",
+        "upperBound",
         "modelVersion",
     }
 
@@ -178,3 +182,35 @@ def test_analysisRunId_가_있어도_없어도_받는다():
 
     assert with_id.analysisRunId == 77
     assert run_forecast(with_id).data.horizonDays == 35
+
+
+def test_예측구간이_예측값을_감싼다():
+    res = run_forecast(_request("2025-12-08", "2026-08-31", "2026-09-01"))
+
+    for p in res.data.predictions:
+        assert p.lowerBound <= p.predictedSalesAmount <= p.upperBound
+        assert p.lowerBound >= 0
+    # 비대칭이라 ±x 로 복원되지 않는다 — 상단이 더 멀다
+    first = res.data.predictions[0]
+    assert (
+        first.upperBound - first.predictedSalesAmount
+        > first.predictedSalesAmount - first.lowerBound
+    )
+
+
+def test_잔차_표본이_모자라면_기본_분위수를_쓴다():
+    """게이트를 막 통과한 신규 매장은 백테스트 원점이 몇 개 안 된다."""
+    history = pd.Series(
+        {pd.Timestamp(r.date): float(r.amount) for r in _daily("2026-01-01", "2026-03-05")}
+    )
+
+    assert residual_quantiles(history) == DEFAULT_QUANTILES
+
+
+def test_분위수가_뒤집혀도_순서가_유지된다():
+    """반올림 때문에 하한이 예측값을 넘거나 상한이 밑돌면 안 된다."""
+    predicted = np.array([100, 1, 0])
+    lower, upper = bounds(predicted, (-0.001, 0.001))
+
+    assert (lower <= predicted).all()
+    assert (upper >= predicted).all()
