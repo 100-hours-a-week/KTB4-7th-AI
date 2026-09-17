@@ -49,15 +49,58 @@ uv run ruff check --fix . && uv run ruff format .
 
 ```
 app/
-├── api/        라우터 — 요청 파싱·응답 반환만
-├── services/   비즈니스 로직 — LLM 호출, 재시도, 예측 파이프라인
-├── schemas/    BE 와의 계약 (Pydantic)
-├── prompts/    LLM 프롬프트 (버전별 파일 분리)
-├── clients/    외부 호출 래퍼 (Anthropic, BE 조회 API)
-└── core/       설정·에러 포맷
+├── main.py              FastAPI 앱 생성, 라우터 등록, 에러 핸들러 등록
+├── api/                 HTTP 계층 — 요청 파싱·응답 반환만. 로직 없음
+│   ├── solutions.py     POST /internal/v1/ai/solutions/generate
+│   ├── insights.py      POST /internal/v1/ai/sales-insights
+│   ├── chat.py          POST /internal/v1/ai/chat/messages (SSE)
+│   └── forecast.py      POST /internal/v1/ai/forecast/batch      ← 헥터 담당
+├── services/            비즈니스 로직 — LLM 호출, 재시도, 파싱·검증
+│   ├── solution.py
+│   ├── insight.py
+│   ├── chat/
+│   │   ├── graph.py     LangGraph 에이전트(agent↔tools 사이클)
+│   │   └── tools.py     챗봇이 쓰는 BE 조회 툴 4종
+│   └── forecast/        Ridge 회귀 예측 파이프라인               ← 헥터 담당
+│       ├── features.py  피처 엔지니어링
+│       ├── model.py     모델 학습·추론
+│       └── service.py   요청→피처→모델→응답 오케스트레이션
+├── schemas/              계약의 단일 진실 원천 (Pydantic)
+│   ├── common.py         Contract 베이스, Evidence, Metrics — 전 엔드포인트 공유
+│   └── solution.py / insight.py / chat.py / forecast.py
+├── prompts/              LLM 프롬프트. 파일당 VERSION 상수로 버전을 표시한다
+│   ├── solution.py, insight.py, chat.py
+├── clients/              외부 호출 래퍼
+│   ├── llm.py            Anthropic 단발 생성 (솔루션·인사이트용)
+│   └── backend.py        BE 조회 API 4종 호출 (챗봇 툴용)
+└── core/
+    ├── config.py         환경변수 (pydantic-settings)
+    └── errors.py         공통 예외·에러 응답 포맷
+
+devtools/stub_backend.py  로컬 개발용 BE 스텁 서버 (포트 9000)
+tests/                    엔드포인트당 테스트 파일 1개 + 공통 테스트
 ```
 
-구조와 설계 이유(왜 이렇게 짰는지)는 `docs/ARCHITECTURE.md`에 정리돼 있다.
+**계층 규칙**: `api/` 는 얇게, `services/` 가 로직을 갖는다. 라우터가 LLM을 직접 부르는 코드는
+어디에도 없다 — 항상 서비스를 거친다.
+
+### 요청이 흘러가는 길
+
+```mermaid
+flowchart LR
+    BE[Backend] -->|POST 지표만 전달| API[app/api/*.py]
+    API --> SVC[app/services/*]
+    SVC -->|1회 호출, 실패 시 1회 재시도| LLM[app/clients/llm.py<br/>Anthropic]
+    SVC -.챗봇만.-> AGENT[LangGraph agent]
+    AGENT <-->|필요할 때만| TOOLS[app/clients/backend.py<br/>BE 조회 API]
+    SVC --> RESP[schemas 로 검증된 응답]
+    RESP --> BE
+```
+
+솔루션·인사이트는 **BE → AI 단방향**(지표 받고 결과 반환)이고, 챗봇만 **AI → BE 역호출**(부족한
+지표를 그때그때 조회)이 추가된다. 이 비대칭이 챗봇 쪽 코드(`services/chat/`)가 따로 분리된 이유다.
+
+설계 전략("왜 이렇게 짰는지")과 오늘 반영한 계약 변경 이력은 `docs/ARCHITECTURE.md`에 더 있다.
 
 ## 담당 경계 · 작업 규약
 

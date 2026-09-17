@@ -13,7 +13,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.prompts import chat_v1
+from app.prompts import chat as chat_prompt
 from app.schemas.chat import ChatMessage, ChatRequest
 from app.services.chat import graph as chat_graph
 from app.services.chat.tools import build_tools
@@ -52,7 +52,7 @@ async def chat_messages(req: ChatRequest) -> StreamingResponse:
     model = chat_graph.get_model(tools)
     compiled = chat_graph.build_graph(model, tools)
 
-    system = chat_v1.build_system(req.context.type, req.context.content)
+    system = chat_prompt.build_system(req.context.type, req.context.content)
     messages = [SystemMessage(system), *_to_lc_messages(req.history), HumanMessage(req.question)]
 
     result = await compiled.ainvoke({"messages": messages, "failures": 0})

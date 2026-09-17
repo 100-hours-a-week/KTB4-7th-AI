@@ -8,7 +8,7 @@ import json
 
 from app.clients import llm
 from app.core.errors import ApiError
-from app.prompts import insight_v2 as insight_prompt
+from app.prompts import insight as insight_prompt
 from app.schemas.insight import InsightData, InsightRequest, InsightResponse
 
 MAX_RETRY = 1

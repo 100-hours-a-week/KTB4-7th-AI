@@ -31,10 +31,8 @@ app/
 ├── schemas/              계약의 단일 진실 원천 (Pydantic)
 │   ├── common.py         Contract 베이스, Evidence, Metrics — 전 엔드포인트 공유
 │   ├── solution.py / insight.py / chat.py / forecast.py
-├── prompts/              LLM 프롬프트. 버전별로 파일을 분리한다
-│   ├── solution_v1.py, solution_v2.py
-│   ├── insight_v1.py, insight_v2.py
-│   └── chat_v1.py
+├── prompts/              LLM 프롬프트. 파일당 VERSION 상수로 버전을 표시한다(4.4절)
+│   ├── solution.py, insight.py, chat.py
 ├── clients/              외부 호출 래퍼
 │   ├── llm.py            Anthropic 단발 생성 (솔루션·인사이트용)
 │   └── backend.py        BE 조회 API 4종 호출 (챗봇 툴용)
@@ -108,16 +106,19 @@ class Contract(BaseModel):
 실패는 `{"message": "...", "failReason"?: "..."}`. `traceId`처럼 노션 계약에 없는 필드는 뺐다
 (`app/core/errors.py`).
 
-### 4.4 프롬프트는 버전 파일로 관리한다
+### 4.4 프롬프트 버전은 상수 하나로 관리한다
 
-```
-app/prompts/solution_v1.py   최초 버전 (rank/detailContent/aiInsight)
-app/prompts/solution_v2.py   계약 확정 후 (rankNo/summaryText/detailText, aiInsight 제거)
+```python
+# app/prompts/solution.py
+VERSION = "v2"
 ```
 
-프롬프트 내용이 바뀌면 기존 파일을 고치지 않고 **새 버전 파일을 만든다.** 응답의 `promptVersion`
-필드가 파일명과 1:1 대응해서, 나중에 "이 결과가 어떤 프롬프트로 나왔는지" 역추적할 수 있다. v1을
-지우지 않는 이유도 같다 — 과거 생성 결과의 근거를 남겨둔다.
+처음엔 프롬프트가 바뀔 때마다 새 버전 파일(`solution_v1.py`, `solution_v2.py`처럼)을 만들고
+옛 파일을 남기는 방식이었다. 그런데 실제로 옛 파일(`solution_v1.py`)은 어디서도 안 쓰이는
+죽은 코드가 됐고, git이 이미 파일 히스토리를 갖고 있어서 옛 버전 내용은 `git log`로 언제든
+볼 수 있다 — 워킹 트리에 살려둘 이유가 없었다. 그래서 파일은 하나만 두고 `VERSION` 상수를
+프롬프트가 바뀔 때 올리는 방식으로 단순화했다(2026-09-17). 응답의 `promptVersion` 필드는
+이 상수 값을 그대로 쓴다.
 
 ### 4.5 챗봇만 다른 구조 — LangGraph 에이전트
 

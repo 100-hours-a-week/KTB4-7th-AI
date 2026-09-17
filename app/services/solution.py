@@ -9,7 +9,7 @@ from datetime import date
 from app.clients import llm
 from app.core.config import settings
 from app.core.errors import ApiError
-from app.prompts import solution_v2 as solution_prompt
+from app.prompts import solution as solution_prompt
 from app.schemas.solution import SolutionCard, SolutionData, SolutionRequest, SolutionResponse
 
 MAX_RETRY = 1
