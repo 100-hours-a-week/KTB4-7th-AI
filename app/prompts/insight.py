@@ -1,8 +1,8 @@
 """매출분석 화면의 "AI가 발견했어요" 영역에 쓸 관찰형 인사이트를 생성한다.
 
-v2: docs/api정의서.md·docs/ERD정의서.md 확정 반영 (2026-09-16).
+2026-09-16: docs/api정의서.md·docs/ERD정의서.md 확정 반영.
 응답이 `insights` 문자열 배열로 단순화됐다(항목별 evidence 없음 — sales_ai_insights.insights 는
-문자열 JSON 배열만 저장한다). 행동 처방은 하지 않고 관찰만 한다는 원칙은 v1과 동일.
+문자열 JSON 배열만 저장한다). 행동 처방은 하지 않고 관찰만 한다는 원칙은 그대로 유지한다.
 """
 
 import json

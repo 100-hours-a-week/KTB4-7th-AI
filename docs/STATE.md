@@ -86,8 +86,8 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
   `VERSION="2026-09-17"` 형태로 세 프롬프트 파일(`solution.py`/`insight.py`/`chat.py`) 전부
   변경. 동시에 솔루션 응답의 `promptVersion` 필드 자체를 삭제했다(`app/schemas/solution.py`,
   `app/services/solution.py`) — `VERSION` 상수는 이제 응답에 노출되지 않는 순수 내부 값이다.
-  **주의**: `docs/api정의서.md` 580/610번 줄은 아직 `promptVersion`을 필수 응답 필드로 보여준다 —
-  사용자가 BE와 별도로 확인하기로 함. BE가 여전히 필요하다고 하면 이 삭제를 되돌려야 한다.
+  `docs/api정의서.md` 580/610번 줄은 아직 `promptVersion`을 필수 응답 필드로 보여주지만,
+  BE와 확인 결과 **필드 삭제로 최종 합의**했다(2026-09-17, Issue #39) — 문서는 BE가 갱신 예정.
 - 기존 테스트(`test_solutions.py`/`test_insights.py`/`test_chat.py`) 전부 새 계약으로 재작성.
   401 테스트는 "인증 없어도 통과" 테스트로 대체.
 
@@ -114,8 +114,6 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
   없어서 아직 구현하지 않았다 — 지금은 LLM이 시스템 프롬프트 지시("데이터가 부족하면 부족하다고
   말하세요")로 자연어로만 표현한다. 언제 이 상태를 코드로 판정할지 BE와 조건 정의 필요.
 - **솔루션 metrics의 순이익/리뷰 요약**: 설계 설명엔 포함된다고 돼 있는데 스키마에 필드가 없다(위 참고).
-- **솔루션 응답의 `promptVersion` 삭제가 BE와 합의됐는지**: 코드는 이미 뺐지만(위 참고)
-  `docs/api정의서.md`는 아직 이 필드를 필수로 명시한다. 사용자가 BE와 확인 예정.
 - **인사이트 metrics의 정확한 MENU 전용 필드명**: "menu_net_amount와 MENU 전용 일별·요일별·
   시간대별·카테고리별 지표"라는 서술만 있고 리터럴 JSON 예시가 없다. BE 확인 필요.
 
