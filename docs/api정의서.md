@@ -321,13 +321,17 @@ businessVerificationId (필수)
 postalCode (필수)
 address (필수, 기본 주소)
 addressDetail (선택)
-businessHours.openTime (필수, HH:mm, 10분 단위)
-businessHours.closeTime (필수, HH:mm, 10분 단위)
+businessHours (필수, 요일별 영업시간 배열)
+- dayOfWeek (필수, MONDAY~SUNDAY)
+- isClosed (필수, boolean)
+- openTime, closeTime (isClosed=false일 때 필수, HH:mm, 10분 단위)
+- openTime과 closeTime이 같으면 24시간 영업(00:00~24:00)
+- closeTime이 openTime보다 이르면 익일 영업으로 처리하며, closeTime은 06:00 이하여야 함
 ```
 
 **설명**
 
-회원가입 최종 단계다. AU-02 일반 가입 또는 AU-10 토스 가입에서 발급한 `signupToken`의 가입 초안·인증·약관 동의 상태와 사업자등록번호 인증 결과, 매장 입력값을 다시 검증한다. 일반 가입은 `users`, `stores`, `store_business_hours`, 기본 `notification_preferences`를, 토스 가입은 여기에 `user_auth_providers` 연결을 더해 하나의 트랜잭션으로 생성한다. 성공 후 자동 로그인하지 않으며 AU-01 로그인 화면으로 이동한다.
+회원가입 최종 단계다. AU-02 일반 가입 또는 AU-10 토스 가입에서 발급한 `signupToken`의 가입 초안·인증·약관 동의 상태와 사업자등록번호 인증 결과, 매장 입력값을 다시 검증한다. 영업시간은 요일별로 저장하며, 가입 화면에서는 동일한 시간을 모든 요일에 적용한 뒤 필요한 경우에만 요일별 시간을 수정한다. 매주 휴무는 해당 요일의 `isClosed=true`으로 표현하고, 매월 휴무 정책은 지원하지 않는다. 일반 가입은 `users`, `stores`, `store_business_hours`, 기본 `notification_preferences`를, 토스 가입은 여기에 `user_auth_providers` 연결을 더해 하나의 트랜잭션으로 생성한다. 성공 후 자동 로그인하지 않으며 AU-01 로그인 화면으로 이동한다.
 
 **설계 근거**
 
@@ -540,13 +544,15 @@ BE가 검증된 집계 데이터를 구성해 예측 모델을 호출한다. `fo
 
 예측 가능 조건은 예측 시작 달의 직전 두 달이 모두 완전한 월이고 학습 데이터가 60행 이상인 경우다. 조건 미달 시 `INSUFFICIENT_HISTORY`를 반환하며 솔루션 생성과 챗봇 사용을 차단한다. 월 중간에 종료되는 파일도 이 조건을 충족하면 정상 예측한다. 14일 기준 매출 인사이트 생성은 예측 가능 여부와 독립적으로 동작한다.
 
-AI는 일별 예측만 반환한다. 월 합계와 요일 평균은 응답하지 않으며, BE가 저장된 최신 일별 예측에서 매번 다시 집계한다.
+AI는 일별 예측과 함께 80% 예측구간(`lowerBound`, `upperBound`)을 반환한다. 세 금액은 원 단위 정수이며 `lowerBound` ≤ `predictedSalesAmount` ≤ `upperBound`를 만족한다. 예측구간은 과거 잔차 분위수로 산출하므로 상·하한 폭은 비대칭일 수 있다. 월 합계와 요일 평균은 응답하지 않으며, BE가 저장된 최신 일별 예측에서 매번 다시 집계한다.
+
+`modelVersion`은 최대 50자의 모델 식별자이며 `모델명-YYYY-MM-DD` 형식(예: `ridge-2026-09-16`)을 사용한다. 팀 기능 릴리스(v1/v2/v3)와 무관하다. BE는 이 값을 추적용으로 저장하며 모델 버전에 따른 기능 분기나 최신 업로드 판별에 사용하지 않는다. 같은 매장·날짜의 예측은 모델 버전과 관계없이 최신 업로드 결과로 교체한다.
 
 **응답**
 
 | status | body |
 | --- | --- |
-| 200 | `{"message":"예측을 생성했습니다.","data":{"forecastStartDate":"2026-09-01","forecastEndDate":"2026-10-05","horizonDays":35,"predictions":[{"targetDate":"2026-09-01","predictedSalesAmount":1380000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-02","predictedSalesAmount":1381000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-03","predictedSalesAmount":1382000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-04","predictedSalesAmount":1383000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-05","predictedSalesAmount":1384000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-06","predictedSalesAmount":1385000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-07","predictedSalesAmount":1386000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-08","predictedSalesAmount":1387000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-09","predictedSalesAmount":1388000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-10","predictedSalesAmount":1389000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-11","predictedSalesAmount":1390000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-12","predictedSalesAmount":1391000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-13","predictedSalesAmount":1392000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-14","predictedSalesAmount":1393000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-15","predictedSalesAmount":1394000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-16","predictedSalesAmount":1395000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-17","predictedSalesAmount":1396000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-18","predictedSalesAmount":1397000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-19","predictedSalesAmount":1398000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-20","predictedSalesAmount":1399000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-21","predictedSalesAmount":1400000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-22","predictedSalesAmount":1401000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-23","predictedSalesAmount":1402000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-24","predictedSalesAmount":1403000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-25","predictedSalesAmount":1404000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-26","predictedSalesAmount":1405000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-27","predictedSalesAmount":1406000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-28","predictedSalesAmount":1407000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-29","predictedSalesAmount":1408000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-09-30","predictedSalesAmount":1409000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-10-01","predictedSalesAmount":1410000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-10-02","predictedSalesAmount":1411000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-10-03","predictedSalesAmount":1412000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-10-04","predictedSalesAmount":1413000,"modelVersion":"forecast-v1.0"},{"targetDate":"2026-10-05","predictedSalesAmount":1414000,"modelVersion":"forecast-v1.0"}]}}` |
+| 200 | `{"message":"예측을 생성했습니다.","data":{"forecastStartDate":"2026-09-01","forecastEndDate":"2026-10-05","horizonDays":35,"predictions":[{"targetDate":"2026-09-01","predictedSalesAmount":1380000,"lowerBound":1142000,"upperBound":1730000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-02","predictedSalesAmount":1381000,"lowerBound":1146230,"upperBound":1726250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-03","predictedSalesAmount":1382000,"lowerBound":1147060,"upperBound":1727500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-04","predictedSalesAmount":1383000,"lowerBound":1147890,"upperBound":1728750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-05","predictedSalesAmount":1384000,"lowerBound":1148720,"upperBound":1730000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-06","predictedSalesAmount":1385000,"lowerBound":1149550,"upperBound":1731250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-07","predictedSalesAmount":1386000,"lowerBound":1150380,"upperBound":1732500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-08","predictedSalesAmount":1387000,"lowerBound":1151210,"upperBound":1733750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-09","predictedSalesAmount":1388000,"lowerBound":1152040,"upperBound":1735000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-10","predictedSalesAmount":1389000,"lowerBound":1152870,"upperBound":1736250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-11","predictedSalesAmount":1390000,"lowerBound":1153700,"upperBound":1737500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-12","predictedSalesAmount":1391000,"lowerBound":1154530,"upperBound":1738750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-13","predictedSalesAmount":1392000,"lowerBound":1155360,"upperBound":1740000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-14","predictedSalesAmount":1393000,"lowerBound":1156190,"upperBound":1741250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-15","predictedSalesAmount":1394000,"lowerBound":1157020,"upperBound":1742500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-16","predictedSalesAmount":1395000,"lowerBound":1157850,"upperBound":1743750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-17","predictedSalesAmount":1396000,"lowerBound":1158680,"upperBound":1745000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-18","predictedSalesAmount":1397000,"lowerBound":1159510,"upperBound":1746250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-19","predictedSalesAmount":1398000,"lowerBound":1160340,"upperBound":1747500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-20","predictedSalesAmount":1399000,"lowerBound":1161170,"upperBound":1748750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-21","predictedSalesAmount":1400000,"lowerBound":1162000,"upperBound":1750000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-22","predictedSalesAmount":1401000,"lowerBound":1162830,"upperBound":1751250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-23","predictedSalesAmount":1402000,"lowerBound":1163660,"upperBound":1752500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-24","predictedSalesAmount":1403000,"lowerBound":1164490,"upperBound":1753750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-25","predictedSalesAmount":1404000,"lowerBound":1165320,"upperBound":1755000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-26","predictedSalesAmount":1405000,"lowerBound":1166150,"upperBound":1756250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-27","predictedSalesAmount":1406000,"lowerBound":1166980,"upperBound":1757500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-28","predictedSalesAmount":1407000,"lowerBound":1167810,"upperBound":1758750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-29","predictedSalesAmount":1408000,"lowerBound":1168640,"upperBound":1760000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-09-30","predictedSalesAmount":1409000,"lowerBound":1169470,"upperBound":1761250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-10-01","predictedSalesAmount":1410000,"lowerBound":1170300,"upperBound":1762500,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-10-02","predictedSalesAmount":1411000,"lowerBound":1171130,"upperBound":1763750,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-10-03","predictedSalesAmount":1412000,"lowerBound":1171960,"upperBound":1765000,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-10-04","predictedSalesAmount":1413000,"lowerBound":1172790,"upperBound":1766250,"modelVersion":"ridge-2026-09-16"},{"targetDate":"2026-10-05","predictedSalesAmount":1414000,"lowerBound":1173620,"upperBound":1767500,"modelVersion":"ridge-2026-09-16"}]}}` |
 | 422 | `{"message":"forecastStartDate는 dailySales 마지막 날짜의 다음 날이어야 합니다.","data":null}` |
 | 200 | `{"message":"예측에 필요한 매출 이력이 부족합니다.","status":"INSUFFICIENT_DATA","data":{"missingData":["INSUFFICIENT_HISTORY"]}}` |
 | 500 | `{"message":"예측 처리 중 오류가 발생했습니다.","data":null}` |
@@ -577,7 +583,7 @@ storeId (필수) salesAnalysisId (필수, `sales_analyses.id`) targetDate (필�
 
 | status | body |
 | --- | --- |
-| 200 | `{"message":"솔루션을 생성했습니다.","data":{"solutionCards":[{"rankNo":1,"title":"점심 시간대 할인","summaryText":"점심 할인 프로모션을 제안합니다.","detailText":"12시부터 14시까지 할인 행사를 진행하세요."}],"modelVersion":"v1","promptVersion":"v1"}}` |
+| 200 | `{"message":"솔루션을 생성했습니다.","data":{"solutionCards":[{"rankNo":1,"title":"점심 시간대 할인","summaryText":"점심 할인 프로모션을 제안합니다.","detailText":"12시부터 14시까지 할인 행사를 진행하세요."}],"modelVersion":"v1"}}` |
 | 422 | `{"message":"필수 데이터가 누락되었거나 형식이 올바르지 않습니다.","data":null}` |
 | 500 | `{"message":"솔루션 생성 중 오류가 발생했습니다.","data":null}` |
 | 504 | `{"message":"솔루션 생성 시간이 초과되었습니다.","data":null}` |
@@ -607,7 +613,7 @@ FE 요청과는 무관한 서버 내부 배치이지만 "새 솔루션을 생성
 
 | status | body |
 | --- | --- |
-| 200 | `{"message":"솔루션을 생성했습니다.","data":{"targetDate":"2026-09-06","solutionCards":[{"rankNo":1,"title":"점심 시간대 할인","summaryText":"점심 할인 프로모션을 제안합니다.","detailText":"12시부터 14시까지 할인 행사를 진행하세요."}],"modelVersion":"v1","promptVersion":"v1"}}` |
+| 200 | `{"message":"솔루션을 생성했습니다.","data":{"targetDate":"2026-09-06","solutionCards":[{"rankNo":1,"title":"점심 시간대 할인","summaryText":"점심 할인 프로모션을 제안합니다.","detailText":"12시부터 14시까지 할인 행사를 진행하세요."}],"modelVersion":"v1"}}` |
 | 422 | `{"message":"필수 데이터가 누락되었거나 형식이 올바르지 않습니다.","data":null}` |
 | 500 | `{"message":"솔루션 생성 중 오류가 발생했습니다.","data":null}` |
 | 504 | `{"message":"솔루션 생성 시간이 초과되었습니다.","data":null}` |
@@ -785,7 +791,7 @@ targetDate (선택, YYYY-MM-DD, 기본 다음 영업일)
 
 **설명**
 
-저장된 일별 매출 예측 결과와 신뢰 구간, 생성 시각을 조회한다. 예측이 겹치는 날짜는 최신 업로드 결과를 사용하며, 화면·솔루션·챗봇에는 KST 오늘 이후 날짜만 반환한다.
+저장된 일별 매출 예측 결과와 80% 예측구간(`lowerBound`, `upperBound`), 생성 시각을 조회한다. 세 금액은 원 단위 정수이며 `lowerBound` ≤ `predictedSalesAmount` ≤ `upperBound`를 만족한다. 예측이 겹치는 날짜는 최신 업로드 결과를 사용하며, 화면·솔루션·챗봇에는 KST 오늘 이후 날짜만 반환한다.
 
 **설계 근거**
 
@@ -1669,7 +1675,7 @@ costMonth (필수, path variable, YYYY-MM)
 costMonth (필수, path variable, YYYY-MM)
 rentAmount (필수, 0 이상의 정수)
 laborAmount (필수, 0 이상의 정수)
-ingredientCostRate (필수, 0 이상 1 이하의 소수 표기)
+ingredientCostRate (필수, 0 이상 1 이하의 소수, 소수점 넷째 자리까지)
 ```
 
 **설명**
@@ -1686,7 +1692,7 @@ ingredientCostRate (필수, 0 이상 1 이하의 소수 표기)
 | 422 | `{"message":"입력값을 확인해주세요.","fieldErrors":[{"field":"ingredientCostRate","code":"OUT_OF_RANGE","message":"원가율은 0에서 1 사이의 소수로 입력해주세요."}],"data":null}` |
 | 500 | `{"message":"정보를 저장하지 못했습니다. 잠시 후 다시 시도해주세요.","data":null}` |
 
-`rentAmount`와 `laborAmount`는 소수·음수·문자·특수문자를 허용하지 않는다. `ingredientCostRate`은 0 이상 1 이하의 소수로 입력한다. DB의 `UNIQUE(store_id, cost_month)`로 중복 저장을 방지한다.
+`rentAmount`와 `laborAmount`는 소수·음수·문자·특수문자를 허용하지 않는다. `ingredientCostRate`은 0 이상 1 이하, 소수점 넷째 자리까지 입력한다. API와 DB 모두 비율값을 그대로 사용한다(예: `0.325`는 화면에서 `32.5%`). DB는 `DECIMAL(5,4)`와 `CHECK(ingredient_cost_rate BETWEEN 0 AND 1)`을 사용하며, 허용 소수 자릿수를 초과한 입력은 반올림해 저장하지 않고 422로 거절한다. DB의 `UNIQUE(store_id, cost_month)`로 중복 저장을 방지한다.
 
 ---
 
