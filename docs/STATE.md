@@ -3,7 +3,7 @@
 마지막 갱신: 2026-09-20
 브랜치: `feat/48-chat-token-streaming-evidence` (Issue #48, `dev` 기준)
 
-## 2026-09-20 후속 — 실패를 error 이벤트로 구조화 (BE 확인 필요)
+## 2026-09-20 후속 — 실패를 error 이벤트로 구조화 (BE 확인 완료)
 
 09-19에 만든 in-stream 실패 문구가 그냥 평문 텍스트라 BE/FE가 성공 답변과 구분하려면 문자열
 파싱을 해야 하는 문제가 있었다. 사용자 지적으로 구조화된 `error` 이벤트로 바꿨다:
@@ -11,20 +11,20 @@
 - `{"event":"error","data":{"code":"AI_TIMEOUT"|"AI_GENERATION_ERROR"|"AI_TOOL_ERROR",
   "message":"..."}}` — 기존 `{"event":"answerChunk",...}`과 같은 `data: ...\n\n` SSE 라인
   안에 JSON으로 실어 보낸다(진짜 SSE `event:` 필드로 바꾼 게 아님 — 계약의 기존 전송 방식을
-  그대로 유지하면서 최소 변경으로 판단, **확정 아님, BE 확인 필요**).
+  그대로 유지하면서 최소 변경으로 판단, **BE 확인 완료(2026-09-20)**).
   - `AI_TIMEOUT`(504였던 것) / `AI_GENERATION_ERROR`(원래 502였는데 `docs/api정의서.md:1163`엔
     500만 문서화돼 있어서 500으로 맞춤) — `app/services/chat/graph.py`의 `_stream_model`.
   - `AI_TOOL_ERROR` — 도구 조회 2회 연속 실패. 기존엔 `FAILURE_PHRASE`를 정상 답변인 것처럼
     `answerChunk`로 보냈는데, ERD `chat_messages.status`에 이미 `FAILED` 값이 있어서 error
     이벤트로 보내는 게 더 맞다고 판단해 바꿨다.
-- **BE에 알려야 할 것 (Issue #48에 코멘트 남길 예정)**:
-  1. `docs/api정의서.md:1162-1163`이 약속한 504/500 상태 코드는 이제 (거의) 안 나간다 —
-     `StreamingResponse`가 반환되는 순간 200이 확정되기 때문(Starlette 소스로 확인). 실패는
-     `event:"error"`로만 온다.
-  2. `event:"error"` 라는 새 메시지 모양 자체가 계약에 없던 것이라 BE가 이걸 어떻게
-     `chat_messages`에 반영할지(`status=FAILED` 매핑 등) 같이 정해야 한다.
-  3. 이건 스키마 필드 추가가 아니라 SSE 메시지 종류 자체가 늘어난 거라, 문서(`docs/api정의서.md`)
-     갱신도 BE 쪽에서 노션 반영 후 필요하다.
+- **BE 확인 완료(2026-09-20, Issue #48 코멘트로 전달 후 BE 회신 받음)**:
+  1. 기존 `answerChunk` 형식은 그대로 유지, `error` 이벤트만 추가되는 구조로 BE가 그대로 수용함.
+  2. `event:"error"` 수신 시 `chat_messages.status=FAILED`로 처리하기로 합의됨 — BE가 직접 이
+     매핑을 구현한다.
+  3. 실제 SSE `event:` 필드 변경은 없음(계속 `data:` 줄 안에 JSON으로 실어 보내는 기존 방식
+     유지) — BE도 이 전제로 확인함.
+  4. 문서(`docs/api정의서.md`)의 504/500 기술은 아직 BE 쪽 노션 반영 전이라 남아있을 수 있음 —
+     반영 여부는 다음에 문서 동기화할 때 확인.
 
 ## 2026-09-19 세션 — 챗봇 토큰 스트리밍 + evidence 구현
 
