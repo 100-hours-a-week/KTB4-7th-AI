@@ -1,7 +1,66 @@
 # 작업 상태
 
-마지막 갱신: 2026-09-16
-브랜치: `feat/21-contract-sync` (Issue #21, `dev` 기준)
+마지막 갱신: 2026-09-20
+브랜치: `feat/48-chat-token-streaming-evidence` (Issue #48, `dev` 기준)
+
+## 2026-09-20 후속 — 실패를 error 이벤트로 구조화 (BE 확인 필요)
+
+09-19에 만든 in-stream 실패 문구가 그냥 평문 텍스트라 BE/FE가 성공 답변과 구분하려면 문자열
+파싱을 해야 하는 문제가 있었다. 사용자 지적으로 구조화된 `error` 이벤트로 바꿨다:
+
+- `{"event":"error","data":{"code":"AI_TIMEOUT"|"AI_GENERATION_ERROR"|"AI_TOOL_ERROR",
+  "message":"..."}}` — 기존 `{"event":"answerChunk",...}`과 같은 `data: ...\n\n` SSE 라인
+  안에 JSON으로 실어 보낸다(진짜 SSE `event:` 필드로 바꾼 게 아님 — 계약의 기존 전송 방식을
+  그대로 유지하면서 최소 변경으로 판단, **확정 아님, BE 확인 필요**).
+  - `AI_TIMEOUT`(504였던 것) / `AI_GENERATION_ERROR`(원래 502였는데 `docs/api정의서.md:1163`엔
+    500만 문서화돼 있어서 500으로 맞춤) — `app/services/chat/graph.py`의 `_stream_model`.
+  - `AI_TOOL_ERROR` — 도구 조회 2회 연속 실패. 기존엔 `FAILURE_PHRASE`를 정상 답변인 것처럼
+    `answerChunk`로 보냈는데, ERD `chat_messages.status`에 이미 `FAILED` 값이 있어서 error
+    이벤트로 보내는 게 더 맞다고 판단해 바꿨다.
+- **BE에 알려야 할 것 (Issue #48에 코멘트 남길 예정)**:
+  1. `docs/api정의서.md:1162-1163`이 약속한 504/500 상태 코드는 이제 (거의) 안 나간다 —
+     `StreamingResponse`가 반환되는 순간 200이 확정되기 때문(Starlette 소스로 확인). 실패는
+     `event:"error"`로만 온다.
+  2. `event:"error"` 라는 새 메시지 모양 자체가 계약에 없던 것이라 BE가 이걸 어떻게
+     `chat_messages`에 반영할지(`status=FAILED` 매핑 등) 같이 정해야 한다.
+  3. 이건 스키마 필드 추가가 아니라 SSE 메시지 종류 자체가 늘어난 거라, 문서(`docs/api정의서.md`)
+     갱신도 BE 쪽에서 노션 반영 후 필요하다.
+
+## 2026-09-19 세션 — 챗봇 토큰 스트리밍 + evidence 구현
+
+코드 감사 중 발견한 두 가지를 고쳤다 (Issue #48):
+
+- **진짜 토큰 단위 SSE 스트리밍**: 기존엔 `app/api/chat.py`가 LangGraph를 `ainvoke`로 끝까지
+  돌려 완성된 답변을 40자씩 잘라 흉내만 냈다(`docs/api정의서.md:1149` "토큰 단위로 스트리밍
+  반환한다" 위반). `app/services/chat/graph.py`의 `agent_node`가 `model.astream(messages,
+  config=config)`로 실제 토큰을 받고, `app/api/chat.py`는 `compiled.astream_events(...,
+  version="v2")`로 `langgraph_node=="agent"`인 `on_chat_model_stream` 이벤트만 걸러 실시간
+  중계한다. 도구 호출 결정 턴은 보통 빈 content만 스트리밍하므로 `if chunk.content`로
+  자연히 걸러진다.
+  - **트레이드오프**: `StreamingResponse`는 반환되는 순간 200 헤더를 먼저 보내므로(Starlette
+    `stream_response` 확인 완료), 스트리밍이 시작된 뒤엔 502/504로 격상할 수 없다. 모델 호출
+    실패(`APITimeoutError`/`AnthropicError`)는 이제 in-stream 실패 문구로만 내려간다
+    (`app/api/chat.py`의 `_stream` 안 `except ApiError`). 기존엔 `ainvoke`를 먼저 끝까지
+    기다려서 실패를 깨끗한 HTTP 상태로 반환했었는데, 진짜 스트리밍과는 근본적으로 양립할 수
+    없는 속성이라 포기했다 — 모든 실시간 스트리밍 챗 API가 겪는 제약이다.
+- **evidence 근거값 채우기**: `app/api/chat.py`가 모든 청크에 `evidence: null`을 하드코딩하고
+  있었다(`docs/api정의서.md:1175` "서버 산출값과 반드시 일치해야 함" — 환각 검증 장치인데
+  미구현). `app/services/chat/graph.py`의 `tools_node`가 도구 조회 성공마다
+  `_build_evidence(tool_name, args, result)`로 `last_evidence`를 갱신하고, API 레이어가 다음
+  답변 청크마다 함께 실어 보낸다. `get_sales_summary`→`changeRate`, `get_forecast`→가장 가까운
+  `predictedSalesAmount`만 단일 값(`value`)으로 채우고, `get_category_breakdown`/
+  `get_hourly_profile`처럼 리스트형 응답은 `metric`/`period`만 채우고 `value`는 null이다
+  (여러 항목 중 어떤 수치를 답변이 인용했는지 지금은 모델이 알려주지 않아서 특정할 수 없음
+  — **알려진 한계**, 업그레이드하려면 모델이 구조화된 출력으로 어떤 값을 인용했는지 직접
+  표시하게 해야 함).
+- `tests/test_chat.py`의 `FakeModel`을 `.ainvoke`만 흉내내던 가짜 객체에서 `BaseChatModel`을
+  상속한 진짜 스트리밍 가짜 모델로 바꿨다(`_astream`으로 텍스트는 공백 단위 여러 청크, 툴
+  호출은 빈 content 한 청크). 새 테스트 2개 추가: 토큰이 여러 청크로 오는지, evidence가
+  도구 사용 여부에 따라 채워지는지.
+- `uv run pytest -q`: 40 passed. `uv run ruff check . / ruff format .`: 통과.
+- **미검증**: 실제 Anthropic API 스트리밍(로컬엔 `ANTHROPIC_API_KEY` 없음) — `GenericFakeChatModel`로
+  LangGraph `astream_events`가 `on_chat_model_stream`을 정상 발생시키는 것만 별도 스크립트로
+  확인했다. 실서비스 키로 curl 스모크 테스트 필요.
 
 ## 지금 어디
 
