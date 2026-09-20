@@ -22,7 +22,8 @@
 
 - `GET /v1/addresses/search`: `query`(필수), `cursor`(선택), `size`(선택, 기본 10·최대 10)
 - `GET /v1/sales/uploads`: `page`(선택, 기본 1·최대 5), `size`(선택, 10 고정)
-- `GET /internal/v1/sales/summary`, `categories`, `profit-analyses`, `review-summaries`: `storeId`·`period`·`startDate`·`endDate`
+- `GET /internal/v1/sales/summary`, `categories`, `review-summaries`: `storeId`·`period`·`startDate`·`endDate`
+- `GET /internal/v2/sales/profit-analyses`: `storeId`·`period`·`startDate`·`endDate`
 - `GET /internal/v1/sales/hourly-profiles`: 위 값과 `dayOfWeek`(선택)
 - `GET /internal/v1/sales/forecasts`: `storeId`·`targetDate`
 - `GET /v1/sales/analyses`, `GET /v2/sales/profit-analyses`, `GET /v3/sales/analyses`: `periodType`(필수), `startDate`·`endDate`(CUSTOM일 때 필수)
@@ -321,6 +322,8 @@ businessVerificationId (필수)
 postalCode (필수)
 address (필수, 기본 주소)
 addressDetail (선택)
+latitude (필수, 주소 검색 결과의 위도, -90~90)
+longitude (필수, 주소 검색 결과의 경도, -180~180)
 businessHours (필수, 요일별 영업시간 배열)
 - dayOfWeek (필수, MONDAY~SUNDAY)
 - isClosed (필수, boolean)
@@ -331,11 +334,11 @@ businessHours (필수, 요일별 영업시간 배열)
 
 **설명**
 
-회원가입 최종 단계다. AU-02 일반 가입 또는 AU-10 토스 가입에서 발급한 `signupToken`의 가입 초안·인증·약관 동의 상태와 사업자등록번호 인증 결과, 매장 입력값을 다시 검증한다. 영업시간은 요일별로 저장하며, 가입 화면에서는 동일한 시간을 모든 요일에 적용한 뒤 필요한 경우에만 요일별 시간을 수정한다. 매주 휴무는 해당 요일의 `isClosed=true`으로 표현하고, 매월 휴무 정책은 지원하지 않는다. 일반 가입은 `users`, `stores`, `store_business_hours`, 기본 `notification_preferences`를, 토스 가입은 여기에 `user_auth_providers` 연결을 더해 하나의 트랜잭션으로 생성한다. 성공 후 자동 로그인하지 않으며 AU-01 로그인 화면으로 이동한다.
+회원가입 최종 단계다. AU-02 일반 가입 또는 AU-10 토스 가입에서 발급한 `signupToken`의 가입 초안·인증·약관 동의 상태와 사업자등록번호 인증 결과, 매장 입력값을 다시 검증한다. 프론트엔드는 주소 검색 결과의 위도·경도를 함께 전달하고, 서버는 위도 -90~90·경도 -180~180 범위를 검증한 뒤 매장 정보에 저장한다. 영업시간은 요일별로 저장하며, 가입 화면에서는 동일한 시간을 모든 요일에 적용한 뒤 필요한 경우에만 요일별 시간을 수정한다. 매주 휴무는 해당 요일의 `isClosed=true`으로 표현하고, 매월 휴무 정책은 지원하지 않는다. 일반 가입은 `users`, `stores`, `store_business_hours`, 기본 `notification_preferences`를, 토스 가입은 여기에 `user_auth_providers` 연결을 더해 하나의 트랜잭션으로 생성한다. 성공 후 자동 로그인하지 않으며 AU-01 로그인 화면으로 이동한다.
 
 **설계 근거**
 
-FR-AUTH-015와 FR-STORE-009에 따라 AU-02에서는 정식 계정을 만들지 않고 ST-01 성공 시 계정과 매장을 함께 생성한다. 일부 저장 후 실패하는 상태를 막기 위해 전체 생성을 하나의 트랜잭션으로 처리한다. `signupToken`은 발급 시각부터 1시간 동안만 유효하며, `signupToken`과 `businessVerificationId`는 만료 여부와 입력한 사업자등록번호의 일치 여부를 검증한다. 만료된 `signupToken`으로 요청하면 410을 반환한다.
+FR-AUTH-015와 FR-STORE-009에 따라 AU-02에서는 정식 계정을 만들지 않고 ST-01 성공 시 계정과 매장을 함께 생성한다. 일부 저장 후 실패하는 상태를 막기 위해 전체 생성을 하나의 트랜잭션으로 처리한다. `signupToken`은 발급 시각부터 1시간 동안만 유효하다. `businessVerificationId`는 인증 결과가 존재하고, 입력한 사업자등록번호와 일치하며, 발급 후 10분이 지나지 않았고, 아직 사용되지 않은 경우에만 사용할 수 있다. 회원가입 성공 시 해당 인증 결과의 `used_at`을 기록하여 즉시 재사용을 막는다. 만료된 `signupToken` 또는 사업자 인증 결과로 요청하면 410을 반환한다.
 
 **응답**
 
@@ -344,7 +347,7 @@ FR-AUTH-015와 FR-STORE-009에 따라 AU-02에서는 정식 계정을 만들지 
 | 201 | `{"message":"회원가입이 완료되었습니다.","data":{"user":{"id":1,"email":"example@email.com"},"store":{"id":1,"storeName":"맴매카페"},"next":"LOGIN"}}` |
 | 409 | `{"message":"이미 등록된 이메일, 휴대폰 번호 또는 사업자등록번호입니다.","data":null}` |
 | 410 | `{"message":"회원가입 또는 사업자 인증 정보가 만료되었습니다.","data":null}` |
-| 422 | `{"message":"필수 입력값이 누락되었거나 형식이 올바르지 않습니다.","data":null}` |
+| 422 | `{"message":"필수 입력값이 누락되었거나 형식이 올바르지 않거나, 사업자 인증 결과가 요청 사업자등록번호와 일치하지 않거나 이미 사용되었습니다.","data":null}` |
 | 500 | `{"message":"회원가입 정보를 저장하지 못했습니다. 다시 시도해주세요.","data":null}` |
 
 ---
@@ -389,13 +392,13 @@ businessRegNumber (필수, 숫자 10자리)
 
 **설명**
 
-사업자등록번호 형식, 중복 여부와 사업자 상태를 확인한다. 성공 시 회원가입 최종 요청에서 사용할 만료형 `businessVerificationId`를 반환한다.
+사업자등록번호 형식, 중복 여부와 사업자 상태를 확인한다. 성공하면 인증 결과를 `business_verifications`에 저장하고, 회원가입 최종 요청에서 사용할 숫자형 `businessVerificationId`와 만료 시각을 반환한다. 인증 결과는 발급 후 10분 동안만 유효하며, 회원가입 완료에 한 번만 사용할 수 있다.
 
 **응답**
 
 | status | body |
 | --- | --- |
-| 200 | `{"message":"business_number_verification_success","data":{"businessVerificationId":"biz_ver_abc123"}}` |
+| 200 | `{"message":"business_number_verification_success","data":{"businessVerificationId":1,"expiresAt":"2026-09-17T12:10:00+09:00"}}` |
 | 400 | `{"message":"invalid_business_number","data":null}` |
 | 409 | `{"message":"business_number_already_exists","data":null}` |
 | 422 | `{"message":"business_status_not_eligible","data":null}` |
@@ -568,7 +571,7 @@ AI는 일별 예측과 함께 80% 예측구간(`lowerBound`, `upperBound`)을 �
 **요청 값**
 
 ```
-storeId (필수) salesAnalysisId (필수, `sales_analyses.id`) targetDate (필수) triggerType (필수, UPLOAD) metrics (필수 — BE가 분석 모듈에서 미리 계산한 지표 묶음: 매출요약·카테고리 비중·시간대 프로파일·오늘 예측 매출(SALES_PREDICTION 조회값)·순이익·리뷰 요약. 원본 salesRecords는 보내지 않음)
+storeId (필수) salesAnalysisId (필수, `sales_analyses.id`) targetDate (필수) triggerType (필수, UPLOAD) metrics (필수 — V1에서 BE가 분석 모듈로 미리 계산한 매출요약·카테고리 비중·시간대 프로파일·오늘 예측 매출(SALES_PREDICTION 조회값) 묶음. 순이익은 V2, 리뷰 요약은 V3부터 포함한다. 원본 salesRecords는 보내지 않음)
 ```
 
 **설명**
@@ -806,10 +809,10 @@ targetDate (선택, YYYY-MM-DD, 기본 다음 영업일)
 
 ---
 
-## SALES-04 · 순이익 분석 · GET `/internal/v1/sales/profit-analyses`
+## SALES-06 · 순이익 분석 · GET `/internal/v2/sales/profit-analyses`
 
 - **방향**: AI → BE (툴)
-- **버전**: v1
+- **버전**: v2
 
 **요청 값**
 
@@ -821,7 +824,7 @@ startDate, endDate (CUSTOM일 때 필수, YYYY-MM-DD)
 
 **설명**
 
-선택 기간의 순매출, 원가·고정비와 순이익 및 구성 비율을 조회한다.
+V2에서 선택 기간의 순매출, 원가·고정비와 순이익 및 구성 비율을 조회한다.
 
 **설계 근거**
 
