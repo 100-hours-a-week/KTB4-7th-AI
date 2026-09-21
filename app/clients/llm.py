@@ -5,7 +5,12 @@ from google import genai
 from google.genai import types as genai_types
 from openai import AsyncOpenAI
 
-from app.core.config import OPENAI_REASONING_MODELS, UPSTAGE_BASE_URL, settings
+from app.core.config import (
+    GOOGLE_THINKING_MODELS,
+    OPENAI_REASONING_MODELS,
+    UPSTAGE_BASE_URL,
+    settings,
+)
 from app.core.errors import ApiError
 
 _clients: dict[str, object] = {}
@@ -37,12 +42,9 @@ def _get_google() -> genai.Client:
     return _clients["google"]
 
 
-async def _complete_openai_compatible(
-    client: AsyncOpenAI, system: str, user: str, max_tokens: int, **extra
-) -> str:
+async def _complete_openai_compatible(client: AsyncOpenAI, system: str, user: str, **extra) -> str:
     res = await client.chat.completions.create(
         model=settings.llm_model,
-        max_tokens=max_tokens,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         **extra,
     )
@@ -74,24 +76,32 @@ async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
             )
             return res.content[0].text
         if provider == "openai":
-            # GPT-5.6 Luna처럼 reasoning이 기본인 모델만 reasoning_effort="none"으로 끈다.
-            extra = (
-                {"reasoning_effort": "none"}
-                if settings.llm_model in OPENAI_REASONING_MODELS
-                else {}
-            )
-            return await _complete_openai_compatible(
-                _get_openai(), system, user, max_tokens, **extra
-            )
+            is_reasoning = settings.llm_model in OPENAI_REASONING_MODELS
+            # reasoning 모델(o-series/GPT-5.x)은 max_tokens를 거부하고 max_completion_tokens를
+            # 요구한다 (openai SDK의 max_tokens 필드 docstring: "deprecated ... not compatible
+            # with o-series models"). GPT-5.6 Luna처럼 reasoning이 기본인 모델만
+            # reasoning_effort="none"으로 끈다.
+            extra = {"max_completion_tokens" if is_reasoning else "max_tokens": max_tokens}
+            if is_reasoning:
+                extra["reasoning_effort"] = "none"
+            return await _complete_openai_compatible(_get_openai(), system, user, **extra)
         if provider == "upstage":
-            return await _complete_openai_compatible(_get_upstage(), system, user, max_tokens)
+            return await _complete_openai_compatible(
+                _get_upstage(), system, user, max_tokens=max_tokens
+            )
         if provider == "google":
+            config_kwargs: dict[str, object] = {
+                "system_instruction": system,
+                "max_output_tokens": max_tokens,
+            }
+            if settings.llm_model in GOOGLE_THINKING_MODELS:
+                # Gemini 3+는 thinking_budget이 아니라 thinking_level(low/medium/high)을 쓰고
+                # "low"가 최솟값이다 — thinking_budget=0 같은 완전 off는 없다.
+                config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level="LOW")
             res = await _get_google().aio.models.generate_content(
                 model=settings.llm_model,
                 contents=user,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=system, max_output_tokens=max_tokens
-                ),
+                config=genai_types.GenerateContentConfig(**config_kwargs),
             )
             return res.text
         raise ApiError(502, "LLM_ERROR", f"지원하지 않는 LLM_PROVIDER: {provider}")

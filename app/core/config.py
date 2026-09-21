@@ -9,6 +9,14 @@ UPSTAGE_BASE_URL = "https://api.upstage.ai/v1"
 # 자체를 보내지 않는다.
 OPENAI_REASONING_MODELS = {"gpt-5.6-luna"}
 
+# thinking을 낮출 수 있는(=기본이 thinking on인) google 계열 모델.
+# Gemini 3세대부터는 thinking_budget이 폐지되고 thinking_level(low/medium/high)만 쓰는데,
+# gemini-3.8-flash는 "minimal"이 아예 에러라 완전히 끌 수는 없고 "low"가 낼 수 있는 최솟값이다
+# (ai.google.dev/gemini-api/docs/models/gemini-3.8-flash). OpenAI처럼 reasoning을 off로
+# 만들 순 없지만 지연시간 비교 조건을 맞추기 위해 최소치로 고정한다. LLM_MODEL이 이 목록에
+# 없으면 thinking 파라미터 자체를 보내지 않는다.
+GOOGLE_THINKING_MODELS = {"gemini-3.8-flash"}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

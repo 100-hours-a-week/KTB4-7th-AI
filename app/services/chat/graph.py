@@ -28,7 +28,12 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, MessagesState, StateGraph
 
-from app.core.config import OPENAI_REASONING_MODELS, UPSTAGE_BASE_URL, settings
+from app.core.config import (
+    GOOGLE_THINKING_MODELS,
+    OPENAI_REASONING_MODELS,
+    UPSTAGE_BASE_URL,
+    settings,
+)
 from app.core.errors import ApiError
 
 MAX_TOOL_FAILURES = 2
@@ -63,9 +68,12 @@ def get_model(tools: list) -> BaseChatModel:
             model=settings.llm_model, api_key=settings.upstage_api_key, base_url=UPSTAGE_BASE_URL
         )
     elif provider == "google":
-        model = ChatGoogleGenerativeAI(
-            model=settings.llm_model, google_api_key=settings.google_api_key
-        )
+        kwargs = {"model": settings.llm_model, "google_api_key": settings.google_api_key}
+        if settings.llm_model in GOOGLE_THINKING_MODELS:
+            # Gemini 3+는 thinking_level="low"가 최솟값이다 — thinking_budget=0 같은
+            # 완전 off는 없다 (app/core/config.py의 GOOGLE_THINKING_MODELS 주석 참고).
+            kwargs["thinking_level"] = "low"
+        model = ChatGoogleGenerativeAI(**kwargs)
     else:
         raise ValueError(f"지원하지 않는 LLM_PROVIDER: {provider}")
     return model.bind_tools(tools)

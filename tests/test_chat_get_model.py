@@ -74,3 +74,23 @@ def test_openai_reasoning_모델이_아니면_reasoning_effort를_보내지_않�
     model = chat_graph.get_model([])
 
     assert model.bound.reasoning_effort is None
+
+
+def test_google_thinking_모델이면_thinking_level을_low로_고정한다(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "google")
+    monkeypatch.setattr(settings, "google_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "gemini-3.8-flash")
+
+    model = chat_graph.get_model([])
+
+    assert model.bound.thinking_level == "low"
+
+
+def test_google_thinking_모델이_아니면_thinking_level을_보내지_않는다(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "google")
+    monkeypatch.setattr(settings, "google_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "gemini-2.5-pro")
+
+    model = chat_graph.get_model([])
+
+    assert model.bound.thinking_level is None

@@ -37,7 +37,11 @@ class _FakeOpenAIClient:
 
 
 class _FakeGoogleModels:
+    def __init__(self):
+        self.last_kwargs: dict | None = None
+
     async def generate_content(self, **kwargs):
+        self.last_kwargs = kwargs
         return type("R", (), {"text": "google-ok"})()
 
 
@@ -108,6 +112,52 @@ async def test_openai_reasoning_모델이_아니면_reasoning_effort를_안_보�
     await llm.complete("sys", "user")
 
     assert "reasoning_effort" not in llm._clients["openai"].chat.completions.last_kwargs
+
+
+async def test_openai_reasoning_모델이면_max_completion_tokens를_쓴다(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_model", "gpt-5.6-luna")
+    monkeypatch.setattr(llm, "AsyncOpenAI", _FakeOpenAIClient)
+
+    await llm.complete("sys", "user", max_tokens=123)
+
+    kwargs = llm._clients["openai"].chat.completions.last_kwargs
+    assert kwargs["max_completion_tokens"] == 123
+    assert "max_tokens" not in kwargs
+
+
+async def test_openai_reasoning_모델이_아니면_max_tokens를_쓴다(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_model", "gpt-4o-mini")
+    monkeypatch.setattr(llm, "AsyncOpenAI", _FakeOpenAIClient)
+
+    await llm.complete("sys", "user", max_tokens=123)
+
+    kwargs = llm._clients["openai"].chat.completions.last_kwargs
+    assert kwargs["max_tokens"] == 123
+    assert "max_completion_tokens" not in kwargs
+
+
+async def test_google_thinking_모델이면_thinking_level을_low로_보낸다(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "google")
+    monkeypatch.setattr(settings, "llm_model", "gemini-3.8-flash")
+    monkeypatch.setattr(llm.genai, "Client", _FakeGoogleClient)
+
+    await llm.complete("sys", "user")
+
+    config = llm._clients["google"].aio.models.last_kwargs["config"]
+    assert config.thinking_config.thinking_level.value == "LOW"
+
+
+async def test_google_thinking_모델이_아니면_thinking_config를_안_보낸다(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "google")
+    monkeypatch.setattr(settings, "llm_model", "gemini-2.5-pro")
+    monkeypatch.setattr(llm.genai, "Client", _FakeGoogleClient)
+
+    await llm.complete("sys", "user")
+
+    config = llm._clients["google"].aio.models.last_kwargs["config"]
+    assert config.thinking_config is None
 
 
 def test_model_label은_provider_model을_합친다(monkeypatch):
