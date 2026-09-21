@@ -14,7 +14,7 @@
 
 | 도메인 코드 | 도메인명 | 테이블 |
 | --- | --- | --- |
-| AUTH | 인증·계정 | users, signup_drafts, user_auth_providers, user_sessions, password_reset_tokens |
+| AUTH | 인증·계정 | users, signup_drafts, business_verifications, user_auth_providers, user_sessions, password_reset_tokens |
 | STORE | 매장 | stores, store_business_hours, store_holidays, menus, menu_images, menu_image_items |
 | SOL | 솔루션 | solution_bundles, solutions, saved_solutions, chat_messages |
 | SALES | 매출 분석 | sales_uploads, sales_orders, sales_order_items, store_menu_categories, sales_daily_summaries, sales_hourly_summaries, sales_daily_category_summaries, sales_daily_menu_summaries, sales_forecasts, analysis_runs, sales_analyses, sales_ai_insights, analysis_metrics, menu_analysis_results, review_analyses, store_cost_items, reviews, weather_observations |
@@ -59,6 +59,21 @@
 | 개인정보 처리방침 버전 | privacy_policy_version | NOT NULL | VARCHAR(50) | 동의한 개인정보 처리방침 버전 |
 | 만료 일시 | expires_at | NOT NULL | DATETIME | signupToken 발급 시각부터 1시간 후의 만료 시각 |
 | 생성 일시 | created_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 임시 가입 정보 생성 시각 |
+
+### ✅business_verifications - 사업자등록번호 인증 결과
+
+회원가입 2단계에서 사업자등록번호 외부 인증이 성공한 결과를 임시로 저장한다. 인증 결과는 발급 후 10분 동안만 유효하고, 회원가입 완료에 한 번 사용하면 즉시 재사용할 수 없다.
+
+| 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
+| --- | --- | --- | --- | --- |
+| 사업자 인증 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | API가 반환하는 businessVerificationId |
+| 사업자등록번호 | `business_reg_number` | NOT NULL | CHAR(10) | 하이픈을 제외한 인증 대상 번호 |
+| 인증 완료 일시 | `verified_at` | NOT NULL | DATETIME | 외부 인증 성공 시각 |
+| 만료 일시 | `expires_at` | NOT NULL, INDEX | DATETIME | verified_at부터 10분 후 |
+| 사용 완료 일시 | `used_at` | NULL 허용 | DATETIME | 회원가입 2단계 완료 시 기록. 값이 있으면 재사용 불가 |
+| 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 인증 결과 생성 시각 |
+
+테이블 제약: 회원가입 2단계는 `id` 존재, 요청한 사업자등록번호 일치, `expires_at` 미만, `used_at IS NULL`을 모두 만족할 때만 처리한다.
 
 ### ✅user_auth_providers - 외부 본인인증 식별값 연동
 
@@ -124,8 +139,8 @@ V2에서 도입하는 토스 본인인증 완료 후 제공되는 사용자 고�
 | 우편번호 | `postal_code` | NOT NULL | CHAR(5) | 도로명 주소 우편번호 |
 | 도로명 주소 | `address` | NOT NULL | VARCHAR(255) | 매장 도로명 주소 |
 | 상세 주소 | `address_detail` | NULL 허용 | VARCHAR(255) | 건물·호수 등 상세 주소 |
-| 위도 | `latitude` | NOT NULL, CHECK (latitude BETWEEN -90 AND 90) | DECIMAL(10,7) | 매장 위치 위도 |
-| 경도 | `longitude` | NOT NULL, CHECK (longitude BETWEEN -180 AND 180) | DECIMAL(10,7) | 매장 위치 경도 |
+| 위도 | `latitude` | NOT NULL, CHECK (latitude BETWEEN -90 AND 90) | DECIMAL(10,7) | 주소 검색 결과를 프론트엔드가 전달한 매장 위치 위도 |
+| 경도 | `longitude` | NOT NULL, CHECK (longitude BETWEEN -180 AND 180) | DECIMAL(10,7) | 주소 검색 결과를 프론트엔드가 전달한 매장 위치 경도 |
 | 매장 상태 | `status` | NOT NULL, DEFAULT 'ACTIVE', CHECK (status IN ('ACTIVE', 'INACTIVE', 'SUSPENDED')) | VARCHAR(20) | 정상 운영·운영 중지·이용 제한 상태 |
 | 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 매장 등록 시각 |
 | 수정 일시 | `updated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP, ON UPDATE CURRENT_TIMESTAMP | DATETIME | 매장 정보 최종 수정 시각 |
