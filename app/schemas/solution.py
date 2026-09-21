@@ -19,6 +19,8 @@ class SolutionCard(Contract):
     title: str
     summaryText: str
     detailText: str = Field(max_length=1000)
+    # NULL 허용: LLM이 근거를 못 뽑는 경우가 있어 필수로 두면 재시도 후에도 500이 난다.
+    evidence: str | None = None
 
 
 class SolutionData(Contract):
