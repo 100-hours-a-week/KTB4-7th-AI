@@ -10,20 +10,25 @@ compiled.astream_events()로 이 토큰을 실시간 SSE로 중계한다(계약:
 갱신해, 다음 답변 청크에 "그 수치가 실제 서버 산출값과 일치함"을 실어 보낼 수 있게 한다.
 
 ponytail: 스트리밍이 시작되면(StreamingResponse가 200 헤더를 보낸 시점) HTTP 상태 코드를
-더 바꿀 수 없어, 모델 호출 실패(APITimeoutError/AnthropicError)를 502/504로 올리지 못하고
+더 바꿀 수 없어, 모델 호출 실패(provider별 타임아웃/생성 오류)를 502/504로 올리지 못하고
 API 레이어에서 in-stream 실패 문구로만 내려간다 — 업그레이드하려면 클라이언트가 "생성 시작"
 ack 이벤트를 받은 뒤에만 안전하다고 간주하는 프로토콜을 BE와 새로 합의해야 한다.
 """
 
 import json
 
+import openai
 from anthropic import AnthropicError, APITimeoutError
+from google.genai import errors as genai_errors
 from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.messages import ToolMessage as LCToolMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, MessagesState, StateGraph
 
-from app.core.config import settings
+from app.core.config import OPENAI_REASONING_MODELS, UPSTAGE_BASE_URL, settings
 from app.core.errors import ApiError
 
 MAX_TOOL_FAILURES = 2
@@ -42,10 +47,28 @@ class ChatState(MessagesState):
     last_evidence: dict | None
 
 
-def get_model(tools: list) -> ChatAnthropic:
-    return ChatAnthropic(model=settings.llm_model, api_key=settings.anthropic_api_key).bind_tools(
-        tools
-    )
+def get_model(tools: list) -> BaseChatModel:
+    provider = settings.llm_provider
+    if provider == "anthropic":
+        model = ChatAnthropic(model=settings.llm_model, api_key=settings.anthropic_api_key)
+    elif provider == "openai":
+        kwargs = {"model": settings.llm_model, "api_key": settings.openai_api_key}
+        if settings.llm_model in OPENAI_REASONING_MODELS:
+            # GPT-5.6 Luna처럼 reasoning이 기본인 모델만 non-reasoning으로 고정한다 —
+            # reasoning이 없는 openai 모델(LLM_MODEL)에는 이 파라미터 자체를 보내지 않는다.
+            kwargs["reasoning_effort"] = "none"
+        model = ChatOpenAI(**kwargs)
+    elif provider == "upstage":
+        model = ChatOpenAI(
+            model=settings.llm_model, api_key=settings.upstage_api_key, base_url=UPSTAGE_BASE_URL
+        )
+    elif provider == "google":
+        model = ChatGoogleGenerativeAI(
+            model=settings.llm_model, google_api_key=settings.google_api_key
+        )
+    else:
+        raise ValueError(f"지원하지 않는 LLM_PROVIDER: {provider}")
+    return model.bind_tools(tools)
 
 
 async def _stream_model(model, messages: list, config) -> AIMessage:
@@ -54,11 +77,11 @@ async def _stream_model(model, messages: list, config) -> AIMessage:
         async for piece in model.astream(messages, config=config):
             chunk = piece if chunk is None else chunk + piece
         return chunk
-    except APITimeoutError as exc:
+    except (APITimeoutError, openai.APITimeoutError, TimeoutError) as exc:
         raise ApiError(
             504, "AI_TIMEOUT", "응답 생성이 시간을 초과했습니다. 다시 시도해주세요."
         ) from exc
-    except AnthropicError as exc:
+    except (AnthropicError, openai.OpenAIError, genai_errors.APIError) as exc:
         raise ApiError(
             500, "AI_GENERATION_ERROR", "답변 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
         ) from exc
