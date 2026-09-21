@@ -1,68 +1,15 @@
 # 작업 상태
 
-마지막 갱신: 2026-09-20
-브랜치: `feat/48-chat-token-streaming-evidence` (Issue #48, `dev` 기준)
-
-## 2026-09-20 후속 — 실패를 error 이벤트로 구조화 (BE 확인 완료)
-
-09-19에 만든 in-stream 실패 문구가 그냥 평문 텍스트라 BE/FE가 성공 답변과 구분하려면 문자열
-파싱을 해야 하는 문제가 있었다. 사용자 지적으로 구조화된 `error` 이벤트로 바꿨다:
-
-- `{"event":"error","data":{"code":"AI_TIMEOUT"|"AI_GENERATION_ERROR"|"AI_TOOL_ERROR",
-  "message":"..."}}` — 기존 `{"event":"answerChunk",...}`과 같은 `data: ...\n\n` SSE 라인
-  안에 JSON으로 실어 보낸다(진짜 SSE `event:` 필드로 바꾼 게 아님 — 계약의 기존 전송 방식을
-  그대로 유지하면서 최소 변경으로 판단, **BE 확인 완료(2026-09-20)**).
-  - `AI_TIMEOUT`(504였던 것) / `AI_GENERATION_ERROR`(원래 502였는데 `docs/api정의서.md:1163`엔
-    500만 문서화돼 있어서 500으로 맞춤) — `app/services/chat/graph.py`의 `_stream_model`.
-  - `AI_TOOL_ERROR` — 도구 조회 2회 연속 실패. 기존엔 `FAILURE_PHRASE`를 정상 답변인 것처럼
-    `answerChunk`로 보냈는데, ERD `chat_messages.status`에 이미 `FAILED` 값이 있어서 error
-    이벤트로 보내는 게 더 맞다고 판단해 바꿨다.
-- **BE 확인 완료(2026-09-20, Issue #48 코멘트로 전달 후 BE 회신 받음)**:
-  1. 기존 `answerChunk` 형식은 그대로 유지, `error` 이벤트만 추가되는 구조로 BE가 그대로 수용함.
-  2. `event:"error"` 수신 시 `chat_messages.status=FAILED`로 처리하기로 합의됨 — BE가 직접 이
-     매핑을 구현한다.
-  3. 실제 SSE `event:` 필드 변경은 없음(계속 `data:` 줄 안에 JSON으로 실어 보내는 기존 방식
-     유지) — BE도 이 전제로 확인함.
-  4. 문서(`docs/api정의서.md`)의 504/500 기술은 아직 BE 쪽 노션 반영 전이라 남아있을 수 있음 —
-     반영 여부는 다음에 문서 동기화할 때 확인.
-
-## 2026-09-19 세션 — 챗봇 토큰 스트리밍 + evidence 구현
-
-코드 감사 중 발견한 두 가지를 고쳤다 (Issue #48):
-
-- **진짜 토큰 단위 SSE 스트리밍**: 기존엔 `app/api/chat.py`가 LangGraph를 `ainvoke`로 끝까지
-  돌려 완성된 답변을 40자씩 잘라 흉내만 냈다(`docs/api정의서.md:1149` "토큰 단위로 스트리밍
-  반환한다" 위반). `app/services/chat/graph.py`의 `agent_node`가 `model.astream(messages,
-  config=config)`로 실제 토큰을 받고, `app/api/chat.py`는 `compiled.astream_events(...,
-  version="v2")`로 `langgraph_node=="agent"`인 `on_chat_model_stream` 이벤트만 걸러 실시간
-  중계한다. 도구 호출 결정 턴은 보통 빈 content만 스트리밍하므로 `if chunk.content`로
-  자연히 걸러진다.
-  - **트레이드오프**: `StreamingResponse`는 반환되는 순간 200 헤더를 먼저 보내므로(Starlette
-    `stream_response` 확인 완료), 스트리밍이 시작된 뒤엔 502/504로 격상할 수 없다. 모델 호출
-    실패(`APITimeoutError`/`AnthropicError`)는 이제 in-stream 실패 문구로만 내려간다
-    (`app/api/chat.py`의 `_stream` 안 `except ApiError`). 기존엔 `ainvoke`를 먼저 끝까지
-    기다려서 실패를 깨끗한 HTTP 상태로 반환했었는데, 진짜 스트리밍과는 근본적으로 양립할 수
-    없는 속성이라 포기했다 — 모든 실시간 스트리밍 챗 API가 겪는 제약이다.
-- **evidence 근거값 채우기**: `app/api/chat.py`가 모든 청크에 `evidence: null`을 하드코딩하고
-  있었다(`docs/api정의서.md:1175` "서버 산출값과 반드시 일치해야 함" — 환각 검증 장치인데
-  미구현). `app/services/chat/graph.py`의 `tools_node`가 도구 조회 성공마다
-  `_build_evidence(tool_name, args, result)`로 `last_evidence`를 갱신하고, API 레이어가 다음
-  답변 청크마다 함께 실어 보낸다. `get_sales_summary`→`changeRate`, `get_forecast`→가장 가까운
-  `predictedSalesAmount`만 단일 값(`value`)으로 채우고, `get_category_breakdown`/
-  `get_hourly_profile`처럼 리스트형 응답은 `metric`/`period`만 채우고 `value`는 null이다
-  (여러 항목 중 어떤 수치를 답변이 인용했는지 지금은 모델이 알려주지 않아서 특정할 수 없음
-  — **알려진 한계**, 업그레이드하려면 모델이 구조화된 출력으로 어떤 값을 인용했는지 직접
-  표시하게 해야 함).
-- `tests/test_chat.py`의 `FakeModel`을 `.ainvoke`만 흉내내던 가짜 객체에서 `BaseChatModel`을
-  상속한 진짜 스트리밍 가짜 모델로 바꿨다(`_astream`으로 텍스트는 공백 단위 여러 청크, 툴
-  호출은 빈 content 한 청크). 새 테스트 2개 추가: 토큰이 여러 청크로 오는지, evidence가
-  도구 사용 여부에 따라 채워지는지.
-- `uv run pytest -q`: 40 passed. `uv run ruff check . / ruff format .`: 통과.
-- **미검증**: 실제 Anthropic API 스트리밍(로컬엔 `ANTHROPIC_API_KEY` 없음) — `GenericFakeChatModel`로
-  LangGraph `astream_events`가 `on_chat_model_stream`을 정상 발생시키는 것만 별도 스크립트로
-  확인했다. 실서비스 키로 curl 스모크 테스트 필요.
+마지막 갱신: 2026-09-21
+브랜치: `dev` (아래 PR 전부 머지 완료)
 
 ## 지금 어디
+
+**MVP 범위의 엔드포인트 4종이 모두 구현·머지됐고, 계약은 노션 기준으로 확정됐다.**
+남은 건 코드가 아니라 **연동 검증과 배포**다 — 아래 "다음 한 걸음" 참고.
+
+아래 "이번에 반영한 것"은 2026-09-16~17 계약 동기화 세션의 기록이다. 그 이후 작업은
+"2026-09-17~21"에 따로 적었다.
 
 BE와 최종 합의한 계약(`docs/api정의서.md`, `docs/ERD정의서.md` — 사용자가 직접 붙여넣음)을
 solutions/insights/chat 코드에 반영했다. `docs/contract-diff-wiki-vs-notion.md`(이전 세션이 작성한
@@ -81,10 +28,11 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
   67번 줄 전역 규칙("실패 응답은 기본적으로 `{"message":...,"data":null}`")과 문서 전체 40여 개
   실제 예시로 확인, `_body()`에 빠져 있던 걸 헥터가 지적해서 반영했다.
 - **서버 간 인증 삭제**: solutions/insights/chat 라우터에서 `Depends(verify_internal_key)` 제거.
-  `app/core/auth.py` 자체는 `forecast.py`가 아직 쓰고 있어서 남겨둠 — **헥터도 지워야 완전히 끝남.**
+  `app/core/auth.py` 자체는 `forecast.py`가 아직 쓰고 있어서 남겨둠.
+  → **완료(2026-09-17, PR #8).** `forecast.py`에서도 제거했다. 인바운드를 BE로만 제한하는
+  보안 그룹이 경계다. AI → BE 툴 호출의 `X-Internal-Api-Key`는 그대로 유지한다.
 - **라우터 prefix**: `/internal/ai` → `/internal/v1/ai` (solutions/insights/chat).
-  ⚠️ **`app/api/forecast.py`는 아직 `/internal/ai/forecast/batch`로 v1이 안 붙어있다** —
-  헥터에게 알릴 것 (방금 사용자가 `/internal/v1/ai/forecast/batch`로 확정한다고 확인해줌).
+  `app/api/forecast.py`도 `/internal/v1/ai/forecast/batch`로 맞췄다 → **완료(2026-09-17, PR #8).**
 - **비율 표기**: 한때 소수(0.62)→정수 퍼센트(62)로 바꿨었는데, 2026-09-17 API 정의서 재확인 +
   BE 확인 결과 **소수가 맞는 것으로 원복**했다(`app/schemas/common.py`의
   `SalesSummary.vsPrevPeriod`, `CategoryPoint.share/vsPrevPeriod`, `devtools/stub_backend.py`,
@@ -95,6 +43,7 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
   - 카드 필드 `rank`→`rankNo`, `detailContent`→`detailText`, `summaryText` 신규 추가.
   - 최상위 `aiInsight` 삭제 — 매출 AI 인사이트는 별도 엔드포인트 담당.
   - `evidence` 필드 삭제 — ERD `solutions` 테이블에 evidence 컬럼이 없음(확인 완료).
+    → **2026-09-21 뒤집힘.** AI가 생성하는 것으로 확정. 아래 "2026-09-21 결정" 참고.
   - 응답이 `{"message":...,"data":{...}}` 래퍼로 변경.
   - `salesAnalysisId`는 `SCHEDULED` 트리거일 땐 안 온다 — Optional로 변경.
   - 프롬프트 `solution_v2.py` 신규(파일명=`promptVersion` 규칙, v1은 이력으로 남김).
@@ -150,9 +99,62 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 - 기존 테스트(`test_solutions.py`/`test_insights.py`/`test_chat.py`) 전부 새 계약으로 재작성.
   401 테스트는 "인증 없어도 통과" 테스트로 대체.
 
+## 2026-09-17~21 (헥터, 예측 파트)
+
+- **80% 예측구간 추가** (PR #36): `app/services/forecast/intervals.py` 신설. 매장별 백테스트
+  잔차 분위수로 `lowerBound`/`upperBound`를 만든다. **신뢰구간이 아니라 예측구간이다** —
+  "다음에 실제로 찍힐 값이 이 범위에 들어올 확률 80%"라는 뜻.
+  - 누수 없는 백테스트(분위수를 평가 시점보다 **엄격히 이전** 원점에서만 뽑음)로 검증:
+    목표 80% → **실측 80.0%**, 목표 90% → 90.3%.
+  - 잔차 왜도가 +1.18이라 **구간이 비대칭이다**(−17% / +25%). 의도한 것이다.
+  - ⚠️ **일별 구간을 더해서 기간 구간을 만들면 안 된다** — 약 1.5배 과대평가된다.
+    기간 단위가 필요하면 별도로 산출해야 한다.
+  - 표본이 매장 한 곳(267일)이라 `DEFAULT_QUANTILES`는 잠정치다. 데이터가 늘면 재측정한다.
+  - `_incomplete_months`를 `features.py`의 공개 `incomplete_months()`로 옮겼다
+    (`service.py`·`intervals.py` 양쪽에서 쓰는데 순환 import가 나서).
+- **`modelVersion`을 날짜형으로 변경** (PR #29): `ridge_v2` → `ridge-2026-09-16`.
+  팀의 릴리스 버전(v1 MVP / v2 순이익 / v3 리뷰)과 헷갈리지 않고, 문자열 정렬만으로
+  최신 버전이 나와 BE가 최신 예측을 고르기 쉽다. 프롬프트 `VERSION` 상수와 같은 규칙이다.
+- **ERD 사본 금액 타입 갱신** (PR #33): `predicted_sales_amount`를 `BIGINT UNSIGNED`로.
+  이후 BE가 `lower_bound`/`upper_bound`와 `UNIQUE (store_id, target_date)`,
+  `CHECK (lower_bound <= predicted_sales_amount <= upper_bound)`를 반영했다.
+- **AGENTS.md 계약 기준을 노션으로 갱신** (PR #31): 금액·개수는 정수 / 비율·증감률은 소수
+  규칙을 명문화했다. 이 표기가 두 번 뒤집혔던 적이 있어서 규칙으로 못 박았다.
+- **ARCHITECTURE.md에 예측 파이프라인 추가** (PR #38): §4.6 "예측은 LLM을 쓰지 않는다".
+- **`devtools/interval_backtest.py` 신설**: 예측구간 커버리지 재측정용.
+- **`devtools/forecast_check.py` 수정**: 새 경로·api-key 제거 반영, `lowerBound`/`upperBound`
+  검사와 `failReason` 검증 추가. 결측 시나리오가 92일짜리 파일에서 아무것도 안 지우고
+  통과하던 버그도 고쳤다(인덱스를 `len(rows)//2`로 변경).
+
+## 2026-09-21 결정 (evidence 3종)
+
+`evidence`는 세 군데에 나오는데 형태도 목적도 다르다. 혼동이 반복돼서 여기 고정한다.
+
+| | 형태 | 화면 노출 | 용도 | 상태 |
+|---|---|---|---|---|
+| 챗봇 | 구조화 객체 `{metric, period, value}` | ❌ | 답변 수치가 서버 산출값과 같은지 검증 | ✅ 구현 완료, `chat_messages.evidence_json` |
+| 솔루션 | 한 문장 문자열 | ✅ | 이 카드를 왜 추천했는지 설명 | 🔜 AI 생성으로 확정, BE 컬럼 요청함 |
+| 인사이트 | — | — | — | ❌ **V1 범위 아님** |
+
+- **솔루션**: `solutions.evidence_text TEXT NULL` 컬럼을 승민에게 요청했다. AI 응답에
+  `evidence` 필드를 추가한다(제나 영역 — `prompts/solution.py`, `schemas/solution.py`,
+  `tests/test_solutions.py`). `NULL` 허용으로 여는 이유는 LLM이 근거를 못 뽑았을 때
+  재시도 후 500이 나는 걸 막기 위해서다.
+  - v2에서 요약 모델로 교체하더라도 **생성 주체만 바뀌고 계약은 그대로**라, 지금 필드를
+    확정해두면 마이그레이션을 한 번 덜 돈다.
+- **인사이트**: 제외한다. 인사이트는 처방이 아니라 **관찰**이라(`app/prompts/insight.py`의
+  "제안은 하지 말고 관찰되는 사실만") **문장 자체가 이미 근거다.** 붙이면 동어반복이 된다.
+  AN-01 화면도 불릿 3개라 근거를 넣을 자리가 없다. 저장하려면 컬럼 추가가 아니라
+  `sales_ai_insights.insights`의 JSON 구조를 `["문장"]` → `[{text, evidence}]`로 바꿔야 해서
+  이미 구현된 BE 엔티티까지 건드려야 한다 — 얻는 것 대비 범위가 크다.
+  - 인사이트에도 수치는 들어간다("3주 연속"). 환각 위험은 있지만 그건 **DB 컬럼 문제가 아니라
+    생성 시점 검증 문제**다. 필요해지면 AI 쪽 서버 검증으로 푼다.
+
+**규칙: 처방에는 근거가 붙고, 관찰에는 안 붙는다.** 관찰은 그 자체가 근거다.
+
 ## 마지막으로 통과한 것
 
-- `uv run pytest -q` — 34 passed
+- `uv run pytest -q` — 38 passed (2026-09-21)
 - `uv run ruff check --fix . && uv run ruff format .` — 통과
 - 서버 실기동 후 curl: 3개 라우트(`solutions/generate`, `sales-insights`, `chat/messages`) 전부
   새 경로로 노출, 422 응답이 새 플랫 포맷(`{"message":...}`)인지 확인
@@ -160,11 +162,19 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 
 ## 다음 한 걸음
 
-- 커밋 승인 대기 (`feat/21-contract-sync`, Issue #21)
-- **헥터에게 알릴 것**: (1) `forecast.py` 라우터 prefix에 `/v1` 누락, (2) `verify_internal_key`
-  삭제 결정이 `forecast.py`에도 적용되는지, (3) `Metrics`에 순이익 필드가 없어 BE가 solutions
-  요청에 순이익 지표를 넣어 보내도 `extra="ignore"`때문에 조용히 버려짐(설계 원칙 문서엔 "순이익·리뷰
-  요약"도 metrics에 포함된다고 돼 있음 — 실제로 필요한 시점에 필드 추가 필요)
+**코드가 아니라 연동·배포가 남았다.** 위험한 순서대로:
+
+1. **실제 Claude 호출 1회 검증** — 솔루션·인사이트·챗봇이 전부 monkeypatch로만 테스트됐다.
+   진짜 호출 경로는 한 번도 안 돌았다. `ANTHROPIC_API_KEY`를 넣고 엔드포인트 3종을 한 번씩만
+   쏴보면 된다. 연동일에 처음 쏘면 터지는 게 계약이 아니라 클라이언트 코드라 원인 추적이 길어진다.
+2. **BE 일별 집계 대조** — 승민에게 샘플 JSON을 요청해둔 상태.
+   `uv run python -m devtools.forecast_check --pos <POS 엑셀> --be-daily <json>`.
+   대조 없이 붙이면 예측값이 조용히 달라진다.
+3. **ECR push** — `.github/workflows/ci.yml` 끝에 주석으로 남아 있다. 클라우드 팀이
+   **리포지토리 이름**과 **인증 방식(OIDC role vs access key)** 을 확정해야 한다.
+   지금은 이미지가 빌드만 되고 올릴 곳이 없어서 배포가 막혀 있다.
+4. **솔루션 `evidence` 구현** — 제나 영역. 스펙 전달 완료(위 "2026-09-21 결정" 참고).
+5. 제나 PR 리뷰 — #49(챗봇 SSE 스트리밍), #51(BE 문서 최신본).
 
 ## 미해결 결정
 
@@ -172,7 +182,10 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
   `data.missingData`로 통일"이라고 확정했다. 챗봇은 이 상태를 코드에서 판단할 명확한 트리거가
   없어서 아직 구현하지 않았다 — 지금은 LLM이 시스템 프롬프트 지시("데이터가 부족하면 부족하다고
   말하세요")로 자연어로만 표현한다. 언제 이 상태를 코드로 판정할지 BE와 조건 정의 필요.
-- **솔루션 metrics의 순이익/리뷰 요약**: 설계 설명엔 포함된다고 돼 있는데 스키마에 필드가 없다(위 참고).
+- **솔루션 metrics의 순이익(V2)/리뷰 요약(V3)**: 설계 설명엔 포함된다고 돼 있는데 `Metrics`
+  스키마에 필드가 없다. BE가 보내도 `extra="ignore"` 때문에 조용히 버려진다.
+  → **V2 착수 시점에 확정하기로 미뤘다(2026-09-21).** 지금 스펙이 없어도 안 깨지고,
+  지금 정해봐야 실제 기능을 만들 때 다시 바뀐다.
 - **인사이트 metrics의 정확한 MENU 전용 필드명**: "menu_net_amount와 MENU 전용 일별·요일별·
   시간대별·카테고리별 지표"라는 서술만 있고 리터럴 JSON 예시가 없다. BE 확인 필요.
 
