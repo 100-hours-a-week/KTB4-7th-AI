@@ -34,5 +34,5 @@ def test_인사이트_프롬프트에_지표가_들어간다():
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-09-17"
+    assert solution.VERSION == "2026-09-21"
     assert insight.VERSION == "2026-09-17"
