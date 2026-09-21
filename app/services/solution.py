@@ -23,7 +23,7 @@ def _day_facts(target_date: str) -> tuple[str, bool]:
 
 def _parse(raw: str) -> list[SolutionCard] | None:
     try:
-        data = json.loads(raw)
+        data = json.loads(llm.strip_fence(raw))
         return [SolutionCard(**card) for card in data["solutionCards"]]
     except Exception:
         return None

@@ -81,3 +81,21 @@ async def test_LLM_파싱이_계속_실패하면_500_이고_1회만_재시도한
 
     assert res.status_code == 500
     assert len(calls) == 2, "최초 시도 + 재시도 1회 = 2번 호출되어야 한다"
+
+
+async def test_모델이_JSON을_코드펜스로_감싸도_파싱된다(monkeypatch):
+    """실제 Claude 는 프롬프트에 "JSON만 출력" 이라고 써도 ```json 펜스를 붙여 내려준다.
+
+    2026-09-21 실호출(devtools/llm_smoke.py)에서 발견 — 이 때문에 두 번 다 파싱에 실패해
+    500 이 났다. 단위 테스트는 전부 순수 JSON 만 흘려서 못 잡던 구멍이다.
+    """
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        return f"```json\n{LLM_SUCCESS}\n```"
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert res.json()["data"]["solutionCards"][0]["rankNo"] == 1

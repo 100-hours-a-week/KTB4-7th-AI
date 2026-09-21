@@ -1,3 +1,5 @@
+import re
+
 import anthropic
 from anthropic import AsyncAnthropic
 
@@ -12,6 +14,19 @@ def _get() -> AsyncAnthropic:
     if _client is None:
         _client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     return _client
+
+
+_FENCE = re.compile(r"^```(?:json)?\s*\n(.*)\n```\s*$", re.DOTALL)
+
+
+def strip_fence(raw: str) -> str:
+    """모델이 JSON 을 ```json 펜스로 감싸 내려주는 경우가 있어 벗긴다.
+
+    "설명 없이 JSON만 출력하세요" 를 프롬프트에 써도 지켜지지 않는다 — 실제 호출로 확인했다
+    (2026-09-21, devtools/llm_smoke.py). 펜스가 없으면 원문을 그대로 돌려준다.
+    """
+    match = _FENCE.match(raw.strip())
+    return match.group(1) if match else raw
 
 
 async def complete(system: str, user: str, max_tokens: int = 2000) -> str:

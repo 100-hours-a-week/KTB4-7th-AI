@@ -73,3 +73,17 @@ async def test_LLM_파싱이_계속_실패하면_500_이고_1회만_재시도한
 
     assert res.status_code == 500
     assert len(calls) == 2, "최초 시도 + 재시도 1회 = 2번 호출되어야 한다"
+
+
+async def test_모델이_JSON을_코드펜스로_감싸도_파싱된다(monkeypatch):
+    """솔루션과 같은 이유 — tests/test_solutions.py 의 같은 이름 테스트 참고."""
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        return f"```json\n{LLM_SUCCESS}\n```"
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert res.json()["data"]["insights"]

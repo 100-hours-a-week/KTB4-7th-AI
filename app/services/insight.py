@@ -16,7 +16,7 @@ MAX_RETRY = 1
 
 def _parse(raw: str) -> list[str] | None:
     try:
-        data = json.loads(raw)
+        data = json.loads(llm.strip_fence(raw))
         insights = data["insights"]
         if not isinstance(insights, list) or not all(isinstance(i, str) for i in insights):
             return None
