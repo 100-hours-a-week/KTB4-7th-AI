@@ -153,29 +153,72 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 
 **규칙: 처방에는 근거가 붙고, 관찰에는 안 붙는다.** 관찰은 그 자체가 근거다.
 
+## 2026-09-21 오후 (제나 휴가 중 — 헥터가 에이전트 파트까지 진행)
+
+실제 Claude API 키를 처음 받아 실호출을 돌렸고, **CI 가 못 잡는 P0 를 두 건** 찾았다.
+둘 다 원인이 같다 — **목(mock)이 실제 모델과 달라서 단위 테스트가 계속 통과했다.**
+
+- **코드펜스** (PR #60, 이슈 #59): 모델이 JSON 을 ```json 펜스로 감싸 내려줘 솔루션·인사이트가
+  실호출에서 100% 500 이 났다. Anthropic 응답은 200 OK 고 파싱만 깨진다. 프롬프트에
+  "설명 없이 JSON만 출력하세요" 가 있지만 지켜지지 않는다 — 프롬프트 대신 코드에서 벗긴다
+  (`llm.strip_fence`). 재시도도 매번 같은 결과라 요청 1건당 API 를 2번 쓰고 500 이 났다.
+  못 잡은 이유: 테스트가 `llm.complete` 를 monkeypatch 하고 **순수 JSON 만** 흘려줬다.
+- **챗봇 도구 내부 노출** (PR #63, 이슈 #62): SSE 가 도구 호출 턴의 content 를 그대로
+  내보내 `toolu_...` ID·도구 이름·인자가 사용자에게 샜다. 계약상 `content` 는 문자열인데
+  리스트가 나갔다. Anthropic 은 도구 호출 턴 content 를 **빈 문자열이 아니라 블록 리스트**로
+  스트리밍한다 — `if chunk.content:` 로는 안 걸러진다(`_text_of` 추가).
+  못 잡은 이유: `FakeModel` 이 도구 호출 턴을 `AIMessageChunk(content="")` 로 흉내냈다.
+  PR #49 에서 들어왔고, 6be11b8(#55·#61 머지 전)에서도 재현돼 오늘 머지와 무관함을 확인했다.
+
+**교훈**: LLM 경로를 건드리는 PR 은 머지 전에 `uv run python -m devtools.llm_smoke --with-chat`
+를 한 번 돌린다. CI 는 실호출을 하지 않으므로 이 종류의 버그를 구조적으로 못 잡는다.
+
+머지한 제나 PR:
+
+- **#55 솔루션 evidence** — `SolutionCard.evidence: str | None = None`. NULL 허용이라 LLM 이
+  근거를 못 뽑아도 재시도 후 500 이 나지 않는다. BE 에 `solutions.evidence_text TEXT NULL`
+  컬럼을 요청해둔 상태다.
+- **#61 LLM provider 추상화** — Claude/OpenAI/Google/Upstage 스위칭. 머지 전에 워크트리에서
+  시뮬레이션해 `strip_fence`(#60)가 살아남는지 확인하고 넣었다. `LLM_PROVIDER` 기본값은
+  `anthropic` 이다.
+  ⚠️ **anthropic 외 3개 경로는 실호출로 검증된 적이 없다.** `tests/test_llm_providers.py` 는
+  클라이언트 생성만 보는 mock 테스트다. 실제로 쓰기 전에 키를 넣고 `llm_smoke` 를 돌려야 한다.
+- **#65** 낡은 `X-Internal-Api-Key` 문구 삭제, `AGENTS.md` 스텁 실행 명령 정정
+  (`uv run python devtools/stub_backend.py` 는 ModuleNotFoundError 로 죽는다).
+
+기타:
+
+- **BE 일별 집계 대조 완료** — 승민이 취소 처리를 고친 뒤 재대조해 **62/62일 금액·주문 수
+  완전 일치**. BE 요청 바디를 그대로 예측 API 에 쏴 200 + 35건을 받았고, 예측 일평균
+  1,255,790 원이 6월 실적 일평균 1,262,408 원과 0.5% 차이였다.
+- **인사이트 프롬프트에 수치 인용 규칙 추가** — 실호출 3회 중 1회에서 18시 매출 210,000 원을
+  "30만원"으로 어림했다. 비율(7배)은 맞고 절대값만 틀렸다.
+
 ## 마지막으로 통과한 것
 
-- `uv run pytest -q` — 38 passed (2026-09-21)
+- `uv run pytest -q` — 69 passed (2026-09-21 오후)
+- `uv run python -m devtools.llm_smoke --with-chat` — 솔루션·인사이트·챗봇 3종 실호출 통과
+- `uv run python -m devtools.forecast_check --pos <엑셀> --be-daily <BE 샘플>` — 62/62일 일치
 - `uv run ruff check --fix . && uv run ruff format .` — 통과
 - 서버 실기동 후 curl: 3개 라우트(`solutions/generate`, `sales-insights`, `chat/messages`) 전부
   새 경로로 노출, 422 응답이 새 플랫 포맷(`{"message":...}`)인지 확인
-- **미검증**: 실제 Claude 호출 (여전히 `ANTHROPIC_API_KEY` 없음, monkeypatch로만 검증)
+- **미검증**: anthropic 외 provider(openai/google/upstage) 실호출 — mock 테스트만 있다.
 
 ## 다음 한 걸음
 
-**코드가 아니라 연동·배포가 남았다.** 위험한 순서대로:
+실호출 검증(1)과 BE 집계 대조(2)는 2026-09-21 에 끝났다. **남은 블로커는 ECR 하나다.**
 
-1. **실제 Claude 호출 1회 검증** — 솔루션·인사이트·챗봇이 전부 monkeypatch로만 테스트됐다.
-   진짜 호출 경로는 한 번도 안 돌았다. `ANTHROPIC_API_KEY`를 넣고 엔드포인트 3종을 한 번씩만
-   쏴보면 된다. 연동일에 처음 쏘면 터지는 게 계약이 아니라 클라이언트 코드라 원인 추적이 길어진다.
-2. **BE 일별 집계 대조** — 승민에게 샘플 JSON을 요청해둔 상태.
-   `uv run python -m devtools.forecast_check --pos <POS 엑셀> --be-daily <json>`.
-   대조 없이 붙이면 예측값이 조용히 달라진다.
-3. **ECR push** — `.github/workflows/ci.yml` 끝에 주석으로 남아 있다. 클라우드 팀이
+1. 🔴 **ECR push** — `.github/workflows/ci.yml` 끝에 주석으로 남아 있다. 클라우드 팀이
    **리포지토리 이름**과 **인증 방식(OIDC role vs access key)** 을 확정해야 한다.
-   지금은 이미지가 빌드만 되고 올릴 곳이 없어서 배포가 막혀 있다.
-4. **솔루션 `evidence` 구현** — 제나 영역. 스펙 전달 완료(위 "2026-09-21 결정" 참고).
-5. 제나 PR 리뷰 — #49(챗봇 SSE 스트리밍), #51(BE 문서 최신본).
+   지금은 이미지가 빌드만 되고 올릴 곳이 없어서 배포가 막혀 있다. **AI 파트에서 배포를 막는
+   유일한 항목이다.**
+2. **제나 복귀 후 리뷰** — 휴가 중 담당 영역을 세 번 건드렸다. #60(코드펜스), #63(챗봇 도구
+   노출), 그리고 #61 머지 판단. 방향이 다르면 되돌린다.
+3. **`docs/api정의서.md` 솔루션 응답 예시에 `evidence` 가 빠져 있다** — #55 로 AI 가 내보내기
+   시작했는데 예시 2개 모두 `rankNo/title/summaryText/detailText` 만 있다. FE 가 이 예시를
+   보고 만들면 근거 칸이 빈다. BE 담당 문서라 AI 가 직접 고치지 않는다 — 노션 원본 갱신 요청.
+4. **`llm_model` 기본값이 `claude-sonnet-4-5`** (최신은 `claude-sonnet-5`). 버그가 아니라
+   개선이고, 바꾸면 품질·비용이 달라지므로 연동 후에 `llm_smoke` 와 함께 판단한다.
 
 ## 미해결 결정
 
@@ -189,6 +232,12 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
   지금 정해봐야 실제 기능을 만들 때 다시 바뀐다.
 - **인사이트 metrics의 정확한 MENU 전용 필드명**: "menu_net_amount와 MENU 전용 일별·요일별·
   시간대별·카테고리별 지표"라는 서술만 있고 리터럴 JSON 예시가 없다. BE 확인 필요.
+- **`modelVersion` 을 저장할 것인가** (2026-09-21 신규): #61 이 형식을 `{provider}:{model}` 로
+  바꾼 이유가 "provider 비교 평가" 인데, 정작 저장되는 곳이 없다 — `solutions`·
+  `solution_bundles` 에 컬럼이 없고(`sales_forecasts` 에만 `model_version VARCHAR(50)` 존재),
+  인사이트·챗봇 응답에는 `modelVersion` 필드 자체가 없다. 지금 구조로는 응답을 볼 때만 보이고
+  쌓이지 않아 비교가 불가능하다. 실제로 비교할 생각이면 `solution_bundles` 컬럼 + 인사이트·
+  챗봇 응답 필드가 필요하다. **V1 에서는 그대로 두고 V2 에서 정하는 쪽을 권한다.**
 
 ## 설계상 확정된 사실 (미해결 아님 — 혼동 방지용)
 
