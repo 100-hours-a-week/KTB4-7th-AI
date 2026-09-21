@@ -55,7 +55,12 @@ def is_menu(name: str) -> bool:
 
 
 def build_daily_sales(pos_path: Path) -> list[dict]:
-    """전처리 규칙대로 일별 메뉴 매출과 유효 주문 수를 만든다(취소 행 포함 합산)."""
+    """전처리 규칙대로 일별 메뉴 매출과 유효 주문 수를 만든다.
+
+    취소 행을 포함해서 합산한다. POS 는 주문을 취소해도 원본 `완료` 행을 남기고 금액·수량이
+    음수인 `취소` 행을 덧붙이므로, 전부 더해야 취소분이 상쇄된 순매출이 나온다.
+    `결제상태 == "완료"` 로 거르면 취소된 주문이 매출로 잡힌다.
+    """
     df = pd.read_excel(pos_path, sheet_name="상품 주문 상세내역", skiprows=[1], dtype=str)
     df.columns = [" ".join(str(c).split()) for c in df.columns]
     amount_col = next(c for c in df.columns if c.startswith("실판매금액"))
@@ -67,9 +72,9 @@ def build_daily_sales(pos_path: Path) -> list[dict]:
     menu = df[df["menu_name"].map(is_menu)].copy()
 
     amounts = menu.groupby("date")["amount"].sum()
-    menu["order_key"] = list(
-        zip(menu["주문채널"], menu["주문번호"], menu["주문시작시각"], strict=True)
-    )
+    # 주문 식별은 (채널, 주문번호) 까지다. 주문시작시각을 키에 넣으면 같은 주문이 쪼개져
+    # 주문 수가 부풀려진다 — BE 집계와 대조해서 확인했다(2026-09-21).
+    menu["order_key"] = list(zip(menu["주문채널"], menu["주문번호"], strict=True))
     per_order = menu.groupby(["date", "order_key"])["quantity"].sum()
     counts = per_order[per_order > 0].reset_index().groupby("date").size()
 
@@ -112,7 +117,10 @@ class Ai:
 
 
 def compare_with_be(mine: list[dict], be_path: Path) -> None:
-    be = {r["date"]: r for r in json.loads(be_path.read_text())}
+    payload = json.loads(be_path.read_text())
+    # BE 가 보내주는 파일이 요청 바디 통째일 때도 있고 dailySales 배열만일 때도 있다.
+    be_rows = payload["dailySales"] if isinstance(payload, dict) else payload
+    be = {r["date"]: r for r in be_rows}
     ours = {r["date"]: r for r in mine}
     only_ai = sorted(set(ours) - set(be))
     only_be = sorted(set(be) - set(ours))
