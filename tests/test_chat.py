@@ -31,7 +31,9 @@ REQUEST_BODY = {
 class FakeModel(BaseChatModel):
     """.astream 호출마다 미리 정해둔 AIMessage 를 실제 모델처럼 토큰 단위로 쪼개 돌려준다.
 
-    tool_calls 가 있는 응답은 빈 content 한 청크로(실제 Anthropic 툴 호출 턴과 동일하게),
+    tool_calls 가 있는 응답은 실제 Anthropic 이 보내는 그대로 **블록 리스트** content 로
+    스트리밍한다 — 빈 문자열이 아니다. 이걸 빈 content 로 흉내내던 탓에 도구 호출 내부가
+    사용자에게 그대로 새는 버그를 테스트가 못 잡았다(2026-09-21 실호출에서 발견).
     텍스트 응답은 공백 기준 여러 청크로 나눠 진짜 스트리밍과 구분되게 만든다.
     """
 
@@ -53,8 +55,26 @@ class FakeModel(BaseChatModel):
         if isinstance(message, Exception):
             raise message
         if message.tool_calls:
+            call = message.tool_calls[0]
             yield ChatGenerationChunk(
-                message=AIMessageChunk(content="", tool_calls=message.tool_calls)
+                message=AIMessageChunk(
+                    content=[
+                        {
+                            "type": "tool_use",
+                            "id": call["id"],
+                            "name": call["name"],
+                            "input": {},
+                            "index": 0,
+                        }
+                    ],
+                    tool_calls=message.tool_calls,
+                )
+            )
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content=[{"type": "input_json_delta", "partial_json": '{"period"', "index": 0}],
+                    tool_calls=message.tool_calls,
+                )
             )
             return
         words = message.content.split(" ")
@@ -233,3 +253,32 @@ async def test_history의_role이_BE_DB값인_대문자여도_통과한다(monke
 
     assert res.status_code == 200
     assert "이전 질문 이어서" in "".join(_answer_chunks(res.text))
+
+
+async def test_도구_호출_내부가_답변_청크로_새지_않는다(monkeypatch):
+    """Anthropic 은 도구 호출 턴 content 를 블록 리스트로 스트리밍한다.
+
+    그대로 내보내면 계약(content: str)이 깨지고 toolu_... ID 와 인자가 사용자에게 샌다.
+    2026-09-21 실호출(devtools/llm_smoke.py)에서 발견한 회귀다.
+    """
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{"name": "get_sales_summary", "args": {"period": "TODAY"}, "id": "toolu_01AB"}],
+    )
+    _patch_model(monkeypatch, [tool_call_msg, AIMessage(content="오늘 매출은 32만원이에요.")])
+
+    async def fake_call_tool(tool: str, params: dict) -> dict:
+        return {"period": {"startDate": "2026-09-19"}, "totalSales": 320000, "changeRate": 0.12}
+
+    monkeypatch.setattr(backend, "call_tool", fake_call_tool)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    events = _events(res.text)
+    assert all(isinstance(e["content"], str) for e in events), "content 는 항상 문자열이어야 한다"
+    joined = "".join(e["content"] for e in events)
+    assert "toolu_" not in joined
+    assert "tool_use" not in joined
+    assert "input_json_delta" not in joined
+    assert "32만원" in joined
