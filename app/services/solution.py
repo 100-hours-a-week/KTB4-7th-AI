@@ -7,7 +7,6 @@ import json
 from datetime import date
 
 from app.clients import llm
-from app.core.config import settings
 from app.core.errors import ApiError
 from app.prompts import solution as solution_prompt
 from app.schemas.solution import SolutionCard, SolutionData, SolutionRequest, SolutionResponse
@@ -48,6 +47,6 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
         data=SolutionData(
             targetDate=req.targetDate,
             solutionCards=cards,
-            modelVersion=settings.llm_model,
+            modelVersion=llm.model_label(),
         )
     )
