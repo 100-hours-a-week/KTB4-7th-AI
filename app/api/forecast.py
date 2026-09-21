@@ -23,6 +23,6 @@ def forecast_batch(req: ForecastRequest) -> ForecastResponse | InsufficientHisto
     학습 중에 멈추지 않는다.
 
     앱 레벨 인증은 두지 않는다 — 인바운드를 BE 로만 제한하는 보안 그룹이 경계다
-    (2026-09-16 팀 결정). AI → BE 툴 호출의 `X-Internal-Api-Key` 는 그대로 유지한다.
+    (2026-09-16 팀 결정).
     """
     return run_forecast(req)

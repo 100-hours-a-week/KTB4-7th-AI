@@ -30,7 +30,8 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 - **서버 간 인증 삭제**: solutions/insights/chat 라우터에서 `Depends(verify_internal_key)` 제거.
   `app/core/auth.py` 자체는 `forecast.py`가 아직 쓰고 있어서 남겨둠.
   → **완료(2026-09-17, PR #8).** `forecast.py`에서도 제거했다. 인바운드를 BE로만 제한하는
-  보안 그룹이 경계다. AI → BE 툴 호출의 `X-Internal-Api-Key`는 그대로 유지한다.
+  보안 그룹이 경계다. AI → BE 툴 호출에도 `X-Internal-Api-Key` 를 쓰지 않는다 —
+  `app/clients/backend.py` 의 `call_tool` 은 인증 헤더를 보내지 않는다(2026-09-21 확인).
 - **라우터 prefix**: `/internal/ai` → `/internal/v1/ai` (solutions/insights/chat).
   `app/api/forecast.py`도 `/internal/v1/ai/forecast/batch`로 맞췄다 → **완료(2026-09-17, PR #8).**
 - **비율 표기**: 한때 소수(0.62)→정수 퍼센트(62)로 바꿨었는데, 2026-09-17 API 정의서 재확인 +
