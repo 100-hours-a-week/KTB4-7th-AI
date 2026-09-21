@@ -14,6 +14,7 @@ Backend가 전달한 데이터만 사용하며 **서비스 DB에 직접 접근�
 | 예측 연동 점검 | `uv run python -m devtools.forecast_check --pos <POS 엑셀>` |
 | 예측구간 커버리지 | `uv run python -m devtools.interval_backtest --pos <POS 엑셀> ...` |
 | 실호출 검증 | `uv run python -m devtools.llm_smoke --with-chat` (요금 발생 · 스텁 BE 필요) |
+| 요청 계약 대조 | `uv run python -m devtools.contract_check --check <엔드포인트> <BE 샘플>` |
 
 ## 담당 경계
 
