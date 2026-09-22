@@ -251,7 +251,7 @@ async def test_모델_타임아웃은_504라_BE가_재시도한다(monkeypatch):
     from app.core.errors import ApiError
 
     async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
-        raise ApiError(504, "LLM_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다.")
+        raise ApiError(504, "PROVIDER_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다.")
 
     monkeypatch.setattr(llm, "complete", fake_complete)
 

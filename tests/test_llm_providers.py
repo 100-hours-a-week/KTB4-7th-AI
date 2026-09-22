@@ -85,13 +85,13 @@ async def test_google_provider는_genai_Client로_생성한다(monkeypatch):
     assert await llm.complete("sys", "user") == "google-ok"
 
 
-async def test_지원하지_않는_provider면_LLM_ERROR를_던진다(monkeypatch):
+async def test_지원하지_않는_provider면_PROVIDER_ERROR를_던진다(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "unknown")
 
     with pytest.raises(ApiError) as exc_info:
         await llm.complete("sys", "user")
 
-    assert exc_info.value.code == "LLM_ERROR"
+    assert exc_info.value.code == "PROVIDER_ERROR"
 
 
 async def test_openai_reasoning_모델이면_reasoning_effort를_none으로_보낸다(monkeypatch):
@@ -174,7 +174,7 @@ def test_model_label은_openai_reasoning_모델을_off로_끈_경우_off가_붙�
     assert llm.model_label() == "openai:gpt-5.6-luna-off"
 
 
-async def test_provider_호출이_타임아웃되면_LLM_TIMEOUT을_던진다(monkeypatch):
+async def test_provider_호출이_타임아웃되면_PROVIDER_TIMEOUT을_던진다(monkeypatch):
     import anthropic
     import httpx
 
@@ -193,4 +193,4 @@ async def test_provider_호출이_타임아웃되면_LLM_TIMEOUT을_던진다(mo
     with pytest.raises(ApiError) as exc_info:
         await llm.complete("sys", "user")
 
-    assert exc_info.value.code == "LLM_TIMEOUT"
+    assert exc_info.value.code == "PROVIDER_TIMEOUT"
