@@ -267,6 +267,7 @@ async def test_BE_응답제한_30초_안에_들어오는_타임아웃을_쓴다(
     전역 LLM_TIMEOUT_SECONDS(60)를 그대로 쓰면 최악 120초라, BE 가 끊은 뒤에도
     이쪽만 토큰을 계속 태운다.
     """
+    from app.core.config import settings
     from app.services import insight as insight_service
 
     seen = []
@@ -278,5 +279,106 @@ async def test_BE_응답제한_30초_안에_들어오는_타임아웃을_쓴다(
     monkeypatch.setattr(llm, "complete", fake_complete)
     await _post(REQUEST_BODY)
 
-    assert seen == [insight_service.TIMEOUT_SECONDS]
-    assert insight_service.TIMEOUT_SECONDS * (insight_service.MAX_RETRY + 1) < 30
+    budget = settings.insight_llm_timeout_seconds
+    assert seen == [budget], "전역값이 아니라 인사이트 전용 예산을 써야 한다"
+    assert budget * (insight_service.MAX_RETRY + 1) < 30
+
+
+async def test_인사이트_타임아웃은_환경변수로_조절된다(monkeypatch):
+    """운영에서 조절할 수 없으면 504 재현도 못 한다 — BE 가 테스트 가능 여부를 물었다."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "insight_llm_timeout_seconds", 0.5)
+    seen = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        seen.append(timeout)
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    await _post(REQUEST_BODY)
+
+    assert seen == [0.5]
+
+
+def _metrics(**overrides) -> dict:
+    m = json.loads(json.dumps(REQUEST_BODY["metrics"]))
+    m.update(overrides)
+    return m
+
+
+async def test_주문이_0건이면_LLM을_부르지_않고_INSUFFICIENT_DATA(monkeypatch):
+    """BE 가 영업일 14일 미만은 거르지만, 그 검사를 통과하고도 지표가 빌 수 있다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        calls.append(1)
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    summary = dict(REQUEST_BODY["metrics"]["salesSummary"], orderCount=0)
+    res = await _post({**REQUEST_BODY, "metrics": _metrics(salesSummary=summary)})
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "INSUFFICIENT_DATA"
+    assert body["data"]["missingData"] == ["SALES_HISTORY"]
+    assert "insights" not in body["data"]
+    assert calls == [], "재료가 없으면 LLM 을 부르지 않는다 — 토큰만 쓴다"
+
+
+async def test_총매출이_0원이면_INSUFFICIENT_DATA(monkeypatch):
+    """ "총매출은 0원입니다" 같은 문장이 200 으로 화면까지 나가던 경로다."""
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        raise AssertionError("호출되면 안 된다")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    summary = dict(REQUEST_BODY["metrics"]["salesSummary"], totalSales=0)
+    res = await _post({**REQUEST_BODY, "metrics": _metrics(salesSummary=summary)})
+
+    assert res.json()["status"] == "INSUFFICIENT_DATA"
+
+
+async def test_상세_지표가_전부_비면_INSUFFICIENT_DATA(monkeypatch):
+    """상세 지표 5종이 스키마에서 전부 기본값 [] 이라 salesSummary 만으로도 요청이 통과한다.
+
+    그 상태로 생성하면 요약 한 줄을 돌려 쓰는데 AN-01 은 3불릿 화면이다.
+    """
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        raise AssertionError("호출되면 안 된다")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(
+        {
+            **REQUEST_BODY,
+            "metrics": {"salesSummary": REQUEST_BODY["metrics"]["salesSummary"]},
+        }
+    )
+
+    assert res.json()["status"] == "INSUFFICIENT_DATA"
+
+
+async def test_상세_지표가_하나라도_있으면_생성한다(monkeypatch):
+    """경계값. 5종 중 하나만 있어도 관찰할 재료는 있다."""
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(
+        {
+            **REQUEST_BODY,
+            "metrics": {
+                "salesSummary": REQUEST_BODY["metrics"]["salesSummary"],
+                "categorySales": REQUEST_BODY["metrics"]["categorySales"],
+            },
+        }
+    )
+
+    assert res.json()["status"] == "COMPLETED"
