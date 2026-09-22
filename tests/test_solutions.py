@@ -128,3 +128,85 @@ async def test_모델이_JSON을_코드펜스로_감싸도_파싱된다(monkeypa
 
     assert res.status_code == 200
     assert res.json()["data"]["solutionCards"][0]["rankNo"] == 1
+
+
+def _cards(*specs) -> str:
+    return json.dumps(
+        {
+            "solutionCards": [
+                {
+                    "rankNo": rank,
+                    "title": title,
+                    "summaryText": "요약",
+                    "detailText": "상세",
+                    "evidence": "근거",
+                }
+                for rank, title in specs
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+async def test_rankNo가_겹치면_재시도한다(monkeypatch):
+    """BE 의 UNIQUE (solution_bundle_id, rank_no) 를 위반해 묶음 전체가 저장되지 않는다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _cards((1, "A"), (1, "B"), (2, "C"))
+        return _cards((1, "A"), (2, "B"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert [c["rankNo"] for c in res.json()["data"]["solutionCards"]] == [1, 2, 3]
+    assert len(calls) == 2
+
+
+async def test_title이_200자를_넘으면_재시도한다(monkeypatch):
+    """ERD solutions.title 이 VARCHAR(200) 이라 BE INSERT 에서 터진다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _cards((1, "가" * 201))
+        return _cards((1, "A"), (2, "B"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(calls) == 2
+
+
+async def test_카드가_3장보다_적으면_재시도하되_버리지는_않는다(monkeypatch):
+    """500 으로 그날 솔루션을 통째로 잃는 것보다 2장이라도 내보내는 편이 낫다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        return _cards((1, "A"), (2, "B"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(res.json()["data"]["solutionCards"]) == 2
+    assert len(calls) == 2, "3장이 아니면 한 번 더 시도해야 한다"
+
+
+async def test_카드가_0장이면_500이다(monkeypatch):
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        return json.dumps({"solutionCards": []})
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+    assert res.status_code == 500

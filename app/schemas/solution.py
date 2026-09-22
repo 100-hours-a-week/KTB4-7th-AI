@@ -15,8 +15,10 @@ class SolutionRequest(Contract):
 
 
 class SolutionCard(Contract):
-    rankNo: int
-    title: str
+    # 제약은 ERD solutions 테이블을 그대로 옮긴 것이다. 여기서 막지 않으면 AI 는 200 을
+    # 돌려주고 BE 가 INSERT 할 때 터진다 — AI 로그는 정상이라 원인 추적이 오래 걸린다.
+    rankNo: int = Field(ge=1)  # CHECK (rank_no > 0)
+    title: str = Field(max_length=200)  # VARCHAR(200)
     summaryText: str
     detailText: str = Field(max_length=1000)
     # NULL 허용: LLM이 근거를 못 뽑는 경우가 있어 필수로 두면 재시도 후에도 500이 난다.
