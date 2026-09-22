@@ -37,6 +37,24 @@ from app.core.config import (
 from app.core.errors import ApiError
 
 MAX_TOOL_FAILURES = 2
+
+# 프롬프트 캐싱은 아직 붙이지 않았다. 2026-09-22 실측(count_tokens, sonnet-4-5):
+#
+#   system(프롬프트 + context) 532 토큰 + 툴 스키마 1,569 = 2,101 토큰
+#
+# Sonnet 최소 단위 1024 를 넘고, agent↔tools 사이클이 모델을 2회 이상 부르므로 조건 자체는
+# 맞는다(1회차 쓰기 → 2회차 읽기). 그런데도 미루는 이유가 셋 있다.
+#
+# 1. 이익이 작다. 2회 루프 기준 입력 토큰의 약 20% 절약인데 입력이 2천 토큰대라 절대액이
+#    미미하다. v1 사용자 30명 규모에서는 더 그렇다.
+# 2. cache_control 은 Anthropic 전용이다. LLM_PROVIDER 추상화(#61)를 해둔 뒤라 캐싱을
+#    붙이면 provider 분기가 다시 생긴다.
+# 3. 기본 TTL 이 5분이다. 점주가 5분 안에 다음 질문을 해야 히트한다. 대화가 띄엄띄엄하면
+#    쓰기만 반복해 오히려 25% 손해다.
+#
+# 붙일 시점은 비용이 아니라 지연이 이유가 될 때다 — 캐시 읽기는 TTFB 를 줄여 체감이
+# 좋아진다. 툴이 6종으로 늘거나(2,300 토큰대), 재질문이 잦아지거나, provider 를 Claude 로
+# 고정하기로 하면 그때 다시 본다.
 FAILURE_PHRASE = "죄송합니다. 지금은 데이터를 조회하지 못했어요. 잠시 후 다시 시도해주세요."
 
 _EVIDENCE_METRIC_NAMES = {
