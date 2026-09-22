@@ -4,6 +4,9 @@ __pycache__/
 .ruff_cache/
 .git/
 .env
+**/.env
+**/.env.*
+.DS_Store
 tests/
 devtools/
 docs/
