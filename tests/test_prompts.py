@@ -62,3 +62,13 @@ def test_챗봇_프롬프트는_chatDate_를_오늘로_넣는다():
     without = chat.build_system([])
     assert "오늘은" not in without
     assert "지금 보고 있는 솔루션" in without
+
+
+def test_솔루션_프롬프트는_금액은_천단위로_비율은_백분율로_쓰게_한다():
+    """실호출에서 1,340,580 을 "134만 580원"으로, 0.0885 를 "-8.85% 감소"로 썼다.
+
+    후자는 음수 부호와 "감소"가 겹쳐 증가로 읽힌다(2026-09-22).
+    """
+    assert "천 단위로 끊어" in solution.SYSTEM
+    assert "백분율로 바꿔" in solution.SYSTEM
+    assert '음수 부호와 "감소"를 함께 쓰지' in solution.SYSTEM
