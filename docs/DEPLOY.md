@@ -1,0 +1,56 @@
+# AI 서버 배포 설정
+
+컨테이너를 띄울 때 필요한 값만 적는다. 코드 변경 없이 환경변수로만 주입한다.
+
+## 환경변수
+
+`.env` 는 `.dockerignore` 에 있어 이미지에 들어가지 않는다. **런타임에 환경변수로 넣어야 한다.**
+
+| 이름 | 필수 | 예시 | 안 넣으면 |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | ✅ | `sk-ant-...` | 모든 LLM 호출이 **502** |
+| `BACKEND_BASE_URL` | ✅ | `http://backend:8080` | 챗봇이 **컨테이너 자기 자신**을 호출해 `BACKEND_ERROR` |
+| `LLM_PROVIDER` | | `anthropic` (기본) | — |
+| `LLM_MODEL` | | `claude-sonnet-4-5` (기본) | — |
+| `LLM_TIMEOUT_SECONDS` | | `60` (기본) | — |
+| `BACKEND_TIMEOUT_SECONDS` | | `2.0` (기본) | — |
+
+`LLM_PROVIDER` 를 바꾸면 해당 provider 의 키가 대신 필요하다
+(`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `UPSTAGE_API_KEY`).
+**anthropic 외 provider 는 실호출로 검증된 적이 없다.**
+
+## 주의: 설정이 틀려도 기동은 성공한다
+
+두 필수값 모두 코드에 기본값이 있어서 **앱은 정상 기동하고 `/health` 도 200 을 돌려준다.**
+배포는 성공한 것처럼 보이고 첫 요청에서 터진다.
+
+기동 로그에서 아래 줄이 보이면 환경변수가 빠진 것이다.
+
+```
+ERROR app.main 환경변수가 비어 있다 — 배포 설정을 확인한다: ANTHROPIC_API_KEY, BACKEND_BASE_URL(로컬 기본값 그대로다)
+```
+
+## 컨테이너
+
+| | |
+|---|---|
+| 포트 | `8000` |
+| 헬스체크 | `GET /health` → `{"status":"ok"}` |
+| 이미지 태그 | full commit SHA (위키 CI 설계 기준) |
+
+`/health` 는 **설정 상태를 보지 않는다.** 로드밸런서용 생존 확인이므로 키가 비어 있어도 200 이다.
+
+## 인바운드
+
+앱 레벨 인증을 두지 않는다. **인바운드를 BE 로만 제한하는 보안 그룹이 경계다**(2026-09-16 팀 결정).
+AI 서버가 외부에 열리면 인증 없이 LLM 을 호출할 수 있게 되므로, 보안 그룹 설정이 반드시 필요하다.
+
+## 아직 안 된 것
+
+`.github/workflows/ci.yml` 의 ECR push 단계가 비어 있다. 클라우드 팀이 아래 두 가지를
+확정해야 추가할 수 있다.
+
+- ECR 리포지토리 이름
+- 인증 방식 (OIDC role / access key)
+
+현재 CI 는 `dev` push 시 이미지 빌드와 컨테이너 기동 확인(`/health`)까지만 한다.

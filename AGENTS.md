@@ -16,6 +16,8 @@ Backend가 전달한 데이터만 사용하며 **서비스 DB에 직접 접근�
 | 실호출 검증 | `uv run python -m devtools.llm_smoke --with-chat` (요금 발생 · 스텁 BE 필요) |
 | 요청 계약 대조 | `uv run python -m devtools.contract_check --check <엔드포인트> <BE 샘플>` |
 
+배포에 필요한 환경변수는 `docs/DEPLOY.md` 에 있다.
+
 ## 담당 경계
 
 - **제나**: `app/api/{solutions,insights,chat}.py`, `app/services/{solution,insight,chat}`, `app/clients/`, `app/core/`, `app/prompts/`

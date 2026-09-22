@@ -55,9 +55,19 @@ class ChatState(MessagesState):
 def get_model(tools: list) -> BaseChatModel:
     provider = settings.llm_provider
     if provider == "anthropic":
-        model = ChatAnthropic(model=settings.llm_model, api_key=settings.anthropic_api_key)
+        model = ChatAnthropic(
+            model=settings.llm_model,
+            api_key=settings.anthropic_api_key,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
+        )
     elif provider == "openai":
-        kwargs = {"model": settings.llm_model, "api_key": settings.openai_api_key}
+        kwargs = {
+            "model": settings.llm_model,
+            "api_key": settings.openai_api_key,
+            "timeout": settings.llm_timeout_seconds,
+            "max_retries": 0,
+        }
         if settings.llm_model in OPENAI_REASONING_MODELS:
             # GPT-5.6 Luna처럼 reasoning이 기본인 모델만 non-reasoning으로 고정한다 —
             # reasoning이 없는 openai 모델(LLM_MODEL)에는 이 파라미터 자체를 보내지 않는다.
@@ -65,10 +75,19 @@ def get_model(tools: list) -> BaseChatModel:
         model = ChatOpenAI(**kwargs)
     elif provider == "upstage":
         model = ChatOpenAI(
-            model=settings.llm_model, api_key=settings.upstage_api_key, base_url=UPSTAGE_BASE_URL
+            model=settings.llm_model,
+            api_key=settings.upstage_api_key,
+            base_url=UPSTAGE_BASE_URL,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
         )
     elif provider == "google":
-        kwargs = {"model": settings.llm_model, "google_api_key": settings.google_api_key}
+        kwargs = {
+            "model": settings.llm_model,
+            "google_api_key": settings.google_api_key,
+            "timeout": settings.llm_timeout_seconds,
+            "max_retries": 0,
+        }
         if settings.llm_model in GOOGLE_THINKING_MODELS:
             # Gemini 3+는 thinking_level="low"가 최솟값이다 — thinking_budget=0 같은
             # 완전 off는 없다 (app/core/config.py의 GOOGLE_THINKING_MODELS 주석 참고).
