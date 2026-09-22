@@ -54,6 +54,31 @@ BE 는 `Authorization: Bearer {INTERNAL_AI_TOKEN}` 으로 보낸다(2026-09-22 �
 켤 때는 **BE 와 AI 양쪽에 같은 값**을 넣어야 한다. 한쪽만 설정하면 모든 요청이 401 이다.
 연동 테스트는 비워 둔 채로 통과시키고, 끝난 뒤에 양쪽 동시에 주입하는 순서를 권한다.
 
+## 오류 응답 형식
+
+2026-09-22 BE 확정. `message` 와 `data` 는 노션 계약이라 그대로 두고 `error` 를 더했다.
+
+```json
+{"message":"모델 공급자 호출에 실패했습니다.","status":"FAILED",
+ "error":{"code":"PROVIDER_ERROR","retryable":true},"data":null}
+```
+
+`retryable` 은 HTTP 상태 코드에서 파생한다 — 두 신호가 어긋날 수 없다.
+
+| HTTP | code | retryable | 의미 |
+|---|---|---|---|
+| 401 | `UNAUTHORIZED` | ❌ | 내부 토큰 불일치 |
+| 422 | `VALIDATION_ERROR` | ❌ | 요청 필드가 스키마와 다름 |
+| 500 | `INSIGHT_GENERATION_FAILED` | ❌ | 인사이트 생성 실패 (AI 가 이미 1회 재시도한 뒤) |
+| 500 | `SOLUTION_GENERATION_FAILED` | ❌ | 솔루션 생성 실패 (〃) |
+| 500 | `INTERNAL_ERROR` | ❌ | 처리되지 않은 예외 |
+| 502 | `PROVIDER_ERROR` | ✅ | 외부 LLM 공급자 오류 |
+| 502 | `BACKEND_ERROR` | ✅ | 챗봇 툴의 BE 조회 실패 |
+| 504 | `PROVIDER_TIMEOUT` | ✅ | 외부 LLM 타임아웃 |
+
+**503 은 현재 어떤 요청도 만들지 않는다.** BE 와 "AI 서버 자체의 일시 장애/과부하"로
+의미를 맞춰뒀지만 과부하 차단을 두지 않아 발생 경로가 없다. 자리만 잡아둔 것이다.
+
 ## 장애 응답 재현 (BE 연동 테스트용)
 
 BE 재시도 정책이 504 를 재시도 대상으로 둔다. 실제로 그 경로가 도는지 확인할 때 쓴다.

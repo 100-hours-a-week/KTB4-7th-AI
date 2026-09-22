@@ -147,16 +147,20 @@ async def complete(
                 config=genai_types.GenerateContentConfig(**config_kwargs),
             )
             return res.text
-        raise ApiError(502, "LLM_ERROR", f"지원하지 않는 LLM_PROVIDER: {provider}")
+        raise ApiError(502, "PROVIDER_ERROR", f"지원하지 않는 LLM_PROVIDER: {provider}")
     except ApiError:
         raise
+    # 코드 이름은 2026-09-22 BE 계약 예시(PROVIDER_ERROR)에 맞췄다. provider 를 4종
+    # 지원하므로 LLM_* 보다 이쪽이 실제와도 맞는다. 챗봇 SSE 의 AI_TIMEOUT 은 다른 표면이다.
     except (anthropic.APITimeoutError, openai.APITimeoutError, TimeoutError) as exc:
-        raise ApiError(504, "LLM_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다.") from exc
+        raise ApiError(
+            504, "PROVIDER_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다."
+        ) from exc
     # ponytail: google-genai 는 타임아웃을 별도 예외 타입이 아니라 errors.ClientError(499
-    # CANCELLED)로 던진다. 문자열로 구분하는 건 취약해서 일단 LLM_ERROR 로 뭉뚱그렸다 —
-    # google provider의 타임아웃을 LLM_TIMEOUT으로 분리하려면 errors.ClientError.code로 분기.
+    # CANCELLED)로 던진다. 문자열로 구분하는 건 취약해서 일단 PROVIDER_ERROR 로 뭉뚱그렸다 —
+    # google provider의 타임아웃을 PROVIDER_TIMEOUT으로 분리하려면 errors.ClientError.code로 분기.
     except Exception as exc:
-        raise ApiError(502, "LLM_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
+        raise ApiError(502, "PROVIDER_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
 
 
 # 프롬프트 캐싱(cache_control)은 붙이지 않는다. 2026-09-22 실측(count_tokens, sonnet-4-5):
