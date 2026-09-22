@@ -6,34 +6,105 @@ on:
   push:
     branches: [dev]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  test:
+  verify:
+    name: Lint, test, and application build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run pytest -q
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check .
+      - name: Check formatting
+        run: uv run ruff format --check .
+      - name: Run tests
+        run: uv run pytest -q
+      - name: Build application package
+        run: uv build
 
-  docker:
-    needs: test
+  publish-image:
+    name: Build, verify, and publish image
+    needs: verify
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t ai:${{ github.sha }} .
-      - name: 컨테이너 기동 확인
+      - name: Build Docker image
+        env:
+          LOCAL_IMAGE: memme-ai:${{ github.sha }}
+        run: docker build --tag "$LOCAL_IMAGE" .
+      - name: Verify container health
+        env:
+          LOCAL_IMAGE: memme-ai:${{ github.sha }}
         run: |
-          docker run -d --name ai -p 8000:8000 ai:${{ github.sha }}
-          for i in $(seq 1 15); do
-            curl -sf localhost:8000/health && exit 0
+          docker run -d --name ai -p 8000:8000             -e ANTHROPIC_API_KEY=ci-placeholder             -e BACKEND_BASE_URL=http://backend.invalid             "$LOCAL_IMAGE"
+
+          for _ in $(seq 1 15); do
+            if curl --fail --silent --show-error http://127.0.0.1:8000/health; then
+              docker rm --force ai
+              exit 0
+            fi
             sleep 2
           done
+
           docker logs ai
+          docker rm --force ai || true
           exit 1
-      # ECR push 는 클라우드 팀이 리포지토리 이름과 인증 방식(OIDC role vs access key)을
-      # 확정한 뒤 추가한다. 이미지 태그는 위키 CI 설계대로 full commit SHA 를 쓴다.
+      - name: Verify ECR configuration
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          test -n "$AWS_ACCOUNT_ID"
+          test -n "$AWS_REGION"
+          test -n "$AWS_ROLE_TO_ASSUME"
+          test -n "$ECR_REPOSITORY"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Publish immutable image and record digest
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          LOCAL_IMAGE: memme-ai:${{ github.sha }}
+        run: |
+          registry="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          image_uri="$registry/$ECR_REPOSITORY:$GITHUB_SHA"
+
+          if aws ecr describe-images               --repository-name "$ECR_REPOSITORY"               --image-ids imageTag="$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "Image tag already exists; reusing its immutable digest."
+          else
+            docker tag "$LOCAL_IMAGE" "$image_uri"
+            docker push "$image_uri"
+          fi
+
+          digest="$(aws ecr describe-images             --repository-name "$ECR_REPOSITORY"             --image-ids imageTag="$GITHUB_SHA"             --query 'imageDetails[0].imageDigest'             --output text)"
+          {
+            echo "## ECR image published"
+            echo
+            echo "- Source commit: `$GITHUB_SHA`"
+            echo "- Image tag: `$image_uri`"
+            echo "- Image digest: `$digest`"
+          } >> "$GITHUB_STEP_SUMMARY"
