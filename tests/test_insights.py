@@ -87,3 +87,61 @@ async def test_모델이_JSON을_코드펜스로_감싸도_파싱된다(monkeypa
 
     assert res.status_code == 200
     assert res.json()["data"]["insights"]
+
+
+def _insights(*items) -> str:
+    return json.dumps({"insights": list(items)}, ensure_ascii=False)
+
+
+async def test_빈_배열이면_재시도하고_그래도_비면_500이다(monkeypatch):
+    """`insights is not None` 으로 끊던 탓에 빈 배열이 재시도 없이 200 으로 나갔다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        return _insights()
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 500
+    assert len(calls) == 2, "빈 배열도 재시도해야 한다"
+
+
+async def test_maxInsightCount_를_넘으면_재시도한다(monkeypatch):
+    """BE 가 3개를 요청했는데 5개가 나가면 AN-01 화면이 넘친다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _insights("1", "2", "3", "4", "5")
+        return _insights("문장1", "문장2", "문장3")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(res.json()["data"]["insights"]) == 3
+    assert len(calls) == 2
+
+
+async def test_빈_문장이_섞이면_재시도한다(monkeypatch):
+    """화면에 빈 불릿이 생긴다 — 에러가 아니라 화면이 이상해지는 방식으로 드러난다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _insights("정상 문장", "   ", "또 정상")
+        return _insights("문장1", "문장2")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert res.json()["data"]["insights"] == ["문장1", "문장2"]
+    assert len(calls) == 2
