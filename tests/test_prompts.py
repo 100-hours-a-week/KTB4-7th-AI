@@ -46,3 +46,19 @@ def test_프롬프트_버전_상수가_있다():
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
     assert solution.VERSION == "2026-09-21"
     assert insight.VERSION == "2026-09-21"
+
+
+def test_챗봇_프롬프트는_chatDate_를_오늘로_넣는다():
+    """툴 period 는 TODAY/THIS_WEEK/THIS_MONTH/CUSTOM 뿐이라, "지난달"을 조회하려면
+    모델이 절대 날짜를 계산해 CUSTOM 으로 불러야 한다. 날짜가 없으면 못 한다.
+    """
+    from app.prompts import chat
+
+    with_date = chat.build_system([], "2026-06-30")
+    assert "2026-06-30" in with_date
+    assert "역산하지 마세요" in with_date
+
+    # BE 가 안 보내는 경우에도 프롬프트가 깨지지 않아야 한다
+    without = chat.build_system([])
+    assert "오늘은" not in without
+    assert "지금 보고 있는 솔루션" in without
