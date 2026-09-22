@@ -101,7 +101,7 @@ async def chat_messages(req: ChatRequest) -> StreamingResponse:
     model = chat_graph.get_model(tools)
     compiled = chat_graph.build_graph(model, tools)
 
-    system = chat_prompt.build_system([card.model_dump() for card in req.context])
+    system = chat_prompt.build_system([card.model_dump() for card in req.context], req.chatDate)
     messages = [SystemMessage(system), *_to_lc_messages(req.history), HumanMessage(req.question)]
 
     initial_state = {"messages": messages, "failures": 0, "last_evidence": None}

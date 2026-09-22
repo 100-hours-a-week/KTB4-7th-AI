@@ -9,6 +9,7 @@ from langchain_core.outputs import ChatGenerationChunk, ChatResult
 
 from app.clients import backend
 from app.main import app
+from app.prompts import chat as chat_prompt
 from app.services.chat import graph as chat_graph
 
 REQUEST_BODY = {
@@ -282,3 +283,29 @@ async def test_도구_호출_내부가_답변_청크로_새지_않는다(monkeyp
     assert "tool_use" not in joined
     assert "input_json_delta" not in joined
     assert "32만원" in joined
+
+
+async def test_chatDate_가_시스템_프롬프트에_들어간다(monkeypatch):
+    """BE 가 보내는 chatDate 를 받지 않으면 모델이 "지난달"을 조회하지 못하고
+    증감률로 금액을 역산한다(2026-09-22 실호출로 확인).
+    """
+    captured = {}
+    real_build = chat_prompt.build_system
+
+    def spy(context, chat_date=None):
+        captured["date"] = chat_date
+        return real_build(context, chat_date)
+
+    monkeypatch.setattr(chat_prompt, "build_system", spy)
+    _patch_model(monkeypatch, [AIMessage(content="네, 확인했어요.")])
+
+    res = await _post({**REQUEST_BODY, "chatDate": "2026-06-30"})
+
+    assert res.status_code == 200
+    assert captured["date"] == "2026-06-30"
+
+
+async def test_chatDate_가_없어도_통과한다(monkeypatch):
+    _patch_model(monkeypatch, [AIMessage(content="네, 확인했어요.")])
+    res = await _post(REQUEST_BODY)
+    assert res.status_code == 200
