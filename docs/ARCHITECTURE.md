@@ -43,8 +43,10 @@ app/
 
 devtools/
 ├── stub_backend.py       로컬 개발용 BE 스텁 서버 (포트 9000)
-├── forecast_check.py     POS 엑셀 → 예측 API 연동 점검 5개 시나리오
-└── interval_backtest.py  예측구간 커버리지 실측
+├── forecast_check.py     POS 엑셀 → 예측 API 연동 점검 5개 시나리오 + BE 집계 대조
+├── interval_backtest.py  예측구간 커버리지 실측
+├── llm_smoke.py          실제 LLM 호출 검증 (솔루션·인사이트·챗봇)
+└── contract_check.py     BE 요청 바디를 AI 스키마와 사전 대조
 tests/                    엔드포인트당 테스트 파일 1개 + 공통 테스트
 ```
 
@@ -139,14 +141,20 @@ graph.add_conditional_edges("tools", _route_after_tools, {"agent": "agent", "giv
   실행 상태와 화면 표시용 메시지는 용도가 달라서(소유권 검증·보관 기간 등은 BE 책임), 굳이 AI 쪽에
   상태를 들고 있지 않는다.
 
-응답은 SSE(`text/event-stream`)로 나간다. 지금 구현은 **완성된 답변을 만든 뒤 40자 단위로 잘라
-보내는 방식**이다(진짜 토큰 스트리밍은 다음 개선 과제 — `docs/STATE.md` 참고). 대신 이 방식
-덕분에 그래프 실행 중 생긴 오류(502/504/500)가 스트림이 열리기 **전에** 일반 HTTP 에러로 깔끔하게
-나간다.
+응답은 SSE(`text/event-stream`)로 나간다. **모델 토큰 단위 스트리밍이다** — `astream_events()`
+로 `agent` 노드의 생성 이벤트만 걸러 실시간 중계한다(초안은 완성된 답변을 40자로 잘라 보내는
+방식이었고, 2026-09-20 에 교체했다).
 
-### 4.5 테스트 — LLM·BE 호출은 항상 가짜로 막는다
+도구 호출 턴의 content 는 문자열이 아니라 블록 리스트로 오므로 **text 블록만 뽑아 보낸다.**
+걸러내지 않으면 `toolu_...` ID 와 도구 인자가 점주 화면에 그대로 나간다.
 
-실제 Claude API나 BE 서버를 두드리는 테스트는 없다. `monkeypatch`로 항상 대체한다.
+스트림이 시작된 뒤에는 HTTP 상태를 바꿀 수 없어서, 모델 실패는 `answerChunk` 대신
+`{"event":"error","data":{"code":...}}` 로 내려보낸다 — BE·FE 가 문자열을 파싱하지 않고
+코드로 판단할 수 있게 하기 위함이다(`AI_TIMEOUT` / `AI_GENERATION_ERROR` / `AI_TOOL_ERROR`).
+
+### 4.5 테스트 — 단위 테스트는 가짜로 막고, 실호출은 따로 돌린다
+
+`pytest` 안에서 실제 Claude API나 BE 서버를 두드리는 테스트는 없다. `monkeypatch`로 항상 대체한다.
 
 ```python
 # tests/test_solutions.py
@@ -228,9 +236,12 @@ lower, upper = bounds(predicted, residual_quantiles(series))
 호출까지 5개 시나리오를 자동으로 돌리고, `devtools/interval_backtest.py`는 커버리지를 다시
 잰다. 데이터가 쌓이면 판단을 갱신할 수 있게 하기 위해서다.
 
+`--be-daily` 로 BE 집계 결과와 대조할 수 있다. 실제로 이 대조에서 62일 중 50일이 어긋나는 걸
+찾았다 — POS 가 주문 취소를 원본 삭제가 아니라 음수 행 추가로 기록하는데, 그 처리 방식이 양쪽에서
+달랐다. 양측 수정 후 **62/62일 완전 일치**를 확인했다.
+
 ## 5. 알려진 미완성 지점 (정직하게 공유할 것)
 
-- **챗봇 진짜 토큰 스트리밍 아님** — 완성된 답을 잘라서 보낸다 (4.4절).
 - **챗봇 "데이터 부족" 상태를 코드로 판정 못함** — 예측·인사이트처럼 `200 + INSUFFICIENT_DATA`로
   통일하기로 했지만, 그걸 판단할 신호가 챗봇 요청엔 없다. 지금은 LLM이 프롬프트 지시로 자연어로만
   표현한다.
@@ -241,7 +252,16 @@ lower, upper = bounds(predicted, residual_quantiles(series))
   다음 달을 설명하지 못한다. 최근 28일 기준 대안이 더 나았지만(월초 기준 12.23%), 9개월
   데이터로는 계절성과 구분되지 않아 12개월이 쌓일 때까지 보류했다.
 - **솔루션 요청 `metrics`에 순이익·리뷰 요약 필드가 없다** — 설계 설명엔 포함된다고 돼 있는데
-  스키마엔 없어서, BE가 보내도 `extra="ignore"`로 조용히 버려진다.
+  스키마엔 없어서, BE가 보내도 `extra="ignore"`로 조용히 버려진다. V2 착수 시점에 확정하기로
+  미뤘다(2026-09-21).
+- **anthropic 외 provider 는 실호출로 검증된 적이 없다** — `LLM_PROVIDER` 로 OpenAI·Gemini·
+  Solar 를 고를 수 있지만 테스트는 클라이언트 생성만 확인하는 mock 이다. 기본값이 anthropic
+  이라 지금 문제는 없으나, "바꾸면 된다"고 믿으면 안 된다.
+- **`modelVersion` 이 어디에도 저장되지 않는다** — `{provider}:{model}` 형식으로 바꾼 이유가
+  provider 비교 평가인데, `solutions`·`solution_bundles` 에 컬럼이 없고 인사이트·챗봇 응답에는
+  필드 자체가 없다. 지금 구조로는 비교할 데이터가 쌓이지 않는다.
+- **챗봇이 부르는 BE 조회 API 4종은 스텁으로만 검증했다** — 실제 BE 응답을 한 번도 받아본 적이
+  없다. 필드명이 어긋나도 `.get()` 이라 에러 없이 `null` 로 빠져 evidence 만 비어서 나간다.
 
 ## 6. 배포 로드맵 — v1 → v2 → v3
 
