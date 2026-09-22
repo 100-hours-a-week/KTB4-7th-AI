@@ -31,6 +31,10 @@ class Settings(BaseSettings):
 
     backend_base_url: str = "http://localhost:9000"
 
+    # 비어 있으면 검증하지 않는다 — app/core/auth.py 참고. 보안 그룹이 1차 경계고
+    # 이건 그게 빠졌을 때를 위한 2차 방어선이라, 없다고 기동을 막지 않는다.
+    internal_ai_token: str = ""
+
     # SDK 기본값은 읽기 600초에 자체 재시도 2회다. 관측된 정상 응답이 15~20초라
     # 그대로 두면 한 요청이 수십 분을 붙잡는다 — BE 가 먼저 끊어도 이쪽 작업은 계속
     # 돌면서 토큰만 쓴다. 재시도는 서비스 레이어(MAX_RETRY)가 하므로 SDK 쪽은 끈다.
