@@ -14,6 +14,7 @@
 | `LLM_MODEL` | | `claude-sonnet-4-5` (기본) | — |
 | `LLM_TIMEOUT_SECONDS` | | `60` (기본) | — |
 | `BACKEND_TIMEOUT_SECONDS` | | `2.0` (기본) | — |
+| `INSIGHT_LLM_TIMEOUT_SECONDS` | | `12` (기본) | — |
 | `INTERNAL_AI_TOKEN` | | (없음) | 토큰 검증을 하지 않는다 |
 
 `LLM_PROVIDER` 를 바꾸면 해당 provider 의 키가 대신 필요하다
@@ -53,12 +54,30 @@ BE 는 `Authorization: Bearer {INTERNAL_AI_TOKEN}` 으로 보낸다(2026-09-22 �
 켤 때는 **BE 와 AI 양쪽에 같은 값**을 넣어야 한다. 한쪽만 설정하면 모든 요청이 401 이다.
 연동 테스트는 비워 둔 채로 통과시키고, 끝난 뒤에 양쪽 동시에 주입하는 순서를 권한다.
 
+## 장애 응답 재현 (BE 연동 테스트용)
+
+BE 재시도 정책이 504 를 재시도 대상으로 둔다. 실제로 그 경로가 도는지 확인할 때 쓴다.
+
+| 응답 | 재현 |
+|---|---|
+| `504` 모델 타임아웃 | `INSIGHT_LLM_TIMEOUT_SECONDS=0.001` 로 기동 |
+| `502` 공급자 오류 | `ANTHROPIC_API_KEY=` (빈 값)으로 기동 |
+| `401` 토큰 불일치 | `INTERNAL_AI_TOKEN` 을 설정하고 헤더 없이 호출 |
+| `200 INSUFFICIENT_DATA` | `metrics.salesSummary.orderCount` 를 `0` 으로 |
+
+`INSIGHT_LLM_TIMEOUT_SECONDS` 는 인사이트 경로에만 적용된다. 솔루션·챗봇은
+`LLM_TIMEOUT_SECONDS` 를 쓴다 — 두 값이 분리된 이유는 `app/core/config.py` 주석 참고.
+
+500(생성 실패)은 모델 응답이 깨져야 나와서 환경변수로 재현할 수 없다.
+
 ## 아직 안 된 것
 
-`.github/workflows/ci.yml` 의 ECR push 단계가 비어 있다. 클라우드 팀이 아래 두 가지를
-확정해야 추가할 수 있다.
+ECR push 단계는 붙었다(#85, OIDC). **GitHub 레포 변수 4개가 비어 있어 건너뛴다.**
 
-- ECR 리포지토리 이름
-- 인증 방식 (OIDC role / access key)
+- `AWS_ACCOUNT_ID`
+- `AWS_REGION`
+- `AWS_ROLE_TO_ASSUME`
+- `ECR_REPOSITORY`
 
-현재 CI 는 `dev` push 시 이미지 빌드와 컨테이너 기동 확인(`/health`)까지만 한다.
+네 값이 채워지면 `dev` push 마다 커밋 SHA 태그로 이미지가 올라간다. 그 전까지는
+빌드와 컨테이너 기동 확인(`/health`)까지만 돈다.

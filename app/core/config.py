@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # 돌면서 토큰만 쓴다. 재시도는 서비스 레이어(MAX_RETRY)가 하므로 SDK 쪽은 끈다.
     llm_timeout_seconds: float = 60.0
 
+    # 인사이트만 따로 둔다. BE 응답 제한이 30초인데 서비스 재시도 1회가 붙어서,
+    # 전역 60초를 그대로 쓰면 최악 120초다 — BE 가 끊은 뒤에도 토큰만 태운다.
+    # 실측 3.2~4.0초(2026-09-22, sonnet-4-5)라 12초면 3배 여유고 최악 24초다.
+    # 솔루션은 15~20초를 쓰므로 전역값을 함께 낮출 수 없어 분리했다.
+    insight_llm_timeout_seconds: float = 12.0
+
     # 위키 단계2: 툴 6종은 사전 집계 테이블 조회이므로 개별 50ms가 목표.
     # 네트워크 왕복을 감안해 상한만 강제한다.
     backend_timeout_seconds: float = 2.0
