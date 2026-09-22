@@ -142,6 +142,11 @@ async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
         raise ApiError(502, "LLM_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
 
 
-# 프롬프트 캐싱(cache_control)은 여기 붙이지 않았다. 솔루션·인사이트의 시스템 프롬프트는
-# 캐시 최소 토큰에 한참 못 미쳐서 효과가 없다. 챗봇은 시스템 프롬프트 + 매장 고정 컨텍스트 +
-# 툴 스키마가 합쳐져 충분히 커지므로 그때 붙인다 (위키 단계2 §6).
+# 프롬프트 캐싱(cache_control)은 붙이지 않는다. 2026-09-22 실측(count_tokens, sonnet-4-5):
+#
+#   솔루션   742 토큰  (SYSTEM 215)
+#   인사이트 535 토큰  (SYSTEM 229)
+#
+# Sonnet 캐시 최소 단위가 1024 토큰이라 둘 다 애초에 캐시가 만들어지지 않는다. 설령
+# 넘더라도 여기는 단발 호출이라 캐시를 읽을 두 번째 호출이 없다 — 쓰기 비용(1.25배)만
+# 더 든다. 챗봇 쪽 판단은 app/services/chat/graph.py 참고.
