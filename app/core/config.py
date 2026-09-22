@@ -31,9 +31,38 @@ class Settings(BaseSettings):
 
     backend_base_url: str = "http://localhost:9000"
 
+    # SDK 기본값은 읽기 600초에 자체 재시도 2회다. 관측된 정상 응답이 15~20초라
+    # 그대로 두면 한 요청이 수십 분을 붙잡는다 — BE 가 먼저 끊어도 이쪽 작업은 계속
+    # 돌면서 토큰만 쓴다. 재시도는 서비스 레이어(MAX_RETRY)가 하므로 SDK 쪽은 끈다.
+    llm_timeout_seconds: float = 60.0
+
     # 위키 단계2: 툴 6종은 사전 집계 테이블 조회이므로 개별 50ms가 목표.
     # 네트워크 왕복을 감안해 상한만 강제한다.
     backend_timeout_seconds: float = 2.0
+
+
+_API_KEY_FIELDS = {
+    "anthropic": "anthropic_api_key",
+    "openai": "openai_api_key",
+    "google": "google_api_key",
+    "upstage": "upstage_api_key",
+}
+
+
+def missing_required(s: "Settings") -> list[str]:
+    """배포 후 첫 요청에서야 드러날 설정 누락을 기동 시점에 찾는다.
+
+    둘 다 기본값이 있어서 앱은 정상 기동하고 /health 도 200 을 돌려준다 — 배포는 성공한
+    것처럼 보이고 첫 요청에서 터진다. BACKEND_BASE_URL 은 더 고약한데, 에러가 아니라
+    기본값(localhost:9000)으로 조용히 돌아가 컨테이너가 자기 자신을 호출한다.
+    """
+    missing = []
+    key_field = _API_KEY_FIELDS.get(s.llm_provider)
+    if key_field and not getattr(s, key_field):
+        missing.append(key_field.upper())
+    if "localhost" in s.backend_base_url or "127.0.0.1" in s.backend_base_url:
+        missing.append("BACKEND_BASE_URL(로컬 기본값 그대로다)")
+    return missing
 
 
 settings = Settings()

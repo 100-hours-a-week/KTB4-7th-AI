@@ -20,20 +20,31 @@ _clients: dict[str, object] = {}
 
 def _get_anthropic() -> AsyncAnthropic:
     if "anthropic" not in _clients:
-        _clients["anthropic"] = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        _clients["anthropic"] = AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
+        )
     return _clients["anthropic"]
 
 
 def _get_openai() -> AsyncOpenAI:
     if "openai" not in _clients:
-        _clients["openai"] = AsyncOpenAI(api_key=settings.openai_api_key)
+        _clients["openai"] = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
+        )
     return _clients["openai"]
 
 
 def _get_upstage() -> AsyncOpenAI:
     if "upstage" not in _clients:
         _clients["upstage"] = AsyncOpenAI(
-            api_key=settings.upstage_api_key, base_url=UPSTAGE_BASE_URL
+            api_key=settings.upstage_api_key,
+            base_url=UPSTAGE_BASE_URL,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
         )
     return _clients["upstage"]
 
