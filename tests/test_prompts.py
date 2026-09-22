@@ -6,6 +6,20 @@ METRICS = {
     "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
 }
 
+# 인사이트는 2026-09-22 계약으로 지표 구조가 통째로 바뀌었다 — 솔루션과 더는 같은 모양이 아니다.
+INSIGHT_METRICS = {
+    "salesSummary": {
+        "totalSales": 7920000,
+        "menuSales": 7480000,
+        "orderCount": 923,
+        "averageOrderValue": 8581,
+        "vsPrevPeriod": 0.042,
+    },
+    "categorySales": [
+        {"categoryName": "커피", "menuSales": 3120000, "ratio": 0.417, "vsPrevPeriod": -0.044}
+    ],
+}
+
 
 def test_솔루션_프롬프트에_지표가_한글_그대로_들어간다():
     prompt = solution.build(METRICS, "2026-08-31", "MON", is_weekend=False)
@@ -35,17 +49,42 @@ def test_인사이트_프롬프트는_금액은_그대로_비율은_백분율로
     assert "백분율로 바꿔" in insight.SYSTEM
 
 
+def test_인사이트_프롬프트는_비율_반올림을_금지한다():
+    """실호출 3회 중 1회가 0.042 를 "4% 증가"로 반올림했다(2026-09-22, 정답 4.2%).
+
+    금액만 막는 지시로는 비율의 소수점이 사라지는 걸 잡지 못했다. 4.2 → 4 는 화면에서
+    티가 안 나기 때문에 조용히 틀린 값이 나간다.
+    """
+    assert "반올림하거나 버리지 마세요" in insight.SYSTEM
+    assert "0.042 → 4.2%" in insight.SYSTEM
+
+
+def test_인사이트_프롬프트는_총액과_메뉴매출을_구분시킨다():
+    """상세 지표가 전부 menuSales 계열이라 totalSales 와 섞으면 합이 안 맞는다."""
+    assert "totalSales" in insight.SYSTEM
+    assert "menuSales" in insight.SYSTEM
+
+
+def test_인사이트_프롬프트는_다주_연속_표현을_금지한다():
+    """salesTrend·weekdaySales 가 들어오면서 "3주 연속 감소"를 만들 재료가 생겼다.
+
+    V1 은 한 달치 스냅샷이라 연속성을 확인할 근거가 없다(2026-09-22 풀스택 계약).
+    """
+    assert "연속성은 말하지 마세요" in insight.SYSTEM
+
+
 def test_인사이트_프롬프트에_지표가_들어간다():
-    prompt = insight.build(METRICS, max_count=3)
+    prompt = insight.build(INSIGHT_METRICS, max_count=3, max_chars=100)
     assert "커피" in prompt
     assert '"insights"' in prompt
+    assert "100자 이내" in prompt, "길이 제한을 모델에게도 알려야 재시도가 줄어든다"
 
 
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
     assert solution.VERSION == "2026-09-22"
-    assert insight.VERSION == "2026-09-21"
+    assert insight.VERSION == "2026-09-22"
 
 
 def test_챗봇_프롬프트는_chatDate_를_오늘로_넣는다():

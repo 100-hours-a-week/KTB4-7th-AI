@@ -5,26 +5,46 @@ import httpx
 from app.clients import llm
 from app.main import app
 
+# 2026-09-22 풀스택 확정 계약. 지표 구조가 통째로 바뀌어 솔루션과 더는 같은 모양이 아니다.
 REQUEST_BODY = {
     "storeId": 1024,
     "salesAnalysisId": 771,
-    "targetMonth": "2026-08",
+    "analysisRunId": 34,
+    "targetMonth": "2026-09",
     "triggerType": "UPLOAD",
     "maxInsightCount": 3,
     "metrics": {
-        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
-        "hourlyProfile": [
-            {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+        "salesSummary": {
+            "totalSales": 7920000,
+            "menuSales": 7480000,
+            "orderCount": 923,
+            "averageOrderValue": 8581,
+            "vsPrevPeriod": 0.042,
+        },
+        "salesTrend": [{"date": "2026-09-12", "menuSales": 2140000, "orderCount": 231}],
+        "weekdaySales": [{"dayOfWeek": "SATURDAY", "menuSales": 1560000, "orderCount": 182}],
+        "hourlySales": [{"dayType": "WEEKDAY", "hour": 12, "menuSales": 420000, "orderCount": 55}],
+        "categorySales": [
+            {"categoryName": "커피", "menuSales": 3120000, "ratio": 0.417, "vsPrevPeriod": -0.044}
         ],
-        "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
+        "menuRankings": [
+            {
+                "rank": 1,
+                "menuName": "아메리카노",
+                "menuSales": 2108000,
+                "quantity": 620,
+                "ratio": 0.282,
+                "vsPrevPeriod": 0.031,
+            }
+        ],
     },
 }
 
 LLM_SUCCESS = json.dumps(
     {
         "insights": [
-            "최근 화요일 매출이 3주 연속 감소하고 있어요.",
-            "오후 3~5시는 다른 시간대보다 매출이 낮아요.",
+            "9월 총 매출은 7,920,000원으로 이전 기간보다 4.2% 증가했습니다.",
+            "아메리카노 매출은 2,108,000원으로 메뉴 매출의 28.2%를 차지했습니다.",
         ]
     },
     ensure_ascii=False,
@@ -38,7 +58,7 @@ async def _post(body: dict) -> httpx.Response:
 
 
 async def test_정상_요청이_인사이트를_반환한다(monkeypatch):
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
         return LLM_SUCCESS
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -48,7 +68,7 @@ async def test_정상_요청이_인사이트를_반환한다(monkeypatch):
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "COMPLETED"
-    assert body["data"]["targetMonth"] == "2026-08"
+    assert body["data"]["targetMonth"] == "2026-09"
     assert body["data"]["insights"][0]
     assert "missingData" not in body["data"]
 
@@ -63,7 +83,7 @@ async def test_필수_필드가_없으면_422():
 async def test_LLM_파싱이_계속_실패하면_500_이고_1회만_재시도한다(monkeypatch):
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
         calls.append(1)
         return "이건 JSON이 아닙니다"
 
@@ -78,7 +98,7 @@ async def test_LLM_파싱이_계속_실패하면_500_이고_1회만_재시도한
 async def test_모델이_JSON을_코드펜스로_감싸도_파싱된다(monkeypatch):
     """솔루션과 같은 이유 — tests/test_solutions.py 의 같은 이름 테스트 참고."""
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
         return f"```json\n{LLM_SUCCESS}\n```"
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -97,7 +117,7 @@ async def test_빈_배열이면_재시도하고_그래도_비면_500이다(monke
     """`insights is not None` 으로 끊던 탓에 빈 배열이 재시도 없이 200 으로 나갔다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
         calls.append(1)
         return _insights()
 
@@ -113,7 +133,7 @@ async def test_maxInsightCount_를_넘으면_재시도한다(monkeypatch):
     """BE 가 3개를 요청했는데 5개가 나가면 AN-01 화면이 넘친다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _insights("1", "2", "3", "4", "5")
@@ -132,7 +152,7 @@ async def test_빈_문장이_섞이면_재시도한다(monkeypatch):
     """화면에 빈 불릿이 생긴다 — 에러가 아니라 화면이 이상해지는 방식으로 드러난다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _insights("정상 문장", "   ", "또 정상")
@@ -145,3 +165,118 @@ async def test_빈_문장이_섞이면_재시도한다(monkeypatch):
     assert res.status_code == 200
     assert res.json()["data"]["insights"] == ["문장1", "문장2"]
     assert len(calls) == 2
+
+
+async def test_100자를_넘는_문장이_있으면_재시도한다(monkeypatch):
+    """풀스택 확정 계약(2026-09-22)이 문장당 최대 100자다.
+
+    프롬프트로도 알리지만 차단은 코드가 한다 — 코드펜스 때 배운 대로, 계약을 어기면
+    화면이 깨지는 항목을 모델의 선의에 맡기지 않는다.
+    """
+    calls = []
+    긴문장 = "가" * 101
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _insights("정상 문장입니다.", 긴문장)
+        return _insights("문장1", "문장2")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert res.json()["data"]["insights"] == ["문장1", "문장2"]
+    assert len(calls) == 2
+    assert all(len(i) <= 100 for i in res.json()["data"]["insights"])
+
+
+async def test_정확히_100자는_통과한다(monkeypatch):
+    """경계값. 초과만 막고 같은 건 통과해야 한다."""
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return _insights("나" * 100)
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(res.json()["data"]["insights"][0]) == 100
+
+
+async def test_analysisRunId_가_스키마에_있어_버려지지_않는다():
+    """extra="ignore" 라 스키마에 없으면 조용히 사라진다 — 에러도 안 난다."""
+    from app.schemas.insight import InsightRequest
+
+    assert "analysisRunId" in InsightRequest.model_fields
+    parsed = InsightRequest(**REQUEST_BODY)
+    assert parsed.analysisRunId == 34
+
+
+async def test_analysisRunId_가_없어도_422가_아니다():
+    """BE 가 아직 안 보내는 단계에서도 인사이트는 나가야 한다."""
+    from app.schemas.insight import InsightRequest
+
+    body = {k: v for k, v in REQUEST_BODY.items() if k != "analysisRunId"}
+    assert InsightRequest(**body).analysisRunId is None
+
+
+async def test_실패_응답에_status_FAILED_가_붙는다(monkeypatch):
+    """BE 가 성공·실패를 한 가지 방식으로 파싱하게 한다(2026-09-22 요청).
+
+    재시도 여부는 이 필드가 아니라 HTTP 상태 코드가 정한다 — BE 재시도 정책이
+    "503/504만"이라 실패를 200 으로 내리면 그 정책이 발동하지 않는다.
+    """
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return "JSON 아님"
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 500, "200 이면 BE 재시도 정책과 모니터링이 동시에 죽는다"
+    assert res.json()["status"] == "FAILED"
+    assert res.json()["data"] is None
+
+
+async def test_모델_타임아웃은_504라_BE가_재시도한다(monkeypatch):
+    """BE 재시도 정책이 504 를 재시도 대상으로 둔다. 500 으로 새면 재시도가 안 붙는다.
+
+    APITimeoutError → 504 매핑 자체는 tests/test_llm_providers.py 가 본다. 여기서는
+    그 504 가 서비스·핸들러를 지나 응답까지 그대로 나가는지만 확인한다.
+    """
+    from app.core.errors import ApiError
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        raise ApiError(504, "LLM_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다.")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 504
+    assert res.json()["status"] == "FAILED"
+
+
+async def test_BE_응답제한_30초_안에_들어오는_타임아웃을_쓴다(monkeypatch):
+    """재시도 1회까지 포함해 BE 의 30초 제한 안에 끝나야 한다.
+
+    전역 LLM_TIMEOUT_SECONDS(60)를 그대로 쓰면 최악 120초라, BE 가 끊은 뒤에도
+    이쪽만 토큰을 계속 태운다.
+    """
+    from app.services import insight as insight_service
+
+    seen = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        seen.append(timeout)
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    await _post(REQUEST_BODY)
+
+    assert seen == [insight_service.TIMEOUT_SECONDS]
+    assert insight_service.TIMEOUT_SECONDS * (insight_service.MAX_RETRY + 1) < 30

@@ -21,17 +21,18 @@ AI_TOOL_ERROR(도구 조회 2회 연속 실패 — 기존엔 실패 문구를 �
 
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.core.auth import verify_internal_token
 from app.core.errors import ApiError
 from app.prompts import chat as chat_prompt
 from app.schemas.chat import ChatMessage, ChatRequest
 from app.services.chat import graph as chat_graph
 from app.services.chat.tools import build_tools
 
-router = APIRouter(prefix="/internal/v1/ai")
+router = APIRouter(prefix="/internal/v1/ai", dependencies=[Depends(verify_internal_token)])
 
 
 def _to_lc_messages(history: list[ChatMessage]) -> list:

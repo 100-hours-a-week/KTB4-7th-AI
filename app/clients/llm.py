@@ -89,8 +89,15 @@ def strip_fence(raw: str) -> str:
     return match.group(1) if match else raw
 
 
-async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
-    """단발 생성. 솔루션·인사이트용. 스트리밍이 필요한 챗봇은 별도 경로를 쓴다."""
+async def complete(
+    system: str, user: str, max_tokens: int = 2000, timeout: float | None = None
+) -> str:
+    """단발 생성. 솔루션·인사이트용. 스트리밍이 필요한 챗봇은 별도 경로를 쓴다.
+
+    timeout 을 주면 이 호출만 그 값으로 덮는다(초). 기본값은 전역 LLM_TIMEOUT_SECONDS 다.
+    BE 쪽 응답 제한이 엔드포인트마다 달라서 필요하다 — 인사이트는 BE 가 30초에 끊는데
+    전역 60초에 서비스 재시도 1회면 최악 120초라, 끊긴 뒤로도 토큰만 태운다.
+    """
     provider = settings.llm_provider
     try:
         if provider == "anthropic":
@@ -99,6 +106,7 @@ async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
+                **({"timeout": timeout} if timeout else {}),
             )
             return res.content[0].text
         if provider == "openai":
@@ -110,10 +118,16 @@ async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
             extra = {"max_completion_tokens" if is_reasoning else "max_tokens": max_tokens}
             if is_reasoning:
                 extra["reasoning_effort"] = "none"
+            if timeout:
+                extra["timeout"] = timeout
             return await _complete_openai_compatible(_get_openai(), system, user, **extra)
         if provider == "upstage":
             return await _complete_openai_compatible(
-                _get_upstage(), system, user, max_tokens=max_tokens
+                _get_upstage(),
+                system,
+                user,
+                max_tokens=max_tokens,
+                **({"timeout": timeout} if timeout else {}),
             )
         if provider == "google":
             config_kwargs: dict[str, object] = {
@@ -124,6 +138,9 @@ async def complete(system: str, user: str, max_tokens: int = 2000) -> str:
                 # Gemini 3+는 thinking_budget이 아니라 thinking_level(low/medium/high)을 쓰고
                 # "low"가 최솟값이다 — thinking_budget=0 같은 완전 off는 없다.
                 config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level="LOW")
+            if timeout:
+                # google-genai 는 클라이언트가 아니라 요청 config 로 받고 단위가 ms 다.
+                config_kwargs["http_options"] = genai_types.HttpOptions(timeout=int(timeout * 1000))
             res = await _get_google().aio.models.generate_content(
                 model=settings.llm_model,
                 contents=user,

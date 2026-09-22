@@ -44,12 +44,38 @@ _METRICS = {
     "reviewSummary": None,
 }
 
+_INSIGHT_METRICS = {
+    "salesSummary": {
+        "totalSales": 7920000,
+        "menuSales": 7480000,
+        "orderCount": 923,
+        "averageOrderValue": 8581,
+        "vsPrevPeriod": 0.042,
+    },
+    "salesTrend": [{"date": "2026-09-12", "menuSales": 2140000, "orderCount": 231}],
+    "weekdaySales": [{"dayOfWeek": "SATURDAY", "menuSales": 1560000, "orderCount": 182}],
+    "hourlySales": [{"dayType": "WEEKDAY", "hour": 12, "menuSales": 420000, "orderCount": 55}],
+    "categorySales": [
+        {"categoryName": "커피", "menuSales": 3120000, "ratio": 0.417, "vsPrevPeriod": -0.044}
+    ],
+    "menuRankings": [
+        {
+            "rank": 1,
+            "menuName": "아메리카노",
+            "menuSales": 2108000,
+            "quantity": 620,
+            "ratio": 0.282,
+            "vsPrevPeriod": 0.031,
+        }
+    ],
+}
+
 EXAMPLES: dict[str, dict] = {
     "forecast": {
         "storeId": 1,
         "uploadId": 1,
         "analysisRunId": 1,
-        "forecastStartDate": "2026-07-01",
+        "forecastStartDate": "2026-04-02",
         "dailySales": [{"date": "2026-04-01", "amount": 947100, "orderCnt": 80}],
     },
     "solutions": {
@@ -59,12 +85,14 @@ EXAMPLES: dict[str, dict] = {
         "triggerType": "UPLOAD",
         "metrics": _METRICS,
     },
+    # 인사이트는 2026-09-22 풀스택 확정 계약으로 지표가 통째로 바뀌었다 — 솔루션과 다른 모양이다.
     "sales-insights": {
         "storeId": 1,
-        "salesAnalysisId": 771,
-        "targetMonth": "2026-08",
+        "salesAnalysisId": 56,
+        "analysisRunId": 34,
+        "targetMonth": "2026-09",
         "triggerType": "UPLOAD",
-        "metrics": _METRICS,
+        "metrics": _INSIGHT_METRICS,
         "maxInsightCount": 3,
     },
     "chat": {
