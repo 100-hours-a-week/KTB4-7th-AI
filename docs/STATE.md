@@ -1,15 +1,19 @@
 # 작업 상태
 
-마지막 갱신: 2026-09-22
+마지막 갱신: 2026-09-23
 브랜치: `dev` (아래 PR 전부 머지 완료)
 
 ## 지금 어디
 
 **MVP 범위의 엔드포인트 4종이 모두 구현·머지됐고, 계약은 노션 기준으로 확정됐다.**
-남은 건 코드가 아니라 **연동 검증과 배포**다 — 아래 "다음 한 걸음" 참고.
+SALES 인사이트는 2026-09-22 에 풀스택 확정 계약까지 반영을 마쳤다.
+**남은 건 코드가 아니라 연동 검증과 배포다** — 아래 "다음 한 걸음" 참고.
+
+검증 현황: 예측은 BE 실제 데이터로 62/62일 일치, 솔루션·인사이트·챗봇은 승민 실제 요청
+샘플로 실호출 200 확인. **다만 챗봇이 부르는 BE 조회 API 4종만 아직 스텁뿐이다.**
 
 아래 "이번에 반영한 것"은 2026-09-16~17 계약 동기화 세션의 기록이다. 그 이후 작업은
-"2026-09-17~21"에 따로 적었다.
+날짜별 절("2026-09-17~21", "2026-09-21 오후", "2026-09-22", "2026-09-22 오후")에 적었다.
 
 BE와 최종 합의한 계약(`docs/api정의서.md`, `docs/ERD정의서.md` — 사용자가 직접 붙여넣음)을
 solutions/insights/chat 코드에 반영했다. `docs/contract-diff-wiki-vs-notion.md`(이전 세션이 작성한
@@ -226,32 +230,139 @@ Notion 직접 조회는 이 세션의 연동 계정(`woheee@gmail.com` 개인 �
 (실제로는 만드는 쪽이 없었고, 2026-09-21 에 AI 생성으로 확정)와 단계2 의 "프롬프트 캐싱을
 적용한다"(실측 결과 v1 미적용 결정)다.
 
+## 2026-09-22 오후 — SALES 인사이트 계약 확정 (풀스택 연동)
+
+풀스택이 확정 계약을 전달해 인사이트 경로를 통째로 맞췄다. 세 PR 로 나눠 들어갔다.
+
+- **`metrics` 전면 교체** (PR #87): `salesSummary.netSales` → `totalSales`+`menuSales`+
+  `orderCount`+`averageOrderValue`, `hourlyProfile`→`hourlySales`, `categoryBreakdown`→
+  `categorySales`, 그리고 `salesTrend`·`weekdaySales`·`menuRankings` 신규.
+  **공유 `Metrics` 를 고치지 않고 `InsightMetrics` 를 따로 뒀다** — 솔루션이 같은 모델을
+  쓰고 있어서 그대로 바꾸면 승민 실제 샘플로 검증이 끝난 경로가 함께 깨진다.
+  `analysisRunId` 는 스키마에 없어 `extra="ignore"` 가 조용히 버리고 있었다.
+- **`INSUFFICIENT_DATA` 실제 응답** (PR #89): 스키마에 `status`·`missingData` 가 선언돼
+  있었는데 **서비스가 한 번도 내보내지 않았다.** 영업일 14일 미만은 BE 가 거르지만, 그
+  검사를 통과하고도 지표가 비는 경우가 남는다 — 상세 지표 5종이 전부 기본값 `[]` 이라
+  `salesSummary` 만으로 요청이 통과하고, 그대로 생성하면 "총매출은 0원입니다" 같은 문장이
+  **200 으로 화면까지 나간다.** 이제 LLM 을 부르지 않고 `INSUFFICIENT_DATA` 를 돌려준다.
+- **오류 바디 `error.code`·`retryable`** (PR #91): `ApiError.code` 는 이미 모든 호출부에
+  있었는데 로그에만 쓰이고 응답에 나가지 않았다. `retryable` 은 **HTTP 상태 코드에서
+  파생**시킨다 — 손으로 관리하는 표를 두면 BE 재시도 정책과 조용히 어긋난다.
+  `LLM_ERROR`→`PROVIDER_ERROR`, `LLM_TIMEOUT`→`PROVIDER_TIMEOUT` (BE 계약 예시에 맞춤,
+  provider 4종 지원이라 실제와도 맞다). 환경변수 `LLM_TIMEOUT_SECONDS` 는 이름 그대로다.
+
+**실호출로만 잡힌 것 3건** — 어제·그제와 같은 패턴이고 전부 단위 테스트는 통과하고 있었다.
+
+| 증상 | 정답 | 빈도 |
+|---|---|---|
+| `0.042` → "4% 증가" | 4.2% | 3회 중 1회 |
+| `ratio` 0.417 → "**전체의** 41.7%" | 메뉴 매출의 41.7% (총매출 기준이면 39.4%) | 5회 중 1회 |
+| `vsPrevPeriod` → "**메뉴 매출**이 4.2% 증가" | 총매출 기준 | 5회 중 1회 |
+
+기존 지시가 **금액 어림만 막고 비율은 안 막았다.** `4.2 → 4` 는 화면에서 티가 안 나
+조용히 틀린다. 세 번째는 계약 자체의 구멍이라 BE 에 물어 `totalSales` 기준으로 확정받았다.
+프롬프트를 세 번 고치며 매번 5~6회 실호출로 좁혀 **6/6 정확**까지 갔다.
+
+**타임아웃 정렬** — BE 응답 제한이 30초인데 AI 최악이 `60초 × 재시도 2회 = 120초`였다.
+BE 가 끊은 뒤에도 토큰만 태운다. 인사이트만 12초로 묶어 최악 24초로 넣었고(`llm.complete()`
+에 호출별 `timeout` 인자 추가), **호출별 하드코딩이 전역 환경변수를 조용히 덮어써서
+504 재현이 불가능해진 걸 BE 질문으로 발견해** `INSIGHT_LLM_TIMEOUT_SECONDS` 설정으로 뺐다.
+
+**선택적 내부 인증** (`app/core/auth.py` 부활) — `INTERNAL_AI_TOKEN` 이 **비어 있으면
+검증하지 않는다.** 2026-09-16 "앱 레벨 인증 없음" 결정의 기본 동작 그대로다. 필수로 두면
+배포 때 BE·AI 시크릿이 어긋나는 순간 전부 401 이라 연동 테스트 당일을 막는다. 되살린 이유는
+**보안 그룹 요구사항이 그날까지 코드 주석에만 있었고 인프라 반영 여부를 아무도 확인하지
+않았기** 때문이다. 보안 그룹이 1차, 이건 2차다.
+
+**BE 와 확정한 상태 코드 구분** (2026-09-22):
+
+```
+200 COMPLETED / 200 INSUFFICIENT_DATA        error 필드 없음
+401 UNAUTHORIZED           retryable false
+422 VALIDATION_ERROR       retryable false
+500 *_GENERATION_FAILED    retryable false   AI 가 이미 1회 재시도한 뒤다
+502 PROVIDER_ERROR         retryable true    BE 가 재시도 대상에 넣었다(429/529 가 여기 묶인다)
+504 PROVIDER_TIMEOUT       retryable true
+503                        — 현재 어떤 요청도 만들지 않는다(과부하 차단 없음)
+```
+
+**기간 정책 확정** — V1 은 `targetMonth` 기준 월간 고정. 필터 변경으로 재생성하지 않는다.
+스키마·ERD 변경 없음.
+
 ## 마지막으로 통과한 것
 
-- `uv run pytest -q` — 83 passed (2026-09-22)
+- `uv run pytest -q` — **120 passed** (2026-09-23)
 - `uv run python -m devtools.llm_smoke --with-chat` — 솔루션·인사이트·챗봇 3종 실호출 통과
 - `uv run python -m devtools.forecast_check --pos <엑셀> --be-daily <BE 샘플>` — 62/62일 일치
 - `uv run ruff check --fix . && uv run ruff format .` — 통과
 - 서버 실기동 후 curl: 3개 라우트(`solutions/generate`, `sales-insights`, `chat/messages`) 전부
   새 경로로 노출, 422 응답이 새 플랫 포맷(`{"message":...}`)인지 확인
-- **미검증**: anthropic 외 provider(openai/google/upstage) 실호출 — mock 테스트만 있다.
+- 인사이트 전 상태 실기동 확인: `200 COMPLETED` / `200 INSUFFICIENT_DATA` / `401` /
+  `422` / `502` / `504` — 풀스택 원본 페이로드 그대로, 6/6 정확, 3.2~4.0초
+- **미검증 ①**: anthropic 외 provider(openai/google/upstage) 실호출 — mock 테스트만 있다.
+- **미검증 ②**: 챗봇이 부르는 **BE 조회 API 4종** — 스텁으로만 확인했다. AI 파트에서
+  유일하게 실제 BE 를 한 번도 못 받아본 구간이다. 필드명이 어긋나도 `.get()` 이라 에러 없이
+  `null` 로 빠져 **챗봇이 조용히 빈 답을 한다.** BE 주소만 나오면
+  `devtools/llm_smoke.py --with-chat` 로 바로 확인 가능하다.
 
 ## 다음 한 걸음
 
-실호출 검증(1)과 BE 집계 대조(2)는 2026-09-21 에 끝났다. **남은 블로커는 ECR 하나다.**
+**AI 코드는 완료다.** 남은 건 전부 다른 팀에 걸려 있거나, 서버 주소가 나와야 할 수 있는 일이다.
 
-1. 🔴 **ECR push · BE 서버 접근 · 보안 그룹** — 셋 다 클라우드 팀 소관이다. 한 번에 묻는다.
+1. 🔴 **챗봇 BE 조회 4종 실호출 검증** — AI 파트에서 **유일하게 검증 안 된 구간**이다.
+   BE 주소만 나오면 `uv run python -m devtools.llm_smoke --with-chat` 로 끝난다.
+   나머지 3개 엔드포인트는 실제 데이터·실제 LLM 으로 다 돌려봤는데 이것만 스텁뿐이다.
 
-   **ECR push** — `.github/workflows/ci.yml` 끝에 주석으로 남아 있다. 클라우드 팀이
-   **리포지토리 이름**과 **인증 방식(OIDC role vs access key)** 을 확정해야 한다.
-   지금은 이미지가 빌드만 되고 올릴 곳이 없어서 배포가 막혀 있다. **AI 파트에서 배포를 막는
-   유일한 항목이다.**
-2. **제나 복귀 후 리뷰** — 휴가 중 담당 영역을 세 번 건드렸다. #60(코드펜스), #63(챗봇 도구
-   노출), 그리고 #61 머지 판단. 방향이 다르면 되돌린다.
-3. **`docs/api정의서.md` 솔루션 응답 예시에 `evidence` 가 빠져 있다** — #55 로 AI 가 내보내기
+2. 🔴 **클라우드팀** — 배포는 사실상 되고 있고, CI 만 빨간불이다.
+
+   **ECR** — 붙었다(#85, OIDC). 이미지가 실제로 올라간다.
+   ```
+   memme/ai:bd964cfa5847…  sha256:0aeb0057970254c006cbc4fb2d719549b8bc5c308e1904cf40d1e77b3235f349
+   memme/ai:34e606445097…  sha256:bd255705c18eb9f6530343a89753844b07eab86329adbe6f84e018443c8512f8
+   ```
+   **푸시 직후** `ecr:DescribeImages` 권한이 없어 다이제스트 조회에서 잡이 죽는다
+   (`GitHubActionsAIECRPushRole`). ECR 잡이 실행된 2회 모두 같은 지점이다.
+   지금은 새 커밋마다 푸시가 되니 안 드러나지만, **같은 커밋으로 재실행하면 진짜로 실패한다** —
+   "이미 있으면 건너뛴다" 가드도 `describe-images` 로 판단해서 항상 "없음"으로 떨어지고,
+   태그가 immutable 이라 재푸시가 거부된다. IAM 에 `ecr:DescribeImages` 한 줄이면 둘 다 풀린다.
+
+   `ci.yml` 요약 출력에 **별개 버그**가 하나 더 있다. 큰따옴표 안 백틱이라 셸이 SHA 를
+   명령으로 실행한다 — 권한을 고쳐도 요약에는 빈 값이 찍힌다.
+
+   ```
+   $ GITHUB_SHA=bd964cf bash -c 'echo "- Source commit: `$GITHUB_SHA`"'
+   bash: bd964cf: command not found
+   - Source commit:
+   ```
+
+   클라우드팀 파일이라 AI 가 직접 고치지 않았다.
+
+   **보안 그룹** — 요구사항이 2026-09-22 까지 코드 주석에만 있었다. 그날 처음 명시적으로
+   요청했고 아직 반영 여부 미확인이다. 8000 포트 인바운드를 BE 보안 그룹으로만 제한해야 한다.
+
+   **운영 `ANTHROPIC_API_KEY`** — 현재 키는 개발용 개인 키이고 대화방에 노출된 이력이 있다.
+   운영 전용 키 발급 + 폐기 필요.
+
+3. 🟡 **풀스택 회신 대기** — `PROVIDER_ERROR` 이름이 맞는지, `missingData` 어휘를
+   `SALES_HISTORY`(풀스택 계약) 로 갈지 `SALES_DATA`(노션 SALES-04) 로 갈지. 둘 다 한 줄 변경이다.
+
+4. 🟡 **승민 — `solutions.evidence_text TEXT NULL` 컬럼.** 2026-09-21 에 요청했고 아직이다.
+   없으면 SOL-04 응답의 `evidence` 를 BE 가 내려줄 수 없고, 챗봇 `context[].evidence` 도
+   항상 `null` 로 들어와 근거를 못 본다.
+
+5. **제나 복귀 후 리뷰** — 휴가 중 담당 영역을 **12번** 건드렸다:
+   #60 #63 #67 #71 #73 #75 #77 #79 #80 #87 #89 #91. 전부 PR 본문 맨 위에 경계 침범을
+   명시하고 revert 가능함을 적어뒀다. 방향이 다르면 되돌린다.
+
+6. **`docs/api정의서.md` 솔루션 응답 예시에 `evidence` 가 빠져 있다** — #55 로 AI 가 내보내기
    시작했는데 예시 2개 모두 `rankNo/title/summaryText/detailText` 만 있다. FE 가 이 예시를
    보고 만들면 근거 칸이 빈다. BE 담당 문서라 AI 가 직접 고치지 않는다 — 노션 원본 갱신 요청.
-4. **`llm_model` 기본값이 `claude-sonnet-4-5`** (최신은 `claude-sonnet-5`). 버그가 아니라
+
+7. **노션 SALES-04 200 예시가 자기 규칙을 위반한다** — 예시 문장이
+   `"최근 화요일 매출이 3주 연속 감소하고 있어요."` 인데, 2026-09-22 확정 규칙은
+   "여러 주 데이터가 필요한 표현 금지"다. AI 쪽은 프롬프트로 막아뒀고 노션 예시 교체가 필요하다.
+
+8. **`llm_model` 기본값이 `claude-sonnet-4-5`** (최신은 `claude-sonnet-5`). 버그가 아니라
    개선이고, 바꾸면 품질·비용이 달라지므로 연동 후에 `llm_smoke` 와 함께 판단한다.
 
 ## 미해결 결정
