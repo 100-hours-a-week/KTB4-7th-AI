@@ -382,3 +382,65 @@ async def test_상세_지표가_하나라도_있으면_생성한다(monkeypatch)
     )
 
     assert res.json()["status"] == "COMPLETED"
+
+
+def _null_prev() -> dict:
+    """BE 가 이전 비교 데이터 없이 보내는 모양 — 2026-09-23 실연동에서 422 가 났다."""
+    m = json.loads(json.dumps(REQUEST_BODY["metrics"]))
+    m["salesSummary"]["vsPrevPeriod"] = None
+    m["categorySales"][0]["vsPrevPeriod"] = None
+    m["menuRankings"][0]["vsPrevPeriod"] = None
+    return {**REQUEST_BODY, "metrics": m}
+
+
+async def test_vsPrevPeriod_가_null_이어도_422가_아니다(monkeypatch):
+    """첫 업로드 매장은 이전 기간 자체가 없다. 422 로 막으면 인사이트를 아예 못 받는다.
+
+    실제 오류: float_type / metrics.salesSummary.vsPrevPeriod
+    """
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(_null_prev())
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "COMPLETED"
+
+
+async def test_null_증감률은_프롬프트에_들어가지_않는다(monkeypatch):
+    """없는 값을 언급하지 말라고 부탁하는 것보다 안 보여주는 쪽이 확실하다.
+
+    프롬프트에 "vsPrevPeriod": null 이 남아 있으면 모델이 0% 로 읽거나 그 자리를 채운다.
+    """
+    seen = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        seen.append(user)
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    await _post(_null_prev())
+
+    assert "vsPrevPeriod" not in seen[0], "null 인 항목은 프롬프트에서 빠져야 한다"
+    assert "null" not in seen[0]
+    assert "7920000" in seen[0], "값이 있는 지표는 그대로 남아야 한다"
+
+
+async def test_값이_있는_증감률은_프롬프트에_남는다(monkeypatch):
+    """exclude_none 이 멀쩡한 값까지 지우면 인사이트가 빈약해진다."""
+    seen = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        seen.append(user)
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    await _post(REQUEST_BODY)
+
+    assert "vsPrevPeriod" in seen[0]
+    assert "0.042" in seen[0]
