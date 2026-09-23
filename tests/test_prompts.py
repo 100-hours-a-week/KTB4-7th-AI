@@ -111,3 +111,28 @@ def test_솔루션_프롬프트는_금액은_천단위로_비율은_백분율로
     assert "천 단위로 끊어" in solution.SYSTEM
     assert "백분율로 바꿔" in solution.SYSTEM
     assert '음수 부호와 "감소"를 함께 쓰지' in solution.SYSTEM
+
+
+def test_챗봇_프롬프트는_마크다운을_금지한다():
+    """FE 챗봇 말풍선이 평문 출력이다(2026-09-23 풀스택 확인).
+
+    지시가 없으면 모델이 볼드와 불릿을 자연스럽게 쓴다 — QA(#96) C-01 에서 실제로
+    `**평일 오후 …**` 와 `- 평일 14시 매출: 30,000원` 이 나왔다. 평문으로 표시하면
+    사용자에게 기호가 그대로 보인다.
+    """
+    from app.prompts import chat
+
+    assert "서식 없이 일반 문장으로만" in chat.SYSTEM
+    assert "빈 줄로 문단 나누기" in chat.SYSTEM
+
+
+def test_챗봇_프롬프트는_금액을_천_단위로_쓰게_한다():
+    """인사이트·솔루션엔 있던 규칙이 챗봇에만 빠져 있었다.
+
+    같은 매장 금액이 솔루션 카드에서는 "1,340,580원", 챗봇에서는 "134만 580원" 으로
+    다르게 보인다. 값은 맞지만 화면 간 일관성이 깨진다.
+    """
+    from app.prompts import chat
+
+    assert "3,247,891원처럼 천 단위로" in chat.SYSTEM
+    assert "만 단위로 줄이지" in chat.SYSTEM
