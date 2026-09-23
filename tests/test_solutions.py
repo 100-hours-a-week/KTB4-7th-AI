@@ -210,3 +210,24 @@ async def test_카드가_0장이면_500이다(monkeypatch):
 
     res = await _post(REQUEST_BODY)
     assert res.status_code == 500
+
+
+async def test_vsPrevPeriod_가_null_이어도_422가_아니다(monkeypatch):
+    """BE 는 인사이트 3곳만 보고했지만 솔루션도 같은 구조라 같이 깨졌다.
+
+    인사이트만 고치면 첫 업로드 매장은 인사이트는 나오는데 솔루션에서 422 가 난다 —
+    출시 첫날 바로 드러나는 경로다(2026-09-23 재현).
+    """
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    body = json.loads(json.dumps(REQUEST_BODY))
+    body["metrics"]["salesSummary"]["vsPrevPeriod"] = None
+    body["metrics"]["categoryBreakdown"][0]["vsPrevPeriod"] = None
+
+    res = await _post(body)
+
+    assert res.status_code == 200

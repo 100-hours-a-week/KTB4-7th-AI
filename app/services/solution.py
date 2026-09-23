@@ -44,7 +44,8 @@ def _parse(raw: str) -> list[SolutionCard] | None:
 
 async def generate(req: SolutionRequest) -> SolutionResponse:
     day_of_week, is_weekend = _day_facts(req.targetDate)
-    metrics = req.metrics.model_dump()
+    # exclude_none: 값이 없는 지표(이전 기간 비교가 없는 첫 업로드 등)는 프롬프트에서 뺀다.
+    metrics = req.metrics.model_dump(exclude_none=True)
     prompt = solution_prompt.build(metrics, req.targetDate, day_of_week, is_weekend)
 
     # 3장을 선호하되, 모자란 응답이라고 버리지는 않는다. 카드 2장이 나가는 것보다

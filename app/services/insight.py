@@ -84,7 +84,10 @@ async def generate(req: InsightRequest) -> InsightResponse:
             data=InsightData(missingData=missing),
         )
 
-    prompt = insight_prompt.build(req.metrics.model_dump(), req.maxInsightCount, MAX_CHARS)
+    # exclude_none: 값이 없는 지표는 프롬프트에서 아예 뺀다. "null 이면 언급하지 마세요"로
+    # 부탁하는 것보다 안 보여주는 쪽이 확실하다 — 코드펜스 때 배운 것과 같은 이유다.
+    metrics = req.metrics.model_dump(exclude_none=True)
+    prompt = insight_prompt.build(metrics, req.maxInsightCount, MAX_CHARS)
 
     insights = None
     for _ in range(MAX_RETRY + 1):

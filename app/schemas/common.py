@@ -20,7 +20,9 @@ class Evidence(Contract):
 
 class SalesSummary(Contract):
     netSales: int
-    vsPrevPeriod: float
+    # 이전 비교 데이터가 없으면 BE 가 null 을 보낸다 — 첫 업로드 매장은 이전 기간 자체가
+    # 없다(2026-09-23 실연동에서 422 확인). 필수로 두면 그 매장은 솔루션을 아예 못 받는다.
+    vsPrevPeriod: float | None = None
 
 
 class HourlyPoint(Contract):
@@ -32,7 +34,7 @@ class HourlyPoint(Contract):
 class CategoryPoint(Contract):
     name: str
     share: float
-    vsPrevPeriod: float
+    vsPrevPeriod: float | None = None
 
 
 class Metrics(Contract):
@@ -57,7 +59,8 @@ class InsightSalesSummary(Contract):
     menuSales: int
     orderCount: int
     averageOrderValue: int
-    vsPrevPeriod: float
+    # 총매출(totalSales) 기준 증감률이다(2026-09-22 BE 확정). 이전 비교 데이터가 없으면 null.
+    vsPrevPeriod: float | None = None
 
 
 class SalesTrendPoint(Contract):
@@ -83,7 +86,7 @@ class CategorySalesPoint(Contract):
     categoryName: str
     menuSales: int
     ratio: float
-    vsPrevPeriod: float
+    vsPrevPeriod: float | None = None
 
 
 class MenuRankingPoint(Contract):
@@ -92,7 +95,7 @@ class MenuRankingPoint(Contract):
     menuSales: int
     quantity: int
     ratio: float
-    vsPrevPeriod: float
+    vsPrevPeriod: float | None = None
 
 
 class InsightMetrics(Contract):
