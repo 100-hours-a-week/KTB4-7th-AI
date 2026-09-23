@@ -104,7 +104,7 @@ jobs:
           {
             echo "## ECR image published"
             echo
-            echo "- Source commit: `$GITHUB_SHA`"
-            echo "- Image tag: `$image_uri`"
-            echo "- Image digest: `$digest`"
+            echo "- Source commit: $GITHUB_SHA"
+            echo "- Image tag: $image_uri"
+            echo "- Image digest: $digest"
           } >> "$GITHUB_STEP_SUMMARY"
