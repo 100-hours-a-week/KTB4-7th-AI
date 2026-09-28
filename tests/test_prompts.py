@@ -83,7 +83,7 @@ def test_인사이트_프롬프트에_지표가_들어간다():
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-09-23"
+    assert solution.VERSION == "2026-09-28"
     assert insight.VERSION == "2026-09-23"
 
 
@@ -136,3 +136,27 @@ def test_챗봇_프롬프트는_금액을_천_단위로_쓰게_한다():
 
     assert "3,247,891원처럼 천 단위로" in chat.SYSTEM
     assert "만 단위로 줄이지" in chat.SYSTEM
+
+
+def test_솔루션_프롬프트는_detailText_를_세_문장으로_나누게_한다():
+    """상세 내용이 한 문단으로 길게 나와 읽기 어렵다는 피드백(2026-09-28).
+
+    실제 화면에서 같은 금액·비중이 문단 중간과 끝에 두 번씩 반복됐다.
+    "중복된 조언을 내지 마세요"는 카드 사이만 보고 카드 안의 반복은 막지 못했다.
+    """
+    prompt = solution.build(METRICS, "2026-09-28", "MON", is_weekend=False)
+
+    assert "세 문장으로" in prompt
+    assert "줄바꿈" in prompt
+    assert "두 번 쓰지 마세요" in prompt
+
+
+def test_솔루션_프롬프트는_summaryText_수치_반복을_막는다():
+    """상세보기 화면은 summaryText 와 detailText 를 함께 보여준다.
+
+    두 필드에 같은 수치가 들어가면 화면에서는 같은 반복으로 보인다.
+    """
+    prompt = solution.build(METRICS, "2026-09-28", "MON", is_weekend=False)
+
+    assert "title·summaryText 에서 이미" in prompt
+    assert "그대로 반복하지 말고" in prompt
