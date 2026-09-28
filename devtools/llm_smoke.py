@@ -38,6 +38,21 @@ METRICS = {
     "reviewSummary": None,
 }
 
+# 인사이트는 2026-09-22 계약으로 지표 구조가 통째로 바뀌었다 — 솔루션(METRICS)과 더는
+# 같은 모양이 아니다(tests/test_prompts.py 의 INSIGHT_METRICS 와 동일한 값).
+INSIGHT_METRICS = {
+    "salesSummary": {
+        "totalSales": 7920000,
+        "menuSales": 7480000,
+        "orderCount": 923,
+        "averageOrderValue": 8581,
+        "vsPrevPeriod": 0.042,
+    },
+    "categorySales": [
+        {"categoryName": "커피", "menuSales": 3120000, "ratio": 0.417, "vsPrevPeriod": -0.044}
+    ],
+}
+
 
 class Failed(Exception):
     pass
@@ -87,7 +102,7 @@ async def insights(client: httpx.AsyncClient) -> dict:
             "salesAnalysisId": 771,
             "targetMonth": "2026-08",
             "triggerType": "UPLOAD",
-            "metrics": METRICS,
+            "metrics": INSIGHT_METRICS,
             "maxInsightCount": 3,
         },
     )
