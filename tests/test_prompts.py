@@ -83,7 +83,7 @@ def test_인사이트_프롬프트에_지표가_들어간다():
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-09-28"
+    assert solution.VERSION == "2026-09-29"
     assert insight.VERSION == "2026-09-23"
 
 
@@ -138,25 +138,37 @@ def test_챗봇_프롬프트는_금액을_천_단위로_쓰게_한다():
     assert "만 단위로 줄이지" in chat.SYSTEM
 
 
-def test_솔루션_프롬프트는_detailText_를_세_문장으로_나누게_한다():
+def test_솔루션_프롬프트는_detailText_를_줄바꿈으로_나누게_한다():
     """상세 내용이 한 문단으로 길게 나와 읽기 어렵다는 피드백(2026-09-28).
 
-    실제 화면에서 같은 금액·비중이 문단 중간과 끝에 두 번씩 반복됐다.
-    "중복된 조언을 내지 마세요"는 카드 사이만 보고 카드 안의 반복은 막지 못했다.
+    줄바꿈이 화면에 보존되는 것은 배포본으로 확인했다(2026-09-29). 챗봇과 다르다.
     """
-    prompt = solution.build(METRICS, "2026-09-28", "MON", is_weekend=False)
+    prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
 
-    assert "세 문장으로" in prompt
+    assert "두 문장으로" in prompt
     assert "줄바꿈" in prompt
-    assert "두 번 쓰지 마세요" in prompt
+    assert "같은 내용을 반복하지 않게" in prompt
 
 
-def test_솔루션_프롬프트는_summaryText_수치_반복을_막는다():
-    """상세보기 화면은 summaryText 와 detailText 를 함께 보여준다.
+def test_솔루션_프롬프트는_지표_수치를_evidence_에만_쓰게_한다():
+    """배포 화면에서 evidence 가 카드 상세에 그대로 노출된다(2026-09-29 확인).
 
-    두 필드에 같은 수치가 들어가면 화면에서는 같은 반복으로 보인다.
+    네 필드가 함께 보이는데 셋이 같은 금액을 반복했다.
+
+        summaryText   평일 21시에 매출이 17,325,073원으로 가장 높습니다.
+        detailText    평일 21시 매출이 17,325,073원으로 하루 중 가장 높은 시간대입니다.
+        evidence      평일 21시 매출이 17,325,073원으로 전 시간대 중 가장 높습니다.
+
+    프롬프트가 세 필드 모두에게 수치를 말하라고 시키고 있었던 것이 원인이다.
     """
-    prompt = solution.build(METRICS, "2026-09-28", "MON", is_weekend=False)
+    prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
 
-    assert "title·summaryText 에서 이미" in prompt
-    assert "그대로 반복하지 말고" in prompt
+    assert "evidence 에만 쓰고" in prompt
+    assert "title·summaryText·detailText 에는" in prompt
+
+
+def test_솔루션_프롬프트는_실행_수치는_허용한다():
+    """시각·인원·수량까지 막으면 실행 방법이 빈약해진다. 지표 수치가 아니라 지시다."""
+    prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
+
+    assert "지표 수치가 아니라 지시이므로" in prompt
