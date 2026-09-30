@@ -1,6 +1,6 @@
 # 작업 상태
 
-마지막 갱신: 2026-09-23
+마지막 갱신: 2026-09-29
 브랜치: `dev` (아래 PR 전부 머지 완료)
 
 ## 지금 어디
@@ -289,9 +289,274 @@ BE 가 끊은 뒤에도 토큰만 태운다. 인사이트만 12초로 묶어 최
 **기간 정책 확정** — V1 은 `targetMonth` 기준 월간 고정. 필터 변경으로 재생성하지 않는다.
 스키마·ERD 변경 없음.
 
+## 2026-09-29 — 챗봇 답변 길이 프롬프트 수정 + 로컬 풀스택 연동 디버깅
+
+### 챗봇 답변이 너무 길다 (이슈 #104, PR #105, `cb3aca4` 머지 완료)
+
+솔루션 카드 3장을 생성한 뒤 챗봇에 물어보면, 카드에 이미 있는 `summaryText`/`detailText`를
+"첫째, ... 둘째, ... 셋째, ..." 식으로 통째로 재진술했다. 원인은 프롬프트에 "사용자가 이
+카드를 화면에서 보고 있(었)다"는 사실 자체가 없어 모델이 매번 새로 설명해야 한다고
+판단한 것.
+
+- **1차 시도는 실패했다.** 답변 규칙 목록 맨 아래에 "카드를 통째로 재진술하지 마세요"를
+  부정 지시로만 추가했더니 실호출에서 그대로 재현됐다 — 규칙이 목록 끝에 묻혀 우선순위가
+  낮았고, "오늘 뭐 해야 해?" 류 질문은 애초에 카드 3장을 나열하고 싶게 만드는 질문이라
+  부정 지시 하나로는 못 이겼다.
+- **성공한 수정**: 규칙을 프롬프트 맨 위로 올리고, "카드는 채팅 화면에는 안 보인다(뒤로가기/
+  솔루션 페이지에서만 보임)"는 사실을 명시하고, 나쁜 예/좋은 예를 넣었다. 좋은 예 하나를
+  보여주는 쪽이 부정 지시 여러 개보다 효과적이었다.
+- **최대 응답 토큰은 원인이 아니었다** — `get_model()`에 `max_tokens` 지정이 없어
+  `claude-sonnet-4-5` 모델 프로필 기본값(64000)을 그대로 쓰고 있었다. 길이 문제는 토큰
+  상한이 아니라 프롬프트가 장황함을 유도한 것.
+- PR #105에서 HojuneLee0106이 실측 검증: 답변 길이 432~500자 → 229~250자로 줄었다고 확인.
+  같은 코멘트에서 "결론 먼저 규칙을 추가할지"와 "'간결하게' 문구 제거가 의도적인지" 두 가지를
+  물어왔고, 아직 답을 안 했다 — 다음 세션에서 처리.
+- `app/prompts/chat.py`의 `VERSION`을 `2026-09-23` → `2026-09-29`로 갱신.
+
+### 로컬 FE→BE→AI 풀스택 연동 디버깅 (제나 로컬 환경, AI 레포 밖)
+
+로컬에서 FE→BE→AI 3단 연동을 처음 끝까지 테스트하면서 찾은 버그다. AI 레포가 아닌 파일은
+진단만 하고 직접 고치지 않았다(AGENTS.md 경계 규칙). 더블 슬래시 관련 2건(FE→BE, BE→AI)은
+각각 FE/BE `.env` 수정으로 해결 완료돼 기록에서 지웠다.
+
+1. **BE 500이 실제 401을 가림** (`KTB4-7th-BE`): 로그인 세션 없이 챗봇을 호출하면
+   `AuthenticationRequiredException`이 발생하는데, 그걸 처리해야 할
+   `GlobalExceptionHandler#handleMissingSession`이 `Accept: text/event-stream` 헤더에 맞는
+   메시지 컨버터가 없어 `HttpMediaTypeNotAcceptableException`으로 다시 죽는다 — 결과적으로
+   빈 바디 500만 보인다. 실사용 시나리오는 "FE로 로그인부터 하면" 해결되지만, 이 핸들러
+   버그 자체는 BE 팀에 아직 공유 안 함.
+
+### SSE 스트리밍이 토큰 단위가 아니라 뭉쳐서 온다 (해결 완료, 2026-09-30)
+
+Chrome DevTools Network 탭에서 챗봇 응답을 보면 답변 전체가 실시간으로 고르게 오지 않고,
+약 20개 청크가 동일한 ms 타임스탬프로 한 번에 찍히고(17:15:09.555), ~10초 공백 뒤 나머지가
+또 동일한 ms로 한 번에 찍힌다(17:15:19.655). 토큰이 실제로 도착하는 대로 찍힌다면 같은
+묶음 안에서 타임스탬프가 완전히 똑같을 수 없다 — 어딘가에서 버퍼링되고 있다는 뜻.
+
+확인 순서(전부 코드 재확인, 실제 네트워크 재현 테스트는 안 했다 — 실호출 비용 때문에 보류):
+
+- `app/api/chat.py`의 `_stream()`: `compiled.astream_events()`에서 `on_chat_model_stream`
+  이벤트를 받는 즉시 `yield` — 코드상 버퍼링 없음. **AI 서버 쪽은 정상.**
+- `app/main.py`: GZip 등 응답을 버퍼링할 미들웨어 없음. **정상.**
+- `KTB4-7th-BE`의 `ChatService.writeRaw()`(BE→FE 구간): 이벤트마다
+  `outputStream.write()` 직후 `outputStream.flush()` 호출 — **여기도 의도상 버퍼링 안 함.**
+- `KTB4-7th-BE`의 `RestChatAiClient`(AI→BE 구간, 즉 BE가 AI 응답을 읽어오는 곳):
+  `HttpClient.send()`(동기) + `BodyHandlers.ofInputStream()` + `BufferedReader.readLine()`
+  조합을 쓴다. JDK `java.net.http.HttpClient`가 청크/SSE 응답을 읽을 때 내부적으로 데이터를
+  모아뒀다가 한 번에 스트림으로 흘려보내는 경향이 있다고 알려져 있다 — 관찰된 "묶음 내부
+  타임스탬프 완전 동일" 현상과 정황이 맞는다.
+
+**확정 (2026-09-30, BE·AI 교차 검증)**: BE가 먼저 자기 쪽을 좁혔다 — `ChatService`가 AI
+청크를 받는 즉시(같은 ms~1ms 내) FE로 flush하는 걸 확인해 **BE→FE 구간은 무죄**로 판명. 다만
+BE가 AI 청크를 **받는 시점** 자체가 이미 몇 개씩 같은 ms로 뭉쳐 있었다(예: idx 72·73·74가
+23:03:08.212, 75·76·77이 23:03:08.393, 78·79·80이 23:03:08.569 — 3개씩, ~180ms 간격).
+
+AI 쪽에 `app/api/chat.py`의 `_stream()`에 임시로 `logger.info("SSE_CHUNK_TIMING idx=%d
+content=%r", ...)`를 추가해 같은 방식으로 실측했다. 결과: idx 15 이후로는 토큰 하나당
+~56~61ms 간격으로 **거의 다 한 개씩 고르게** 나갔다 — 동일 ms에 여러 개가 찍히는 경우가
+사실상 없었다(초반 idx 2~8 구간만 예외로, LLM이 짧은 서브워드 토큰을 1~7ms 간격으로 빠르게
+낸 것 — 이건 정상적인 LLM 스트리밍 특성). AI의 개별 토큰 간격(~57~60ms)을 3개씩 묶으면
+BE가 본 간격(~180ms)과 정확히 맞아떨어진다.
+
+**중간 결론**: AI 앱과 LLM 스트림 구간은 정상이다 — 토큰을 개별적으로, 고르게 내보낸다. 뭉치는
+지점은 BE가 AI 응답을 **읽어오는** `RestChatAiClient`의 JDK `HttpClient`
+(`HttpClient.send()` 동기 + `BodyHandlers.ofInputStream()` + `BufferedReader.readLine()`)
+구간으로 좁혀졌다.
+
+**BE 최종 조치 (2026-09-30)**: `RestChatAiClient`를 WebClient 기반 SSE 수신으로 교체해
+AI→BE 구간은 청크 단위로 정상 처리되는 걸 로그로 확인했다. 그런데 **브라우저에서는 여전히
+여러 이벤트가 한 번에 도착**해, 원인이 하나 더 있었다 — 앞서 "여기도 의도상 버퍼링 안 함"으로
+판단했던 BE→FE(`ChatService.writeRaw()`) 구간이 사실은 **완전히 무죄는 아니었다.**
+`OutputStream.flush()`만으로는 Tomcat의 HTTP 응답 버퍼까지 비워지지 않아, 실제로는 응답이
+끝나는 시점에 몰아서 브라우저로 나가고 있었다. `write()` → `flush()` 뒤에
+`HttpServletResponse.flushBuffer()`를 추가로 호출하고, 응답 헤더에
+`Cache-Control: no-cache`·`X-Accel-Buffering: no`를 붙여 해결했다. Nginx
+`proxy_buffering off`는 이미 적용돼 있었다.
+
+**최종 결론**: 뭉침 원인은 두 군데 걸쳐 있었다 — ① BE가 AI 응답을 읽어오는
+`RestChatAiClient`의 JDK `HttpClient`(WebClient로 교체), ② BE가 FE로 내보내는 Tomcat 응답
+버퍼(`flushBuffer()` + 버퍼링 방지 헤더 추가). AI 앱/LLM 스트림 구간은 처음부터 끝까지
+정상이었다. 둘 다 BE 레포 수정으로 해결 완료 — AI 쪽 코드 변경 없음(진단용 로깅만 추가했다가
+확인 후 제거).
+
+### 기타
+
+- `app/services/chat/graph.py`에 진단용 `logger.warning` 추가(`_stream_model`의
+  `AI_TIMEOUT`/`AI_GENERATION_ERROR` 예외 핸들러) — **아직 커밋 안 함.** 기존엔 스트리밍
+  응답 안에서 `ApiError`가 SSE `error` 이벤트로 바로 변환돼 서버 로그에 전혀 안 남았다
+  (`app/core/errors.py`의 전역 핸들러가 스트리밍 경로에선 안 탐). 계속 가져갈지 다음
+  세션에서 결정.
+- `dev`에 밀려 있던 PR 5개를 로컬로 pull: #100(llm_smoke 인사이트 픽스처), #102(HojuneLee —
+  솔루션 detailText를 세 문장 구조로), #103(devtools 픽스처 스키마 검증 테스트),
+  #105(챗봇 답변 길이, 위 항목), #107(지표 수치를 evidence 한 곳에만 쓰게 함).
+
+## 2026-09-30 — SOL 일일 솔루션 스케줄러(00:00) 로컬 검증
+
+FE에서 솔루션 생성이 "1분 넘게 걸린다"는 제보로 시작한 조사다. AI 쪽에 `app/services/solution.py`
+`generate()`에 임시 진단 로그(`SOLUTION_ATTEMPT_TIMING`, 아직 커밋 안 함)를 넣어 실측한 결과
+**AI 호출 자체는 15.50초 만에 재시도 없이 1회 성공**해 타임아웃·재시도 가설은 기각됐다
+(`2026-09-30 13:25:16` `attempt=0 elapsed=15.50s parsed_cards=3`). 그런데 그 시각이 우연히도
+아래 BE 로컬 테스트 cron의 네 번째 자동 발화 시각(`13:25:01`→`13:25:16`)과 정확히 일치했다 —
+즉 사용자가 직접 누른 생성 요청이 아니라 **BE가 남겨둔 매분(`0 */1 * * * *`) 테스트 cron이
+자동으로 AI를 호출한 것**이었고, 이게 같은 시간대에 진행 중이던 FE 폴링 관찰과 뒤섞여
+"솔루션 생성이 2.4분 걸린다"는 착시를 만들었다. AI 레포 밖(BE) 원인이라 여기서는 진단만 하고
+직접 고치지 않았다(AGENTS.md 경계 규칙) — 이하는 BE 담당(승민)이 정리한 로컬 검증 기록이다.
+
+### 배경
+
+- 매일 00:00(Asia/Seoul)에 `ACTIVE` 상태 매장 전체의 솔루션을 생성하는 배치는 AI 레포가 아니라
+  BE의 `SalesSolutionDailyScheduler`가 담당한다.
+- 실제 자정까지 기다리지 않고 로컬에서 이 배치 동작을 검증하기 위해, `local` 프로필 전용으로
+  이미 준비되어 있던 시간 조작 훅(`ClockConfig`, `APP_FIXED_NOW`)과 `SOLUTION_DAILY_CRON`
+  환경변수를 사용해 검증을 진행했다.
+- OS 시스템 시계는 건드리지 않았다. JWT 만료·인증서 등 다른 영역에 영향을 줄 수 있기 때문이다.
+
+```java
+// SalesSolutionDailyScheduler.java
+@Scheduled(cron = "${SOLUTION_DAILY_CRON:0 0 0 * * *}", zone = "Asia/Seoul")
+public void generateDailySolutions() {
+    LocalDate targetDate = LocalDate.now(clock);
+    storeRepository.findAllByStatus(StoreStatus.ACTIVE)
+        .forEach(store -> generationService.generateScheduled(store.getId(), targetDate));
+}
+```
+
+```java
+// ClockConfig.java
+@Bean
+@Profile("local")
+public Clock localClock(@Value("${APP_FIXED_NOW:}") String fixedNow) {
+    if (fixedNow.isBlank()) {
+        return Clock.system(KOREA_ZONE);
+    }
+    return Clock.fixed(OffsetDateTime.parse(fixedNow).toInstant(), KOREA_ZONE);
+}
+```
+
+### 문제 1 — 시계만 고정해서는 스케줄이 당겨지지 않음
+
+- `APP_FIXED_NOW`는 `LocalDate.now(clock)`, 즉 **`targetDate` 계산에만** 영향을 준다.
+- `@Scheduled(cron = ...)`가 실제로 언제 실행되는지는 Spring이 **실제 시스템 시각** 기준으로
+  판단하므로, `APP_FIXED_NOW`만 바꿔서는 잡이 앞당겨 돌지 않는다.
+- 원인을 코드로 추가 확인한 결과, 두 값 모두 **애플리케이션 기동 시 단 한 번만 resolve되는
+  구조**였다.
+  - `Clock` 빈은 `@Bean` 싱글톤이라 기동 시 한 번 생성되면 재기동 전까지 값이 고정된다.
+  - `SOLUTION_DAILY_CRON`도 `ScheduledAnnotationBeanPostProcessor`가 컨텍스트 초기화
+    시점에 `${...}` placeholder를 한 번만 resolve해서 `CronTrigger`를 등록한다.
+  - 이 프로젝트에는 `SchedulingConfigurer`, 커스텀 `TaskScheduler`, `@RefreshScope` 등
+    런타임 동적 재스케줄링 메커니즘이 전혀 없다(전체 검색 결과 0건).
+- **결론**: `.env`를 고치는 순서가 중요하다 — 서버를 띄운 *다음에* 값을 바꿔도 반영되지
+  않으며, 반드시 *재기동 전에* 값을 맞춰야 한다.
+
+### 시도 1 — 매분 반복 cron (`0 */1 * * * *`) → 부작용으로 폐기
+
+- 재기동을 반복하지 않고 여러 번 검증하려고 `SOLUTION_DAILY_CRON=0 */1 * * * *`(매분 정각
+  실행)로 설정했다.
+- 부작용 발견:
+  - 매분마다 `ACTIVE` 매장 전체에 대해 **실제로 AI를 호출**하여 불필요한 부하·비용이 계속
+    발생했다.
+  - 스케줄 작업은 싱글 스레드(`scheduling-1`)에서 순차 실행되는데, 마침 동시에 진행 중이던
+    별도의 "매출 업로드 → 솔루션 생성 144초 지연" 성능 조사 로그와 뒤섞여, 지연의 원인이
+    leftover 테스트 cron 때문인지 실제 코드 문제인지 한동안 구분이 안 되는 상황이
+    발생했다(`13:25:00` 근처 WARN 로그가 실제로는 이 테스트 cron의 자동 발화였음을
+    스레드명·시각으로 뒤늦게 확인 — 위 AI 쪽 `SOLUTION_ATTEMPT_TIMING` 로그 참고).
+- **결론**: 반복 cron 방식은 운영 조사에 잡음을 만들고 불필요한 AI 호출을 유발하므로 폐기하고,
+  "재기동 후 몇 분 뒤 1회만 발화"하는 1회성 cron으로 전환했다.
+
+### 문제 2 — 로컬 DB에 이미 쌓인 솔루션 때문에 재검증이 "반영 안 됨"
+
+- 1회성 cron(`SOLUTION_DAILY_CRON=0 45 13 * * *`)으로 전환 후, 해당 시각에 재기동해서
+  기다려도 화면·DB 어느 쪽에서도 변화가 관측되지 않았다.
+- 콘솔에도 아무 로그가 남지 않아 처음엔 "재기동 타이밍이 빗나갔나"로 의심했으나, DB
+  (`solution_bundles`)를 직접 조회해 원인을 특정했다.
+
+```
+id  store_id  target_date  status     created_at           updated_at
+1   1         2026-09-30   COMPLETED  2026-09-30 12:42:27  2026-09-30 12:42:46
+2   1         2026-10-01   COMPLETED  2026-09-30 13:04:01  2026-09-30 13:04:17
+3   1         2026-10-02   COMPLETED  2026-09-30 13:16:01  2026-09-30 13:16:16
+4   1         2026-10-03   COMPLETED  2026-09-30 13:25:01  2026-09-30 13:25:16
+```
+
+- 이미 앞선 시도(시도 1)에서 `09-30`, `10-01`, `10-02`, `10-03` 날짜의 솔루션이 전부
+  `COMPLETED`로 생성되어 있었다. 그런데 문제의 재검증 시도는 `APP_FIXED_NOW`를 다시
+  `2026-09-30`(오늘 = 이미 생성된 날짜)로 되돌린 상태였다.
+- 코드로 원인을 확정했다:
+
+```java
+// SalesSolutionPersistenceService.java
+public StartResult start(Long storeId, Long salesAnalysisId, LocalDate targetDate) {
+    return bundleRepository.findByStoreIdAndTargetDate(storeId, targetDate)
+            .map(bundle -> startExisting(bundle, salesAnalysisId))
+            .orElseGet(() -> { /* 신규 생성 */ });
+}
+
+private StartResult startExisting(SolutionBundleEntity bundle, Long salesAnalysisId) {
+    if (bundle.getStatus() == SolutionBundleStatus.FAILED) {
+        bundle.restartForAnalysis(salesAnalysisId);
+        return new StartResult(bundle, true);
+    }
+    return new StartResult(bundle, false); // COMPLETED/PENDING/GENERATING → 재생성 안 함
+}
+```
+
+- `(storeId, targetDate)` 조합으로 기존 레코드가 있고 상태가 `FAILED`가 아니면
+  (`COMPLETED`/`PENDING`/`GENERATING`), 재생성 로직(= AI 호출)을 타지 않고 **조용히
+  스킵**한다.
+- 이 스킵 경로에는 `SalesSolutionGenerationService`, `SalesSolutionPersistenceService`,
+  `SalesSolutionDailyScheduler` 어디에도 로거(`Logger`/`@Slf4j`)가 선언되어 있지 않아,
+  콘솔 로그만으로는 "스킵됐다"는 사실 자체를 확인할 방법이 없었다.
+- **정리**: 이건 환경변수 설정 실수가 아니라, **같은 날짜로 반복 검증하면서 생긴 멱등성
+  (중복 방지) 로직 때문**이었다. `.env` 값 자체는 문법적으로 문제없었다.
+
+### 최종 해결 및 검증 결과
+
+- 아직 솔루션이 생성된 적 없는 새 날짜로 `APP_FIXED_NOW`를 바꾸고, 재기동 몇 분 뒤 시각으로
+  1회성 cron을 다시 맞췄다.
+
+```env
+SOLUTION_DAILY_CRON=0 05 14 * * *
+APP_FIXED_NOW=2026-10-04T00:00:05+09:00
+```
+
+- 결과 — `solution_bundles`에 새 레코드가 정상 생성됨:
+
+```
+id=5  store_id=1  target_date=2026-10-04  status=COMPLETED
+created_at=2026-09-30 14:05:01  →  updated_at=2026-09-30 14:05:20
+```
+
+- **14:05:01(cron 발화·생성 시작) → 14:05:20(COMPLETED, 총 19초 소요)** 로 스케줄러가 정상
+  동작함을 최종 확인했다.
+- FE 네트워크 탭에서도 `GET .../v1/solutions/today`(solutionApi.ts) 폴링이 여러 번
+  반복되다가 최종적으로 200 OK로 완료 응답을 받는 것을 확인했다(스크린샷 근거).
+
+### 배포 환경에는 이 문제가 없는 이유
+
+- 이번에 막혔던 "중복 스킵" 현상은 **같은 (storeId, targetDate) 조합으로 로컬에서 여러 번
+  반복 검증**했기 때문에 발생한 로컬 한정 현상이다.
+- 실제 운영 배포에서는 `SOLUTION_DAILY_CRON` 기본값(`0 0 0 * * *`)에 따라 **매일 00:00에
+  정확히 한 번만** 실행되고, 그 시점의 `targetDate`는 항상 "오늘"이라는 **아직 한 번도
+  생성된 적 없는 새 날짜**다.
+- 따라서 `solution_bundles`에 동일 `(storeId, targetDate)` 레코드가 미리 존재할 수 없고,
+  위에서 확인한 중복 방지(스킵) 로직에 걸릴 가능성이 없다. 배포 환경의 00:00 자동 생성은
+  이번 검증 결과대로 정상 동작할 것으로 판단한다.
+
+### 후속 조치(TODO, BE)
+
+- [ ] `.env`의 `SOLUTION_DAILY_CRON`, `APP_FIXED_NOW` 임시 오버라이드 제거 후 재기동하여
+      기본값(`0 0 0 * * *`, 실시간 Clock)으로 복귀
+- [ ] 로컬 검증용으로 쌓인 `solution_bundles`(`id 1~5`, `target_date 2026-09-30~2026-10-04`)
+      테스트 데이터 필요 시 정리
+- [ ] `SalesSolutionDailyScheduler` / `SalesSolutionGenerationService` /
+      `SalesSolutionPersistenceService`에 최소한 스킵 시 debug 로그를 추가하는 것을 검토
+      (이번처럼 "왜 아무 일도 안 일어났는지" 콘솔로 확인할 수 없는 문제 재발 방지)
+- [ ] (선택) 재기동 없이 즉시 검증 가능하도록 `local` 프로필 전용 수동 트리거 엔드포인트
+      추가 검토
+
 ## 마지막으로 통과한 것
 
-- `uv run pytest -q` — **120 passed** (2026-09-23)
+- `uv run pytest -q` — **140 passed** (2026-09-29)
 - `uv run python -m devtools.llm_smoke --with-chat` — 솔루션·인사이트·챗봇 3종 실호출 통과
 - `uv run python -m devtools.forecast_check --pos <엑셀> --be-daily <BE 샘플>` — 62/62일 일치
 - `uv run ruff check --fix . && uv run ruff format .` — 통과
@@ -364,6 +629,17 @@ BE 가 끊은 뒤에도 토큰만 태운다. 인사이트만 12초로 묶어 최
 
 8. **`llm_model` 기본값이 `claude-sonnet-4-5`** (최신은 `claude-sonnet-5`). 버그가 아니라
    개선이고, 바꾸면 품질·비용이 달라지므로 연동 후에 `llm_smoke` 와 함께 판단한다.
+
+9. 🟡 **PR #105 리뷰 응답 대기** — HojuneLee0106이 "결론 먼저" 규칙 추가 여부(+누가 할지)와
+   "간결하게" 문구 제거가 의도적인지 물어봤다. 아직 답을 안 했다.
+
+10. ✅ **SSE 스트리밍 뭉침 — 해결 완료(2026-09-30).** 위 "SSE 스트리밍..." 절 참고. BE가
+    `RestChatAiClient`를 WebClient로 교체 + `flushBuffer()`/버퍼링 방지 헤더 추가로 해결.
+    브라우저에서 실시간 표시 확인까지 완료됐다.
+
+11. 🟡 **BE 공유 필요 — `GlobalExceptionHandler#handleMissingSession`이 SSE 요청에서
+    500으로 죽는다.** `Accept: text/event-stream` 요청에 세션이 없으면 401 대신 빈 바디
+    500이 나간다 — 메시지 컨버터가 해당 Accept 타입을 처리 못 해서. 아직 BE 팀에 공유 안 함.
 
 ## 미해결 결정
 
