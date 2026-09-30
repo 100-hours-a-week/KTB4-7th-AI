@@ -5,7 +5,11 @@ from app.schemas.common import Contract
 # 노션 API 정의서 `POST /internal/v1/ai/forecast/batch`, 위키 [AI] 단계1 §3.3
 HORIZON_DAYS = 35
 REQUIRED_COMPLETE_MONTHS = 2  # 예측 시작 달의 직전 두 달
-MIN_TRAINING_ROWS = 60  # 첫 데이터 월은 전월 피처가 없어 학습 행에서 빠진다
+# 첫 데이터 월은 전월 피처가 없어 학습 행에서 빠진다. 그래서 학습 행은 "직전 두 달"의
+# 일수 합과 같고, 그 합의 최솟값이 59다 — 평년 1월+2월(31+28), 2월+3월(28+31).
+# 60 으로 두면 완전한 두 달을 다 갖췄는데도 거절된다. 응답이 incompleteMonths: [] 라고
+# 하면서 INSUFFICIENT_HISTORY 를 내보내 BE 도 점주도 이유를 알 수 없었다(2026-09-30).
+MIN_TRAINING_ROWS = 59
 
 
 class DailySale(Contract):

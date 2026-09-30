@@ -52,15 +52,39 @@ def test_이력이_충분하면_35일을_예측한다():
     assert {p.modelVersion for p in res.data.predictions} == {MODEL_VERSION}
 
 
-def test_학습_행이_60행_미만이면_이력부족이다():
-    """1월 1일 시작 매장이 4월을 예측하는 경우. 학습 행은 2·3월 59행뿐이다."""
+def test_평년_2월이_껴도_완전한_두_달이면_예측된다():
+    """1월 1일 시작 매장이 4월을 예측하는 경우. 학습 행은 2·3월 59행이다.
+
+    학습 행은 "직전 두 달"의 일수 합과 같고, 그 합의 최솟값이 59다(평년 1+2월, 2+3월).
+    기준을 60 으로 두면 완전한 두 달을 다 갖췄는데도 거절된다 — 응답이
+    `incompleteMonths: []` 라고 하면서 INSUFFICIENT_HISTORY 를 내보내
+    BE 도 점주도 이유를 알 수 없었다(2026-09-30 수정).
+    """
     res = run_forecast(_request("2026-01-01", "2026-03-31", "2026-04-01"))
+
+    assert res.message == "예측을 생성했습니다."
+    assert len(res.data.predictions) == 35
+
+
+def test_윤년_2월도_그대로_예측된다():
+    """윤년은 2월이 29일이라 60 행이다. 기준을 낮춰도 이쪽 동작은 변하지 않는다."""
+    res = run_forecast(_request("2024-01-01", "2024-03-31", "2024-04-01"))
+
+    assert len(res.data.predictions) == 35
+
+
+def test_완전한_달이_하나뿐이면_여전히_이력부족이다():
+    """기준을 59 로 낮춰도 구멍이 생기지 않는지 본다.
+
+    2월 시작이면 첫 달(2월)이 학습에서 빠져 3월 31 행만 남는다.
+    """
+    res = run_forecast(_request("2026-02-01", "2026-03-31", "2026-04-01"))
 
     assert res.status == "INSUFFICIENT_DATA"
     assert res.data.missingData == ["INSUFFICIENT_HISTORY"]
     assert res.data.incompleteMonths == []
-    assert res.data.providedTrainingRows == 59
-    assert res.data.requiredTrainingRows == 60
+    assert res.data.providedTrainingRows == 31
+    assert res.data.requiredTrainingRows == 59
 
 
 def test_직전_두_달이_완전하지_않으면_이력부족이다():
@@ -159,8 +183,12 @@ async def test_라우터가_예측_응답을_돌려준다():
 
 
 async def test_이력이_부족하면_200_에_업무_상태로_내려간다():
-    """요청 자체는 정상이라 422 가 아니다 — 노션 공통 원칙의 status 확장형."""
-    payload = _request("2026-01-01", "2026-03-31", "2026-04-01").model_dump()
+    """요청 자체는 정상이라 422 가 아니다 — 노션 공통 원칙의 status 확장형.
+
+    2월 시작이면 첫 달이 학습에서 빠져 3월 31 행만 남는다. 2026-01-01 시작은
+    2026-09-30 부터 예측이 성공하므로 이 테스트에 쓸 수 없다.
+    """
+    payload = _request("2026-02-01", "2026-03-31", "2026-04-01").model_dump()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
