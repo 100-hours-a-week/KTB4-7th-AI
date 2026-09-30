@@ -172,3 +172,17 @@ def test_솔루션_프롬프트는_실행_수치는_허용한다():
     prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
 
     assert "지표 수치가 아니라 지시이므로" in prompt
+
+
+def test_솔루션_프롬프트의_줄바꿈_안내가_한_줄로_나간다():
+    r"""`줄바꿈(\n)`을 소스에 `\n` 으로 적으면 파이썬이 실제 개행으로 바꿔 문장이 쪼개진다.
+
+    모델에게 "\n 으로 구분하라"고 문자 그대로 알려야 하는 자리라 `\\n` 이어야 한다.
+    깨져 있어도 모델이 의도를 알아들어 출력은 맞게 나왔기 때문에 실호출로도 안 잡혔다.
+    """
+    prompt = solution.build(METRICS, "2026-09-30", "WED", is_weekend=False)
+
+    assert r"줄바꿈(\n)으로 구분하세요." in prompt
+
+    line = next(li for li in prompt.split("\n") if "줄바꿈(" in li)
+    assert line.rstrip().endswith("구분하세요."), f"안내 문장이 개행으로 쪼개졌다: {line!r}"
