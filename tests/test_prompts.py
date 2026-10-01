@@ -83,7 +83,7 @@ def test_인사이트_프롬프트에_지표가_들어간다():
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-09-29"
+    assert solution.VERSION == "2026-10-01"
     assert insight.VERSION == "2026-09-23"
 
 
@@ -142,36 +142,33 @@ def test_솔루션_프롬프트는_detailText_를_줄바꿈으로_나누게_한�
     """상세 내용이 한 문단으로 길게 나와 읽기 어렵다는 피드백(2026-09-28).
 
     줄바꿈이 화면에 보존되는 것은 배포본으로 확인했다(2026-09-29). 챗봇과 다르다.
+    2026-10-01 에 실행 방법 두 문장에 기대효과 한 문장을 더해 세 문장이 됐다.
     """
     prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
 
-    assert "두 문장으로" in prompt
+    assert "세 문장" in prompt
     assert "줄바꿈" in prompt
     assert "같은 내용을 반복하지 않게" in prompt
 
 
-def test_솔루션_프롬프트는_지표_수치를_evidence_에만_쓰게_한다():
-    """배포 화면에서 evidence 가 카드 상세에 그대로 노출된다(2026-09-29 확인).
-
-    네 필드가 함께 보이는데 셋이 같은 금액을 반복했다.
-
-        summaryText   평일 21시에 매출이 17,325,073원으로 가장 높습니다.
-        detailText    평일 21시 매출이 17,325,073원으로 하루 중 가장 높은 시간대입니다.
-        evidence      평일 21시 매출이 17,325,073원으로 전 시간대 중 가장 높습니다.
-
-    프롬프트가 세 필드 모두에게 수치를 말하라고 시키고 있었던 것이 원인이다.
+def test_솔루션_프롬프트는_summaryText_수치_반복을_금지한다():
+    """evidence 가 화면에 노출된다는 걸 2026-09-29 에 확인해 수치를 evidence 한 곳에만
+    쓰게 했었다. 2026-10-01, FE 가 상세보기에서 evidence 를 숨기기로 가정하면서(미확정)
+    유일하게 화면에 보이는 숫자 자리를 summaryText 로 옮겼다 — title·detailText 가
+    summaryText 의 수치를 다시 반복하는 것만 금지한다.
     """
     prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
 
-    assert "evidence 에만 쓰고" in prompt
-    assert "title·summaryText·detailText 에는" in prompt
+    assert "summaryText 에서 이미 쓴 지표 수치를 title·detailText 에서 또 쓰지 마세요" in prompt
+    assert "근거 수치와 함께 한 문장으로 쓰세요" in prompt
 
 
 def test_솔루션_프롬프트는_실행_수치는_허용한다():
-    """시각·인원·수량까지 막으면 실행 방법이 빈약해진다. 지표 수치가 아니라 지시다."""
+    """시각·인원·할인율까지 막으면 실행 방법이 빈약해진다. 지표 수치가 아니라 지시다."""
     prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
 
-    assert "지표 수치가 아니라 지시이므로" in prompt
+    assert "21시까지" in prompt
+    assert "그대로 써도 됩니다" in prompt
 
 
 def test_솔루션_프롬프트의_줄바꿈_안내가_한_줄로_나간다():
@@ -182,7 +179,7 @@ def test_솔루션_프롬프트의_줄바꿈_안내가_한_줄로_나간다():
     """
     prompt = solution.build(METRICS, "2026-09-30", "WED", is_weekend=False)
 
-    assert r"줄바꿈(\n)으로 구분하세요." in prompt
+    assert r"줄바꿈(\n)으로 구분해 쓰세요" in prompt
 
     line = next(li for li in prompt.split("\n") if "줄바꿈(" in li)
-    assert line.rstrip().endswith("구분하세요."), f"안내 문장이 개행으로 쪼개졌다: {line!r}"
+    assert "구분해 쓰세요" in line, f"안내 문장이 개행으로 쪼개졌다: {line!r}"
