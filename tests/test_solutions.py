@@ -202,6 +202,29 @@ async def test_카드가_3장보다_적으면_재시도하되_버리지는_않�
     assert len(calls) == 2, "3장이 아니면 한 번 더 시도해야 한다"
 
 
+async def test_동형이의_문자가_섞이면_재시도한다(monkeypatch):
+    """배포본에서 "POP" 이 "POП"(끝 글자가 키릴 문자 П)으로 나온 사례(2026-10-01).
+
+    모델이 드물게 라틴 문자 자리에 생김새가 비슷한 다른 스크립트 문자를 섞어 낸다.
+    화면에서는 구분이 안 가 "이상한 글자가 섞여 나온다"는 피드백으로만 드러난다.
+    """
+    tainted = _cards((1, "세트 메뉴 POП을 배치하세요"), (2, "B"), (3, "C"))
+    clean = _cards((1, "세트 메뉴 POP를 배치하세요"), (2, "B"), (3, "C"))
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        return tainted if len(calls) == 1 else clean
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert "П" not in res.json()["data"]["solutionCards"][0]["title"]
+    assert len(calls) == 2, "혼입 문자가 섞인 1차 응답은 버리고 재시도해야 한다"
+
+
 async def test_카드가_0장이면_500이다(monkeypatch):
     async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
         return json.dumps({"solutionCards": []})

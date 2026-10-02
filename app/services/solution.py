@@ -14,11 +14,31 @@ from app.schemas.solution import SolutionCard, SolutionData, SolutionRequest, So
 MAX_RETRY = 1
 MAX_CARDS = 3
 _WEEKDAY_CODES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+_TEXT_FIELDS = ("title", "summaryText", "detailText", "evidence")
+
+# 한글·라틴·숫자·흔한 구두점만 허용한다. 배포본에서 "POP" 이 "POП"(끝 글자가 키릴 문자
+# П, U+041F)으로 나온 사례(2026-10-01) — 화면에서는 생김새가 같아 구분이 안 가는
+# 동형이의 문자를 모델이 드물게 섞어 낸다.
+_ALLOWED_RANGES = (
+    (0x0000, 0x007F),  # Basic Latin
+    (0x0080, 0x00FF),  # Latin-1 Supplement (· ° 등)
+    (0x1100, 0x11FF),  # Hangul Jamo
+    (0x2000, 0x206F),  # General Punctuation (스마트 따옴표·줄임표·대시)
+    (0x20A0, 0x20CF),  # Currency Symbols (₩)
+    (0x3000, 0x303F),  # CJK Symbols and Punctuation
+    (0x3130, 0x318F),  # Hangul Compatibility Jamo
+    (0xAC00, 0xD7A3),  # Hangul Syllables
+    (0xFF00, 0xFFEF),  # Halfwidth and Fullwidth Forms
+)
 
 
 def _day_facts(target_date: str) -> tuple[str, bool]:
     code = _WEEKDAY_CODES[date.fromisoformat(target_date).weekday()]
     return code, code in ("SAT", "SUN")
+
+
+def _has_foreign_script(text: str) -> bool:
+    return any(not any(lo <= ord(ch) <= hi for lo, hi in _ALLOWED_RANGES) for ch in text)
 
 
 def _parse(raw: str) -> list[SolutionCard] | None:
@@ -39,6 +59,11 @@ def _parse(raw: str) -> list[SolutionCard] | None:
     ranks = [card.rankNo for card in cards]
     if len(set(ranks)) != len(ranks):
         return None
+    for card in cards:
+        for field in _TEXT_FIELDS:
+            value = getattr(card, field)
+            if value and _has_foreign_script(value):
+                return None
     return cards
 
 
