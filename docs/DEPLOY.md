@@ -16,6 +16,9 @@
 | `BACKEND_TIMEOUT_SECONDS` | | `2.0` (기본) | — |
 | `INSIGHT_LLM_TIMEOUT_SECONDS` | | `12` (기본) | — |
 | `INTERNAL_AI_TOKEN` | | (없음) | 토큰 검증을 하지 않는다 |
+| `SENTRY_DSN` | | (없음) | Sentry 오류 수집을 하지 않는다 |
+| `SENTRY_ENVIRONMENT` | | `production` | `local` |
+| `SENTRY_RELEASE` | | `ktb4-ai-server@0.1.0+<commit SHA>` | CI 이미지에 빌드 시 포함된 값 사용 |
 
 `LLM_PROVIDER` 를 바꾸면 해당 provider 의 키가 대신 필요하다
 (`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `UPSTAGE_API_KEY`).
@@ -39,6 +42,10 @@ ERROR app.main 환경변수가 비어 있다 — 배포 설정을 확인한다: 
 | 포트 | `8000` |
 | 헬스체크 | `GET /health` → `{"status":"ok"}` |
 | 이미지 태그 | full commit SHA (위키 CI 설계 기준) |
+
+CI 이미지의 `SENTRY_RELEASE` 는 `pyproject.toml` 버전과 full commit SHA로 생성한다.
+배포 환경에서는 `SENTRY_DSN` 과 `SENTRY_ENVIRONMENT` 를 런타임에 주입한다.
+수집 대상은 HTTP 5xx와 챗봇 스트림의 서버 오류이며, 요청 본문과 예외 메시지는 전송하지 않는다.
 
 `/health` 는 **설정 상태를 보지 않는다.** 로드밸런서용 생존 확인이므로 키가 비어 있어도 200 이다.
 

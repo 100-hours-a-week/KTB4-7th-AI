@@ -17,6 +17,8 @@ COPY app ./app
 
 FROM python:3.12-slim-trixie
 
+ARG SENTRY_RELEASE=ktb4-ai-server@local
+
 WORKDIR /app
 
 RUN groupadd --gid 10001 app \
@@ -27,7 +29,8 @@ COPY --from=builder /app/app ./app
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    SENTRY_RELEASE=${SENTRY_RELEASE}
 
 USER 10001:10001
 

@@ -46,7 +46,9 @@ jobs:
       - name: Build Docker image
         env:
           LOCAL_IMAGE: memme-ai:${{ github.sha }}
-        run: docker build --tag "$LOCAL_IMAGE" .
+        run: |
+          app_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml)"
+          docker build --build-arg "SENTRY_RELEASE=ktb4-ai-server@${app_version}+${GITHUB_SHA}" --tag "$LOCAL_IMAGE" .
       - name: Verify container health
         env:
           LOCAL_IMAGE: memme-ai:${{ github.sha }}

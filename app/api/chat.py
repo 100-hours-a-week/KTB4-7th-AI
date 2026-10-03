@@ -21,6 +21,7 @@ AI_TOOL_ERROR(도구 조회 2회 연속 실패 — 기존엔 실패 문구를 �
 
 import json
 
+import sentry_sdk
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -82,6 +83,10 @@ async def _stream(compiled, initial_state: dict):
                 evidence = output.get("last_evidence")
                 continue
             if kind == "on_chain_end" and event.get("name") == "give_up":
+                sentry_sdk.capture_exception(
+                    ApiError(500, "AI_TOOL_ERROR", "AI_TOOL_ERROR"),
+                    tags={"error_code": "AI_TOOL_ERROR"},
+                )
                 yield _error_sse("AI_TOOL_ERROR", chat_graph.FAILURE_PHRASE)
                 continue
             if kind != "on_chat_model_stream":
@@ -92,7 +97,12 @@ async def _stream(compiled, initial_state: dict):
             if text:
                 yield _sse(text, evidence)
     except ApiError as exc:
+        if exc.status >= 500:
+            sentry_sdk.capture_exception(exc, tags={"error_code": exc.code})
         yield _error_sse(exc.code, exc.message)
+    except Exception as exc:
+        sentry_sdk.capture_exception(exc, tags={"error_code": "AI_GENERATION_ERROR"})
+        raise
     yield "data: [DONE]\n\n"
 
 

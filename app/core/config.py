@@ -31,6 +31,10 @@ class Settings(BaseSettings):
 
     backend_base_url: str = "http://localhost:9000"
 
+    sentry_dsn: str = ""
+    sentry_environment: str = "local"
+    sentry_release: str = ""
+
     # 비어 있으면 검증하지 않는다 — app/core/auth.py 참고. 보안 그룹이 1차 경계고
     # 이건 그게 빠졌을 때를 위한 2차 방어선이라, 없다고 기동을 막지 않는다.
     internal_ai_token: str = ""
