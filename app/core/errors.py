@@ -1,5 +1,6 @@
 import logging
 
+import sentry_sdk
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -54,6 +55,8 @@ def _body(message: str, code: str, status: int, fail_reason: str | None = None) 
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(request: Request, exc: ApiError) -> JSONResponse:
+        if exc.status >= 500:
+            sentry_sdk.capture_exception(exc, tags={"error_code": exc.code})
         logger.warning("%s %s", exc.code, exc.message)
         return JSONResponse(
             status_code=exc.status,
@@ -70,6 +73,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+        sentry_sdk.capture_exception(exc, tags={"error_code": "INTERNAL_ERROR"})
         logger.exception("INTERNAL_ERROR")
         return JSONResponse(
             status_code=500,
