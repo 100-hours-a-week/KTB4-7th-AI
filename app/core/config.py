@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     upstage_api_key: str = ""
 
+    # OpenAI 호환 서버를 가리킬 때만 채운다(vLLM 등). 비어 있으면 OpenAI 공식 엔드포인트다.
+    # 로컬 LLM 검증용이다 — RunPod 등에 띄운 vLLM 의 /v1 주소를 넣는다(이슈 #113).
+    llm_base_url: str | None = None
+
+    # vLLM 이 Qwen3 계열을 서빙하면 thinking 이 기본으로 켜져 있다. <think> 블록이 본문 앞에
+    # 붙어 JSON 파싱이 전부 깨지는데, OpenAI 호환 API 로는 chat_template_kwargs 로만 끌 수
+    # 있다. 모델명으로 자동 판별하지 않는 이유는 로컬 모델명이 임의 문자열이기 때문이다
+    # (Qwen/Qwen3-14B-AWQ, my-finetune-v3 …) — OPENAI_REASONING_MODELS 처럼 목록으로
+    # 둘 수가 없다.
+    llm_disable_thinking: bool = False
+
     backend_base_url: str = "http://localhost:9000"
 
     sentry_dsn: str = ""
@@ -72,7 +83,9 @@ def missing_required(s: "Settings") -> list[str]:
     """
     missing = []
     key_field = _API_KEY_FIELDS.get(s.llm_provider)
-    if key_field and not getattr(s, key_field):
+    # LLM_BASE_URL 로 로컬 서버를 가리키면 API 키가 없는 게 정상이다 — vLLM 은 기본적으로
+    # 인증을 걸지 않는다. 여기서 막으면 로컬 모델로는 기동 자체가 안 된다.
+    if key_field and not getattr(s, key_field) and not s.llm_base_url:
         missing.append(key_field.upper())
     if "localhost" in s.backend_base_url or "127.0.0.1" in s.backend_base_url:
         missing.append("BACKEND_BASE_URL(로컬 기본값 그대로다)")
@@ -80,3 +93,14 @@ def missing_required(s: "Settings") -> list[str]:
 
 
 settings = Settings()
+
+
+def thinking_off_body() -> dict:
+    """vLLM 에 Qwen3 계열을 띄웠을 때 thinking 을 끄는 extra_body. 꺼져 있으면 빈 dict.
+
+    챗봇(app/services/chat/graph.py)도 같은 값을 써야 해서 여기 둔다 — 한쪽만 끄면
+    단발 생성은 멀쩡한데 챗봇 답변 앞에만 <think> 가 붙는다.
+    """
+    if not settings.llm_disable_thinking:
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}

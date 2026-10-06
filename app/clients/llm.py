@@ -12,6 +12,7 @@ from app.core.config import (
     OPENAI_REASONING_MODELS,
     UPSTAGE_BASE_URL,
     settings,
+    thinking_off_body,
 )
 from app.core.errors import ApiError
 
@@ -30,10 +31,14 @@ def _get_anthropic() -> AsyncAnthropic:
 
 def _get_openai() -> AsyncOpenAI:
     if "openai" not in _clients:
+        # LLM_BASE_URL 이 있으면 OpenAI 호환 서버(vLLM 등)를 가리킨다. 그쪽은 보통 인증을
+        # 안 걸지만 SDK 가 키 자리를 요구해서 자리값을 넣는다 — vLLM 문서의 관례다.
+        base_url = settings.llm_base_url
         _clients["openai"] = AsyncOpenAI(
-            api_key=settings.openai_api_key,
+            api_key=settings.openai_api_key or ("EMPTY" if base_url else ""),
             timeout=settings.llm_timeout_seconds,
             max_retries=0,
+            **({"base_url": base_url} if base_url else {}),
         )
     return _clients["openai"]
 
@@ -120,6 +125,9 @@ async def complete(
                 extra["reasoning_effort"] = "none"
             if timeout:
                 extra["timeout"] = timeout
+            body = thinking_off_body()
+            if body:
+                extra["extra_body"] = body
             return await _complete_openai_compatible(_get_openai(), system, user, **extra)
         if provider == "upstage":
             return await _complete_openai_compatible(

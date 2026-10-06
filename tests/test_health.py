@@ -32,3 +32,25 @@ def test_설정이_갖춰지면_비어_있다():
 
     s = Settings(anthropic_api_key="sk-x", backend_base_url="http://be:8080")
     assert missing_required(s) == []
+
+
+def test_LLM_BASE_URL_이_있으면_API_키를_요구하지_않는다():
+    """로컬 vLLM 은 인증을 안 건다 — 여기서 막으면 로컬 모델로는 기동이 안 된다(이슈 #113)."""
+    from app.core.config import Settings, missing_required
+
+    s = Settings(
+        llm_provider="openai",
+        openai_api_key="",
+        llm_base_url="http://10.0.1.9:8000/v1",
+        backend_base_url="http://be:8080",
+    )
+
+    assert missing_required(s) == []
+
+
+def test_LLM_BASE_URL_이_없으면_API_키를_여전히_요구한다():
+    from app.core.config import Settings, missing_required
+
+    s = Settings(llm_provider="openai", openai_api_key="", backend_base_url="http://be:8080")
+
+    assert missing_required(s) == ["OPENAI_API_KEY"]
