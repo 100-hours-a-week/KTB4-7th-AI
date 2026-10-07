@@ -4,6 +4,7 @@ import httpx
 
 from app.clients import llm
 from app.main import app
+from app.services.solution import _parse
 
 REQUEST_BODY = {
     "storeId": 1024,
@@ -231,3 +232,49 @@ async def test_vsPrevPeriod_가_null_이어도_422가_아니다(monkeypatch):
     res = await _post(body)
 
     assert res.status_code == 200
+
+
+async def test_동형이의_문자가_섞이면_재시도한다(monkeypatch):
+    """배포본(memme.kr/solution/4/10)에서 "POP" 이 "POП"(키릴 П, U+041F)로 생성됐다.
+
+    타입상 멀쩡한 문자열이라 스키마는 통과하고, 화면 폰트에서는 구분이 거의 안 돼
+    점주에게는 글자가 깨진 것으로만 보인다(2026-10-02).
+    """
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _cards((1, "POП 홍보물 설치"), (2, "B"), (3, "C"))
+        return _cards((1, "POP 홍보물 설치"), (2, "B"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(calls) == 2, "동형이의 문자가 섞이면 한 번 더 시도해야 한다"
+    assert "П" not in json.dumps(res.json(), ensure_ascii=False)
+
+
+def test_기호가_섞인_정상_문장은_재시도하지_않는다():
+    """글자만 보는 이유 — 기호까지 막으면 모델이 즐겨 쓰는 "—"·"→" 하나에 매번 걸리고,
+    재시도도 같은 이유로 실패해 그날 솔루션이 통째로 없어진다.
+    """
+    raw = json.dumps(
+        {
+            "solutionCards": [
+                {
+                    "rankNo": 1,
+                    "title": "평일 14~17시 'A/B' 프로모션 진행",
+                    "summaryText": "객단가 8,581원 · 주문 923건 … 전기 대비 8.85% 증가했습니다.",
+                    "detailText": "기온 25℃ 이상 → 아이스 비중이 높습니다.\n"
+                    "“시그니처” 메뉴를 전면에 배치하고 ‘1+1’ 행사를 겁니다.",
+                    "evidence": "커피 매출이 1,340,580원으로 메뉴 매출의 41.7%를 차지합니다.",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    assert _parse(raw) is not None
