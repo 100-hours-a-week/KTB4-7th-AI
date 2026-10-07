@@ -7,6 +7,13 @@
   evidence 는 `solutions.evidence_text`(TEXT NULL)에 대응한다(2026-09-21 BE에 컬럼 추가 요청).
 - 최상위 aiInsight 는 제거했다 — 매출 AI 인사이트는 별도 `/internal/v1/ai/sales-insights` 담당.
 
+2026-10-07: 카드마다 쓸 근거 지표를 서비스가 하나씩 배정해 넘긴다. 전체 metrics 를
+던지고 "각 카드는 서로 다른 지표를 근거로" 라고 지시하던 방식은 실측에서 10 번 중 4 번
+같은 지표로 두 장을 만들었다(`카드_지표_중복없음` 66%, n=50). 배정을 코드로 옮기면
+겹칠 수가 없고, 카드당 보이는 숫자가 줄어 환각도 함께 줄 것으로 본다 — 지표 6 종인
+인사이트가 `수치_정확` 68%, 4 종인 솔루션이 96% 였다. 배정 기준은
+`app/services/solution_focus.py` 에 있다.
+
 2026-10-01: 상세보기 네 필드가 레이블 없이 이어 보이는데 title·summaryText 가 같은 말을
 반복하고 카드끼리도 중복돼 보인다는 피드백으로, title(행동) → summaryText(문제+원인+
 수치) → detailText(실행 2문장+기대효과)로 역할을 재설계했다. 카드 간 시간대·카테고리
@@ -40,7 +47,7 @@
 
 import json
 
-VERSION = "2026-10-01"
+VERSION = "2026-10-07"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -51,12 +58,13 @@ SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 증감률(vsPrevPeriod)이 없는 항목은 이전 기간과 비교하지 마세요. 현재 기간의 사실만 쓰세요.
 설명 없이 JSON만 출력하세요."""
 
-_USER = """{metrics}
+_USER = """오늘은 {target_date}({day_of_week})이고 {weekend}입니다.
 
-오늘은 {target_date}({day_of_week})이고 {weekend}입니다.
+점주가 오늘 실행할 수 있는 솔루션 카드 {card_count}장을 생성하세요.
+카드마다 쓸 근거 지표를 아래에 하나씩 배정했습니다. 각 카드는 **자기 근거 지표만** 쓰고,
+다른 카드에 배정된 지표를 끌어오지 마세요.
 
-점주가 오늘 실행할 수 있는 솔루션 카드 3장을 생성하세요.
-각 카드는 서로 다른 지표를 근거로 하며, 중복된 조언을 내지 마세요.
+{focus_blocks}
 
 title·summaryText·detailText 세 필드는 화면에 레이블 없이 문장이 쭉 이어진 하나의
 글처럼 보입니다(evidence 는 화면에 보이지 않고 챗봇·저장용으로만 쓰입니다). title 이
@@ -78,7 +86,7 @@ detailText 는 세 문장을 줄바꿈(\\n)으로 구분해 쓰세요: 그 원�
 문장. 접속어(그러니/이를 위해/그 결과 등)로 앞 문장과 자연스럽게 이어지게 하고, 세
 문장이 같은 내용을 반복하지 않게 하세요. 기대효과 문장에는 지표에 없는 새 수치를
 지어내지 말고("매출 15% 증가" 등 금지) "~를 늘릴 수 있습니다"처럼 정성적으로만 쓰세요.
-title 은 200자를 넘기지 말고, rankNo 는 1·2·3 을 하나씩만 쓰세요.
+title 은 200자를 넘기지 말고, rankNo 는 1 부터 {card_count} 까지를 하나씩만 쓰세요.
 evidence 는 화면에는 보이지 않고 챗봇 컨텍스트·저장용으로만 쓰입니다. summaryText 가
 근거로 삼은 지표를 그대로 인용한 한 문장으로 쓰세요 — 지표에 없는 수치를 쓰지 말고,
 해법이 아니라 관찰된 사실만 담으세요.
@@ -86,9 +94,15 @@ evidence 는 화면에는 보이지 않고 챗봇 컨텍스트·저장용으로�
 {{"solutionCards":[{{"rankNo":1,"title":"...","summaryText":"...","detailText":"...","evidence":"..."}}]}}"""
 
 
-def build(metrics: dict, target_date: str, day_of_week: str, is_weekend: bool) -> str:
+def build(focus: list[dict], target_date: str, day_of_week: str, is_weekend: bool) -> str:
+    """focus 는 카드 순서대로의 근거 지표다 — app/services/solution_focus.py::assign 참고."""
+    blocks = "\n\n".join(
+        f"[카드 {index} 근거]\n{json.dumps(item, ensure_ascii=False)}"
+        for index, item in enumerate(focus, start=1)
+    )
     return _USER.format(
-        metrics=json.dumps(metrics, ensure_ascii=False),
+        focus_blocks=blocks,
+        card_count=len(focus),
         target_date=target_date,
         day_of_week=day_of_week,
         weekend="주말" if is_weekend else "평일",

@@ -11,6 +11,7 @@ from app.clients import llm
 from app.core.errors import ApiError
 from app.prompts import solution as solution_prompt
 from app.schemas.solution import SolutionCard, SolutionData, SolutionRequest, SolutionResponse
+from app.services.solution_focus import assign as assign_focus
 
 MAX_RETRY = 1
 MAX_CARDS = 3
@@ -65,15 +66,19 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
     day_of_week, is_weekend = _day_facts(req.targetDate)
     # exclude_none: 값이 없는 지표(이전 기간 비교가 없는 첫 업로드 등)는 프롬프트에서 뺀다.
     metrics = req.metrics.model_dump(exclude_none=True)
-    prompt = solution_prompt.build(metrics, req.targetDate, day_of_week, is_weekend)
+    # 카드마다 쓸 근거 지표를 코드가 배정한다 — 모델이 고르게 두면 같은 지표로 두 장을
+    # 만든다(실측 10 번 중 4 번). app/services/solution_focus.py 참고.
+    focus = assign_focus(metrics)
+    prompt = solution_prompt.build(focus, req.targetDate, day_of_week, is_weekend)
 
     # 3장을 선호하되, 모자란 응답이라고 버리지는 않는다. 카드 2장이 나가는 것보다
     # 500 이 나가는 쪽이 점주에게 더 나쁘다 — 그날 솔루션이 아예 없어진다.
+    wanted = len(focus) or MAX_CARDS
     cards = None
     for _ in range(MAX_RETRY + 1):
         parsed = _parse(await llm.complete(solution_prompt.SYSTEM, prompt))
         cards = parsed or cards
-        if parsed and len(parsed) == MAX_CARDS:
+        if parsed and len(parsed) == wanted:
             break
 
     if not cards:
