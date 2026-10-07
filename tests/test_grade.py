@@ -53,7 +53,7 @@ def _card(rank=1, title="평일 비피크 프로모션 도입", summary="", deta
         "summaryText": summary or "평일 14시 매출이 30,000원으로 하루 중 가장 낮습니다.",
         "detail": None,
         "detailText": detail
-        or "14시까지 할인 안내를 띄우세요.\n직원 1명을 홀로 배치하세요.\n방문을 늘릴 수 있습니다.",
+        or "14시까지 할인 안내를 띄우세요.\n홀 담당을 늘리세요.\n방문을 늘릴 수 있습니다.",
         "evidence": evidence or "평일 14시 매출이 30,000원입니다.",
     }
 
@@ -74,14 +74,14 @@ def _three_cards(**overrides) -> dict:
         2,
         title="커피 라인업 보강",
         summary="커피 비중이 62%로 가장 큽니다.",
-        detail="신메뉴를 1종 추가하세요.\n시식을 운영하세요.\n재방문을 늘릴 수 있습니다.",
+        detail="신메뉴를 추가하세요.\n시식을 운영하세요.\n재방문을 늘릴 수 있습니다.",
         evidence="커피 매출 비중은 62%입니다.",
     )
     third = _card(
         3,
         title="오늘 예상 매출에 맞춘 준비",
         summary="오늘 예상 매출은 1,250,000원입니다.",
-        detail="재료를 그에 맞춰 발주하세요.\n마감 인력을 1명 두세요.\n품절을 줄일 수 있습니다.",
+        detail="재료를 그에 맞춰 발주하세요.\n마감 인력을 늘리세요.\n품절을 줄일 수 있습니다.",
         evidence="오늘 예상 매출은 1,250,000원입니다.",
     )
     return _graded(first, second, third)
@@ -149,6 +149,65 @@ def test_기대효과에_수치를_지어내면_걸린다():
     result = _three_cards(detail="할인하세요.\n배치하세요.\n매출이 15% 증가합니다.")
 
     assert result["기대효과_정성적"] is False
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "21시까지 10% 할인을 진행하세요.",
+        "직원 1명 이상을 배치하세요.",
+        "인력을 2명 더 배치하세요.",
+        "원두 5kg 을 발주하세요.",
+    ],
+)
+def test_행동의_얼마나를_지어내면_걸린다(sentence):
+    """마진을 모르는데 할인율을, 인건비 대비 생산성을 모르는데 인원을 말할 근거가 없다.
+
+    추상적이면 점주가 안 쓰고 말지만, 구체적이고 틀리면 돈을 잃는다.
+    """
+    result = _three_cards(detail=f"{sentence}\n직원을 배치하세요.\n늘릴 수 있습니다.")
+
+    assert result["실행수치_날조_없음"] is False
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "14시까지 운영 시간을 늘리세요.",  # 시각은 지표에 있다
+        "방문을 유도하는 할인을 거세요.",  # 방향만 말한다
+        "원두 발주를 평소보다 줄이세요.",
+    ],
+)
+def test_방향만_말하면_통과한다(sentence):
+    result = _three_cards(detail=f"{sentence}\n안내를 띄우세요.\n늘릴 수 있습니다.")
+
+    assert result["실행수치_날조_없음"] is True
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "마케팅을 강화하세요.",
+        "프로모션을 진행하세요.",
+        "홍보 활동을 확대하세요.",
+        "전략을 변경하세요.",
+    ],
+)
+def test_누구나_할_수_있는_말이면_걸린다(sentence):
+    """점주가 오늘 무엇을 다르게 할지가 안 나오는 문장이다."""
+    result = _three_cards(detail=f"{sentence}\n안내를 띄우세요.\n늘릴 수 있습니다.")
+
+    assert result["공허한_조언_없음"] is False
+
+
+def test_기대효과_문장은_공허_검사에서_빼준다():
+    """마지막 문장은 "매출을 늘릴 수 있습니다" 가 허용이라 같은 잣대로 보면 오탐이다."""
+    result = _three_cards(
+        detail="14시까지 안내를 띄우세요.\n직원을 배치하세요.\n매출을 늘릴 수 있습니다."
+    )
+
+    assert result["공허한_조언_없음"] is True
+    assert result["실행수치_날조_없음"] is True
 
 
 # ── 이전 판에서 이어지는 규칙들 ───────────────────────────────────────
