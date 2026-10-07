@@ -27,6 +27,53 @@ _WEEKDAY_CODES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 # 키릴 П, 전각 Ｐ, 한자 売 가 모두 걸린다.
 _HANGUL_OR_LATIN = re.compile(r"[A-Za-z\uac00-\ud7a3\u3131-\u318e]")
 
+# 프롬프트는 2026-10-01 부터 "지표에 있는 24시간제 그대로 쓰고 '오후 2시'로 바꾸지 마세요"
+# 라고 지시한다. 실측 준수율 40%(n=48, Qwen3-32B) — 전항목 통과율 27% 의 거의 전부가 이
+# 항목 때문이다. 재시도로 때우기엔 너무 자주 틀리고, 다행히 변환이 결정론적이라 코드로
+# 치환한다. 모델이 뭘 쓰든 화면에는 24시간제만 나간다.
+#
+# "2시간" 처럼 시각이 아닌 표현은 건드리면 안 되므로 "시" 뒤에 "간" 이 오면 제외한다.
+# 범위는 "오후 2~5시" 와 "저녁 7시~9시" 두 모양 다 온다 — 뒤쪽 숫자가 접두어를 물려받아야
+# 해서 따로 잡는다. 안 그러면 "저녁 7시~9시" 가 "19시~9시" 가 된다.
+_WORDS = "오전|오후|새벽|아침|낮|저녁|밤"
+_CLOCK = re.compile(
+    rf"(?P<rw>{_WORDS})\s*(?P<h1>\d{{1,2}})\s*시?\s*[~\u2013\u2014-]\s*(?P<h2>\d{{1,2}})\s*시(?!\uac04)"
+    rf"|(?P<sw>{_WORDS})\s*(?P<h>\d{{1,2}})\s*시(?!\uac04)"
+)
+# 접두어별 12시간제 → 24시간제 보정
+_PM_WORDS = {"오후", "저녁", "밤"}
+_AM_WORDS = {"오전", "새벽", "아침"}
+
+
+def _hour24(word: str, hour: int) -> int | None:
+    """못 바꾸면 None — 손대지 않는 편이 틀리게 바꾸는 것보다 낫다."""
+    if not 1 <= hour <= 12:
+        return None
+    if word in _PM_WORDS:
+        return 12 if hour == 12 else hour + 12
+    if word in _AM_WORDS:
+        return 0 if hour == 12 else hour
+    return hour  # "낮 12시" 처럼 보정이 필요 없는 경우
+
+
+def to_24h(text: str) -> str:
+    """\"오후 2시\" → \"14시\", \"오후 2~5시\" → \"14~17시\"."""
+
+    def swap(match: re.Match) -> str:
+        if match.group("sw"):
+            hour = _hour24(match.group("sw"), int(match.group("h")))
+            return f"{hour}시" if hour is not None else match.group(0)
+
+        word = match.group("rw")
+        first = _hour24(word, int(match.group("h1")))
+        second = _hour24(word, int(match.group("h2")))
+        # "오후 11~1시" 처럼 접두어를 넘어가는 구간은 뜻이 모호하니 그대로 둔다
+        if first is None or second is None or second <= first:
+            return match.group(0)
+        return f"{first}~{second}시"
+
+    return _CLOCK.sub(swap, text)
+
 
 def _day_facts(target_date: str) -> tuple[str, bool]:
     code = _WEEKDAY_CODES[date.fromisoformat(target_date).weekday()]
@@ -42,7 +89,7 @@ def _parse(raw: str) -> list[SolutionCard] | None:
     """
     try:
         data = json.loads(llm.strip_fence(raw))
-        cards = [SolutionCard(**card) for card in data["solutionCards"]]
+        cards = [SolutionCard(**_normalize(card)) for card in data["solutionCards"]]
     except Exception:
         return None
 
@@ -54,6 +101,17 @@ def _parse(raw: str) -> list[SolutionCard] | None:
     if any(_foreign_chars(card) for card in cards):
         return None
     return cards
+
+
+_TEXT_FIELDS = ("title", "summaryText", "detailText", "evidence")
+
+
+def _normalize(card: dict) -> dict:
+    """화면에 나가는 텍스트를 다듬는다. 지금은 시각 표기 하나뿐이다."""
+    return {
+        key: to_24h(value) if key in _TEXT_FIELDS and isinstance(value, str) else value
+        for key, value in card.items()
+    }
 
 
 def _foreign_chars(card: SolutionCard) -> set[str]:
