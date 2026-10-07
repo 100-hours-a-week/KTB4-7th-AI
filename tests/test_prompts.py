@@ -175,12 +175,18 @@ def test_솔루션_프롬프트는_summaryText_수치_반복을_금지한다():
     assert "근거 수치와 함께 한 문장으로 쓰세요" in prompt
 
 
-def test_솔루션_프롬프트는_실행_수치는_허용한다():
-    """시각·인원·할인율까지 막으면 실행 방법이 빈약해진다. 지표 수치가 아니라 지시다."""
-    prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
+def test_솔루션_프롬프트는_행동의_얼마나를_금지한다():
+    """시각은 지표에 있지만 할인율·인원은 없다.
 
-    assert "21시까지" in prompt
-    assert "그대로 써도 됩니다" in prompt
+    2026-10-07 에 뒤집었다. 그 전까지는 "실행에 필요한 시각·인원·할인율"을 허용했는데,
+    마진을 모르는데 "10% 할인"을, 인건비 대비 생산성을 모르는데 "직원 1명 추가"를 말할
+    근거가 없다. 추상적이면 점주가 안 쓰고 말지만 구체적이고 틀리면 돈을 잃는다.
+    """
+    prompt = solution.build(assign(METRICS), "2026-09-29", "MON", is_weekend=False)
+
+    assert "14시까지" in prompt, "시각은 지표에 있으므로 허용한다"
+    assert "할인율·인원·수량은 지표에 없는 값" in prompt
+    assert "누구나 할 수 있는 말" in prompt, "공허한 조언 금지도 같이 들어간다"
 
 
 def test_솔루션_프롬프트의_줄바꿈_안내가_한_줄로_나간다():

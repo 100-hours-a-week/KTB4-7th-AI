@@ -52,6 +52,21 @@ _RATIO_WORD = re.compile(
 # 화면에 보여줄 금액·비율. 실행 지시용 작은 수(21시, 1명)와 구분하려고 자릿수·단위를 본다.
 _DISPLAY_NUM = re.compile(r"[\d,]{4,}\s*원|\d+\.?\d*\s*%")
 
+# 행동의 "얼마나" — 지표에 없는 값이라 지어낸 것이다. 마진을 모르는데 할인율을,
+# 인건비 대비 생산성을 모르는데 인원을 말할 근거가 없다(2026-10-07). 시각은 지표에
+# hour 로 있으므로 _ungrounded 가 따로 본다.
+_FABRICATED_AMOUNT = re.compile(
+    r"\d+\s*%\s*(?:할인|세일|디스카운트|인하)"
+    r"|(?:직원|인력|스태프|알바|인원)[을를]?\s*\d+\s*명"
+    r"|\d+\s*명\s*(?:추가|배치|더|이상)"
+    r"|\d+\s*(?:kg|키로|g|그램|잔|개|병|박스|리터)\s*[을를]?\s*(?:준비|발주|주문|구비|입고)"
+)
+# 누구나 할 수 있는 말. 점주가 오늘 무엇을 다르게 할지가 안 나온다.
+_VAGUE_ACTION = re.compile(
+    r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[을를]?\s*"
+    r"(?:강화|개선|변경|확대|진행|실행|집중)"
+)
+
 _DOW_KO = {
     "MONDAY": "월요일",
     "TUESDAY": "화요일",
@@ -239,6 +254,12 @@ def grade_solution(raw: str, metrics: dict) -> dict:
     result["detail_수치_정확"] = not any(_ungrounded(d, metrics) for d in details)
 
     # 기대효과(detailText 마지막 문장)는 정성적으로만 — "매출 15% 증가" 같은 날조 금지
+    # 실행 문장(detailText 앞 두 문장)과 title 만 본다 — 기대효과 문장은 "매출을 늘릴 수
+    # 있습니다" 가 허용이라 같은 잣대로 보면 오탐이 난다.
+    actions = titles + [line for d in details for line in d.split("\n")[:2]]
+    result["실행수치_날조_없음"] = not any(_FABRICATED_AMOUNT.search(t) for t in actions)
+    result["공허한_조언_없음"] = not any(_VAGUE_ACTION.search(t) for t in actions)
+
     result["기대효과_정성적"] = not any(_DISPLAY_NUM.search(d.split("\n")[-1]) for d in details)
 
     # 카드끼리 같은 지표를 근거로 쓰면 "서로 다른 지표" 지시 위반이다. 문장이 달라도 중복이다.
