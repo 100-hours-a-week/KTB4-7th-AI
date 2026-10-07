@@ -94,3 +94,27 @@ def test_google_thinking_모델이_아니면_thinking_level을_보내지_않는�
     model = chat_graph.get_model([])
 
     assert model.bound.thinking_level is None
+
+
+def test_LLM_BASE_URL_이_있으면_챗봇도_그_주소를_쓴다(monkeypatch):
+    """단발 생성만 로컬 서버로 돌리면 챗봇은 조용히 OpenAI 로 나간다 — 이슈 #113."""
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "llm_base_url", "http://10.0.1.9:8000/v1")
+
+    model = chat_graph.get_model([])
+
+    assert str(model.bound.openai_api_base) == "http://10.0.1.9:8000/v1"
+    assert model.bound.openai_api_key.get_secret_value() == "EMPTY"
+
+
+def test_챗봇도_thinking을_같은_설정으로_끈다(monkeypatch):
+    """한쪽만 끄면 단발 생성은 멀쩡한데 챗봇 답변 앞에만 <think> 가 붙는다."""
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_base_url", "http://10.0.1.9:8000/v1")
+    monkeypatch.setattr(settings, "llm_disable_thinking", True)
+
+    model = chat_graph.get_model([])
+
+    assert model.bound.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}

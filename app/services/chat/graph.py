@@ -33,6 +33,7 @@ from app.core.config import (
     OPENAI_REASONING_MODELS,
     UPSTAGE_BASE_URL,
     settings,
+    thinking_off_body,
 )
 from app.core.errors import ApiError
 
@@ -86,10 +87,17 @@ def get_model(tools: list) -> BaseChatModel:
             "timeout": settings.llm_timeout_seconds,
             "max_retries": 0,
         }
+        if settings.llm_base_url:
+            # OpenAI 호환 서버(vLLM 등). 인증을 안 걸어도 SDK 가 키 자리를 요구한다.
+            kwargs["base_url"] = settings.llm_base_url
+            kwargs["api_key"] = settings.openai_api_key or "EMPTY"
         if settings.llm_model in OPENAI_REASONING_MODELS:
             # GPT-5.6 Luna처럼 reasoning이 기본인 모델만 non-reasoning으로 고정한다 —
             # reasoning이 없는 openai 모델(LLM_MODEL)에는 이 파라미터 자체를 보내지 않는다.
             kwargs["reasoning_effort"] = "none"
+        body = thinking_off_body()
+        if body:
+            kwargs["extra_body"] = body
         model = ChatOpenAI(**kwargs)
     elif provider == "upstage":
         model = ChatOpenAI(

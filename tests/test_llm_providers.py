@@ -194,3 +194,58 @@ async def test_provider_호출이_타임아웃되면_PROVIDER_TIMEOUT을_던진�
         await llm.complete("sys", "user")
 
     assert exc_info.value.code == "PROVIDER_TIMEOUT"
+
+
+async def test_LLM_BASE_URL_이_있으면_openai_클라이언트가_그_주소를_쓴다(monkeypatch):
+    """OpenAI 호환 서버(vLLM 등)를 가리키는 경로 — 이슈 #113."""
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_base_url", "http://10.0.1.9:8000/v1")
+    monkeypatch.setattr(llm, "AsyncOpenAI", _FakeOpenAIClient)
+
+    assert await llm.complete("sys", "user") == "openai-ok"
+    assert llm._clients["openai"].base_url == "http://10.0.1.9:8000/v1"
+
+
+async def test_LLM_BASE_URL_이_없으면_base_url을_넘기지_않는다(monkeypatch):
+    """기존 OpenAI 공식 엔드포인트 동작이 그대로여야 한다."""
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(llm, "AsyncOpenAI", _FakeOpenAIClient)
+
+    assert await llm.complete("sys", "user") == "openai-ok"
+    assert llm._clients["openai"].base_url is None
+
+
+async def test_thinking을_끄면_extra_body로_보낸다(monkeypatch):
+    """vLLM 의 Qwen3 는 thinking 이 기본이라 <think> 블록이 JSON 앞에 붙는다."""
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_base_url", "http://10.0.1.9:8000/v1")
+    monkeypatch.setattr(settings, "llm_disable_thinking", True)
+    monkeypatch.setattr(llm, "AsyncOpenAI", _FakeOpenAIClient)
+
+    await llm.complete("sys", "user")
+
+    kwargs = llm._clients["openai"].chat.completions.last_kwargs
+    assert kwargs["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+async def test_thinking을_끄지_않으면_extra_body를_안_보낸다(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_disable_thinking", False)
+    monkeypatch.setattr(llm, "AsyncOpenAI", _FakeOpenAIClient)
+
+    await llm.complete("sys", "user")
+
+    assert "extra_body" not in llm._clients["openai"].chat.completions.last_kwargs
+
+
+async def test_LLM_BASE_URL_없이_플래그만_있으면_extra_body를_안_보낸다(monkeypatch):
+    """로컬 검증 뒤 .env 에 플래그만 남으면 실제 OpenAI API 에 그대로 나간다."""
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_disable_thinking", True)
+    monkeypatch.setattr(llm, "AsyncOpenAI", _FakeOpenAIClient)
+
+    await llm.complete("sys", "user")
+
+    assert "extra_body" not in llm._clients["openai"].chat.completions.last_kwargs
