@@ -45,6 +45,20 @@ _PM_WORDS = {"오후", "저녁", "밤"}
 _AM_WORDS = {"오전", "새벽", "아침"}
 
 
+# 아래 둘은 프롬프트가 금지하는데 실측 준수율이 금액 83%, 배율 77% 다(n=48, Qwen3-32B).
+# 시각처럼 치환할 수가 없어서 — "3만원" 이 어느 금액을 어림한 건지, "3배" 를 뭘로 바꿀지
+# 코드가 못 정한다 — 검출해서 재시도로 보낸다(#119 동형이의 문자와 같은 경로).
+#
+# "3만원", "1억2천만원" 처럼 만/억 단위로 줄여 쓴 금액
+_ROUNDED_AMOUNT = re.compile(r"\d[\d,]*\s*[억만][\d\s억만천백]*원")
+# 배율은 지표에 없는 계산값이다. 실호출에서 "7배"·"3분의 1" 날조가 나왔다.
+# "배달"·"배치"·"배송" 이 걸리지 않게 뒤를 본다.
+_COMPUTED_RATIO = re.compile(
+    r"(?:\d+(?:\.\d+)?|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*배(?![달치송포분])"
+    r"|\d+\s*분의\s*\d+"
+)
+
+
 def _hour24(word: str, hour: int) -> int | None:
     """못 바꾸면 None — 손대지 않는 편이 틀리게 바꾸는 것보다 낫다."""
     if not 1 <= hour <= 12:
@@ -98,7 +112,7 @@ def _parse(raw: str) -> list[SolutionCard] | None:
     ranks = [card.rankNo for card in cards]
     if len(set(ranks)) != len(ranks):
         return None
-    if any(_foreign_chars(card) for card in cards):
+    if any(_violations(card) for card in cards):
         return None
     return cards
 
@@ -112,6 +126,22 @@ def _normalize(card: dict) -> dict:
         key: to_24h(value) if key in _TEXT_FIELDS and isinstance(value, str) else value
         for key, value in card.items()
     }
+
+
+def _violations(card: SolutionCard) -> list[str]:
+    """재시도로 보낼 이유. 비어 있으면 통과다.
+
+    셋 다 프롬프트에 규칙이 있는데 지켜지지 않는 것들이고, 치환으로는 못 고친다.
+    """
+    texts = (card.title, card.summaryText, card.detailText, card.evidence or "")
+    reasons = []
+    if _foreign_chars(card):
+        reasons.append("FOREIGN_CHAR")
+    if any(_ROUNDED_AMOUNT.search(text) for text in texts):
+        reasons.append("ROUNDED_AMOUNT")
+    if any(_COMPUTED_RATIO.search(text) for text in texts):
+        reasons.append("COMPUTED_RATIO")
+    return reasons
 
 
 def _foreign_chars(card: SolutionCard) -> set[str]:
