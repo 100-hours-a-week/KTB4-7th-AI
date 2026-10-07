@@ -48,6 +48,23 @@ def test_LLM_BASE_URL_이_있으면_API_키를_요구하지_않는다():
     assert missing_required(s) == []
 
 
+def test_다른_provider면_LLM_BASE_URL_이_있어도_API_키를_요구한다():
+    """llm_base_url 은 openai 분기 전용이다. provider 를 안 보면 범위를 넘어 샌다 —
+    로컬 검증 뒤 .env 에 값을 남겨둔 채 LLM_PROVIDER 만 anthropic 으로 되돌리면
+    ANTHROPIC_API_KEY 가 비어도 기동 검사를 통과한다(2026-10-07 제나님 리뷰).
+    """
+    from app.core.config import Settings, missing_required
+
+    s = Settings(
+        llm_provider="anthropic",
+        anthropic_api_key="",
+        llm_base_url="http://10.0.1.9:8000/v1",
+        backend_base_url="http://be:8080",
+    )
+
+    assert missing_required(s) == ["ANTHROPIC_API_KEY"]
+
+
 def test_LLM_BASE_URL_이_없으면_API_키를_여전히_요구한다():
     from app.core.config import Settings, missing_required
 

@@ -74,6 +74,17 @@ _API_KEY_FIELDS = {
 }
 
 
+def uses_local_llm_server(s: "Settings") -> bool:
+    """LLM_BASE_URL 로 OpenAI 호환 서버(vLLM 등)를 가리키고 있는가.
+
+    provider 까지 같이 본다. llm_base_url 은 openai 분기 전용 설정인데 provider 를 안 보면
+    범위를 넘어 샌다 — 로컬 검증 뒤 .env 에 LLM_BASE_URL 을 남겨둔 채 LLM_PROVIDER 만
+    anthropic 으로 되돌리면(운영 복귀 때 흔한 실수) ANTHROPIC_API_KEY 가 비어도 기동
+    검사를 통과한다(2026-10-07 제나님 리뷰).
+    """
+    return s.llm_provider == "openai" and bool(s.llm_base_url)
+
+
 def missing_required(s: "Settings") -> list[str]:
     """배포 후 첫 요청에서야 드러날 설정 누락을 기동 시점에 찾는다.
 
@@ -83,9 +94,9 @@ def missing_required(s: "Settings") -> list[str]:
     """
     missing = []
     key_field = _API_KEY_FIELDS.get(s.llm_provider)
-    # LLM_BASE_URL 로 로컬 서버를 가리키면 API 키가 없는 게 정상이다 — vLLM 은 기본적으로
-    # 인증을 걸지 않는다. 여기서 막으면 로컬 모델로는 기동 자체가 안 된다.
-    if key_field and not getattr(s, key_field) and not s.llm_base_url:
+    # 로컬 서버를 가리키면 API 키가 없는 게 정상이다 — vLLM 은 기본적으로 인증을 걸지
+    # 않는다. 여기서 막으면 로컬 모델로는 기동 자체가 안 된다.
+    if key_field and not getattr(s, key_field) and not uses_local_llm_server(s):
         missing.append(key_field.upper())
     if "localhost" in s.backend_base_url or "127.0.0.1" in s.backend_base_url:
         missing.append("BACKEND_BASE_URL(로컬 기본값 그대로다)")
@@ -101,6 +112,8 @@ def thinking_off_body() -> dict:
     챗봇(app/services/chat/graph.py)도 같은 값을 써야 해서 여기 둔다 — 한쪽만 끄면
     단발 생성은 멀쩡한데 챗봇 답변 앞에만 <think> 가 붙는다.
     """
-    if not settings.llm_disable_thinking:
+    # LLM_BASE_URL 없이 플래그만 남아 있으면 실제 OpenAI API 에 extra_body 가 그대로
+    # 나간다. 로컬 서버를 가리킬 때만 보낸다(2026-10-07 제나님 리뷰).
+    if not (settings.llm_disable_thinking and uses_local_llm_server(settings)):
         return {}
     return {"chat_template_kwargs": {"enable_thinking": False}}
