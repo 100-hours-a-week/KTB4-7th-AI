@@ -104,3 +104,73 @@ def test_배정된_근거로만_쓰면_채점기의_카드_지표_중복이_구�
 
     # 배정이 겹치지 않으므로 채점기도 중복으로 보지 않아야 한다
     assert grade_solution(raw, METRICS)["카드_지표_중복없음"] is True
+
+
+def test_영업시간_밖_0원_행은_최저로_뽑지_않는다():
+    """24 시간이 통째로 오면 min=0 이라 격차 점수가 늘 1.0 으로 포화되고, "가장 낮은
+    시간대" 가 0 시로 뽑힌다. "0 시에 뭘 하세요" 는 점주가 쓸 수 없는 솔루션이다.
+
+    요청에 영업시간이 없어서 "닫은 시간" 과 "열었는데 안 팔린 시간" 을 구분할 방법이
+    없다 — 둘 다 쓸 수 없으므로 최저 판단에서 뺀다.
+    """
+    hours = [
+        {"dayType": "WEEKDAY", "hour": h, "amount": 0 if h < 8 or h >= 22 else 50000 + h * 1000}
+        for h in range(24)
+    ]
+    focus = assign({**METRICS, "hourlyProfile": hours})
+
+    rows = next(item["hourlyProfile"] for item in focus if "hourlyProfile" in item)
+    assert all(row["amount"] > 0 for row in rows), f"0원 행이 들어갔다: {rows}"
+    assert min(row["hour"] for row in rows) >= 8
+
+
+def test_시간대는_dayType_별로_상하위만_넣는다():
+    """48 행이 오면 한 카드가 쓰는 건 두세 행이고 나머지는 틀릴 숫자를 공급한다."""
+    hours = [
+        {"dayType": day, "hour": h, "amount": 10000 + h * 3137}
+        for day in ("WEEKDAY", "WEEKEND")
+        for h in range(24)
+    ]
+    focus = assign({**METRICS, "hourlyProfile": hours})
+
+    rows = next(item["hourlyProfile"] for item in focus if "hourlyProfile" in item)
+    assert len(rows) == 8, f"dayType 2 개 × 상·하위 2 행이어야 한다: {len(rows)}행"
+    assert {r["dayType"] for r in rows} == {"WEEKDAY", "WEEKEND"}
+    # 계열별 최고·최저가 살아 있어야 "가장 높은/낮은" 문장이 맞는다
+    weekday = [r for r in rows if r["dayType"] == "WEEKDAY"]
+    assert max(r["amount"] for r in weekday) == 10000 + 23 * 3137
+    assert min(r["amount"] for r in weekday) == 10000
+
+
+def test_카테고리는_비중_상위만_넣는다():
+    category = [
+        {"name": f"카테고리{i}", "share": round(0.5 - i * 0.02, 4), "vsPrevPeriod": 0.01}
+        for i in range(20)
+    ]
+    focus = assign({**METRICS, "categoryBreakdown": category})
+
+    rows = next(item["categoryBreakdown"] for item in focus if "categoryBreakdown" in item)
+    assert len(rows) == 5
+    assert rows[0]["name"] == "카테고리0", "비중이 가장 큰 쪽이 먼저여야 한다"
+
+
+def test_선별이_계열별_최고_최저를_보존한다():
+    """선별 후에도 "가장 높은/낮은 시간대" 문장이 맞아야 한다.
+
+    상·하위를 고르는 방식이라 성립하는 성질인데, 선별 규칙을 "앞에서 N 행" 같은 걸로
+    바꾸면 조용히 깨진다 — 모델은 받은 행 안에서만 최저를 말하므로 틀린 줄도 모른다.
+    """
+    from app.services.solution_focus import _hourly_rows
+
+    hours = [
+        {"dayType": day, "hour": h, "amount": (h * 7919 % 97) * 1000 + 1000}
+        for day in ("WEEKDAY", "WEEKEND")
+        for h in range(9, 22)
+    ]
+    rows = _hourly_rows(hours)
+
+    for day in ("WEEKDAY", "WEEKEND"):
+        full = [p["amount"] for p in hours if p["dayType"] == day]
+        kept = [p["amount"] for p in rows if p["dayType"] == day]
+        assert max(kept) == max(full), f"{day} 최고가 빠졌다"
+        assert min(kept) == min(full), f"{day} 최저가 빠졌다"

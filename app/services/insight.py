@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.errors import ApiError
 from app.prompts import insight as insight_prompt
 from app.schemas.insight import InsightData, InsightRequest, InsightResponse
+from app.services.insight_focus import assign as assign_focus
 
 MAX_RETRY = 1
 
@@ -87,14 +88,20 @@ async def generate(req: InsightRequest) -> InsightResponse:
     # exclude_none: 값이 없는 지표는 프롬프트에서 아예 뺀다. "null 이면 언급하지 마세요"로
     # 부탁하는 것보다 안 보여주는 쪽이 확실하다 — 코드펜스 때 배운 것과 같은 이유다.
     metrics = req.metrics.model_dump(exclude_none=True)
-    prompt = insight_prompt.build(metrics, req.maxInsightCount, MAX_CHARS)
+    # 문장마다 쓸 근거 지표를 코드가 배정한다 — 6 종을 통째로 주면 모델이 엉뚱한 값을
+    # 집는다(`수치_정확` 68%, n=48). app/services/insight_focus.py 참고.
+    focus = assign_focus(metrics, req.maxInsightCount)
+    prompt = insight_prompt.build(focus, MAX_CHARS)
+
+    # 배정한 수만큼만 받는다. _missing_data 를 통과했으면 축이 둘 이상 남으므로 0 은 아니다.
+    wanted = len(focus) or req.maxInsightCount
 
     insights = None
     for _ in range(MAX_RETRY + 1):
         raw = await llm.complete(
             insight_prompt.SYSTEM, prompt, timeout=settings.insight_llm_timeout_seconds
         )
-        insights = _parse(raw, req.maxInsightCount)
+        insights = _parse(raw, wanted)
         if insights:
             break
 
