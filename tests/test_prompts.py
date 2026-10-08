@@ -114,7 +114,7 @@ def test_인사이트_프롬프트는_문장마다_근거를_하나씩_붙인다
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-10-07"
+    assert solution.VERSION == "2026-10-08"
     assert insight.VERSION == "2026-10-08"
 
 
@@ -220,3 +220,22 @@ def test_솔루션_프롬프트의_줄바꿈_안내가_한_줄로_나간다():
 
     line = next(li for li in prompt.split("\n") if "줄바꿈(" in li)
     assert "구분해 쓰세요" in line, f"안내 문장이 개행으로 쪼개졌다: {line!r}"
+
+
+def test_프롬프트는_고정_규칙을_지표보다_앞에_둔다():
+    """접두 캐싱(vLLM automatic prefix caching)은 앞에서부터 같은 데까지만 걸린다.
+
+    지표가 맨 앞에 있으면 거기서 끊겨 뒤에 있는 1,600자 규칙이 매장마다 매번 다시
+    계산된다 — 호출마다 완전히 같은 글자인데도 그렇다. 규칙을 지표 뒤에 추가하면 이
+    효과가 조용히 사라지므로(출력은 그대로라 실호출로도 안 잡힌다) 순서를 여기서 지킨다.
+    """
+    sol = solution._USER
+    assert sol.index("{target_date}") > sol.index("해법이 아니라 관찰된 사실만 담으세요."), (
+        "규칙이 지표 뒤로 갔다. 새 규칙은 {focus_blocks} 앞에 넣어라."
+    )
+    assert sol.index("{focus_blocks}") > sol.index("{target_date}")
+    # 지표 뒤에 남는 건 출력 형식 예시뿐이다
+    assert sol[sol.index("{focus_blocks}") :].strip().endswith('"evidence":"..."}}]}}')
+
+    ins = insight._USER
+    assert ins.index("{focus_blocks}") > ins.index("같은 내용을 다른 표현으로 반복하지 마세요.")

@@ -20,6 +20,16 @@ MAX_RETRY = 1
 # 풀스택 확정 계약(2026-09-22). 화면에 그대로 뿌리는 문장이라 길이를 AI 가 보증한다.
 MAX_CHARS = 100
 
+# 전역 기본값 2000 은 인사이트에 5 배 과다다. _parse 가 100자 넘는 문장을 거부하므로
+# 합법적으로 가장 긴 응답이 `100자 × 3 + JSON` = 326자(약 400 토큰)다. 상한이 크면
+# 모델이 공백 반복 루프에 빠질 때 그만큼 더 길게 돈다 — 전에 솔루션에서 상한을 올렸다가
+# 최악이 136초에서 276초가 됐다. 잘려서 파싱이 실패하면 재시도가 도는데, 그건 100자
+# 규칙을 이미 어긴 응답이라 어차피 거부됐을 응답이다.
+#
+# 솔루션은 못 내린다. 스키마 상한까지 쓴 응답이 4,912자, 실제로 나오던 분량이 1,222자라
+# 2000 토큰도 빠듯하다.
+MAX_TOKENS = 700
+
 # 풀스택 확정 계약(2026-09-22)의 어휘다. 노션 API 정의서 SALES-04 는 같은 자리에
 # "SALES_DATA" 를 쓴다 — BE 가 자기 문서 기준으로 파싱하므로 이쪽을 따르고, 노션과
 # 맞추도록 요청해둔다.
@@ -99,7 +109,10 @@ async def generate(req: InsightRequest) -> InsightResponse:
     insights = None
     for _ in range(MAX_RETRY + 1):
         raw = await llm.complete(
-            insight_prompt.SYSTEM, prompt, timeout=settings.insight_llm_timeout_seconds
+            insight_prompt.SYSTEM,
+            prompt,
+            max_tokens=MAX_TOKENS,
+            timeout=settings.insight_llm_timeout_seconds,
         )
         insights = _parse(raw, wanted)
         if insights:
