@@ -95,11 +95,17 @@ def _day_facts(target_date: str) -> tuple[str, bool]:
 
 
 def _parse(raw: str) -> list[SolutionCard] | None:
-    """계약·ERD 를 만족하는 카드 목록만 돌려준다. 하나라도 어긋나면 None 이라 재시도한다.
+    """계약·ERD 를 만족하는 카드만 돌려준다. 한 장도 안 남으면 None 이라 재시도한다.
 
     카드별 길이·범위 제약(rankNo ≥ 1, title 200자)은 스키마가 본다. 여기서는 스키마가
     볼 수 없는 것만 본다 — rankNo 가 겹치면 BE 의 UNIQUE (solution_bundle_id, rank_no) 를
     위반해 묶음 전체가 저장되지 않고, 동형이의 문자는 타입상 멀쩡한 문자열이라 통과한다.
+
+    2026-10-08: 위반 카드가 있으면 세 장을 통째로 버렸는데, 그러면 두 번 다 걸릴 때 500 이
+    나간다. 실측에서 9 번 중 1 번이 그랬다(Claude 기준). 이 파일 아래 generate() 에
+    "카드 2장이 나가는 것보다 500이 나가는 쪽이 점주에게 더 나쁘다"고 적어 둔 판단과
+    어긋나서, 위반한 카드만 버리고 남은 걸 돌려준다. 재시도는 그대로 돈다 — 3 장을
+    선호하는 건 변하지 않았고, 다만 재시도도 실패하면 빈손이 아니라 남은 카드가 나간다.
     """
     try:
         data = json.loads(llm.strip_fence(raw))
@@ -111,10 +117,17 @@ def _parse(raw: str) -> list[SolutionCard] | None:
         return None
     ranks = [card.rankNo for card in cards]
     if len(set(ranks)) != len(ranks):
+        # 어느 쪽이 맞는 순위인지 알 수 없어 버린다 — 둘 다 남기면 BE 저장이 깨진다.
         return None
-    if any(_violations(card) for card in cards):
+
+    kept = [card for card in cards if not _violations(card)]
+    if not kept:
         return None
-    return cards
+    # 중간이 빠지면 rankNo 가 1·3 으로 나간다. 장수가 줄어드는 경우(배정 지표가 2 종일 때)
+    # 는 늘 1·2 였으므로 연속성을 유지한다 — FE 가 번호를 그대로 쓰는지 확인된 바 없다.
+    for index, card in enumerate(kept, start=1):
+        card.rankNo = index
+    return kept
 
 
 _TEXT_FIELDS = ("title", "summaryText", "detailText", "evidence")
@@ -165,8 +178,11 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
     cards = None
     for _ in range(MAX_RETRY + 1):
         parsed = _parse(await llm.complete(solution_prompt.SYSTEM, prompt))
-        cards = parsed or cards
-        if parsed and len(parsed) == wanted:
+        # 더 많이 남은 쪽을 쥔다. `parsed or cards` 로 두면 2 장을 받아둔 뒤 재시도가
+        # 1 장을 주면 더 나쁜 쪽으로 덮어쓴다.
+        if parsed and (cards is None or len(parsed) > len(cards)):
+            cards = parsed
+        if cards and len(cards) == wanted:
             break
 
     if not cards:

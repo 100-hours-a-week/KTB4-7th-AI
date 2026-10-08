@@ -205,8 +205,17 @@ def _evidence_group(text: str, index: dict[str, set[str]]) -> set[str]:
     return out
 
 
-def grade_solution(raw: str, metrics: dict) -> dict:
-    """솔루션 카드 3장을 app/prompts/solution.py(2026-10-01) 기준으로 채점한다."""
+# 서비스가 요청한 카드 수. 2026-10-07(#123) 부터 배정된 지표가 3 종이 안 되면 그만큼만
+# 내보내므로, 호출부가 그 수를 넘겨야 한다. 3 으로 박아두면 설계대로 2 장을 낸 응답을
+# 결함으로 센다 — 실제로 2026-10-08 측정에서 `카드3장` 66.7% 가 전부 그거였다.
+MAX_CARDS = 3
+
+
+def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> dict:
+    """솔루션 카드를 app/prompts/solution.py(2026-10-08) 기준으로 채점한다.
+
+    expected_cards 는 서비스가 요청한 장수다(`len(assign_focus(metrics)) or 3`).
+    """
     result: dict = {"parsed": False}
     try:
         cards = json.loads(strip_fence(raw))["solutionCards"]
@@ -222,7 +231,7 @@ def grade_solution(raw: str, metrics: dict) -> dict:
     evidences = [c.get("evidence") or "" for c in cards]
     visible = titles + summaries + details  # evidence 는 화면에 안 나온다(2026-10-02 FE 확정)
 
-    result["카드3장"] = len(cards) == 3
+    result["카드_개수_일치"] = len(cards) == expected_cards
     result["rankNo_고유"] = len(set(ranks)) == len(ranks)
     result["title_200자"] = all(len(t) <= 200 for t in titles)
     result["detail_1000자"] = all(len(d) <= 1000 for d in details)

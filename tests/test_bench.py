@@ -15,13 +15,17 @@ def _row(status: int, model: dict, service: dict) -> dict:
 def test_응답이_없는_요청도_분모에_남는다():
     """500 은 검사 결과가 비어 있다. 있는 항목만 평균하면 통계에서 사라져 숫자가 좋아진다."""
     rows = [
-        _row(200, {"parsed": True, "카드3장": True}, {"parsed": True, "카드3장": True}),
+        _row(
+            200,
+            {"parsed": True, "카드_개수_일치": True},
+            {"parsed": True, "카드_개수_일치": True},
+        ),
         _row(500, {"parsed": False}, {}),
     ]
     keys, per_key, all_model, all_service = _rates(rows)
 
-    assert keys == ["parsed", "카드3장"]
-    assert per_key["카드3장"] == (0.5, 0.5), "500 을 빼고 세면 100% 가 된다"
+    assert keys == ["parsed", "카드_개수_일치"]
+    assert per_key["카드_개수_일치"] == (0.5, 0.5), "500 을 빼고 세면 100% 가 된다"
     assert all_service == 0.5
 
 
@@ -49,9 +53,14 @@ def test_채점_결과에서_카드_본문은_항목으로_세지_않는다():
 
     그걸 항목으로 세면 비어 있지 않은 리스트가 늘 True 라 통과율이 부풀려진다.
     """
-    graded = {"parsed": True, "카드3장": True, "cards": [{"rankNo": 1}], "insights": ["문장"]}
+    graded = {
+        "parsed": True,
+        "카드_개수_일치": True,
+        "cards": [{"rankNo": 1}],
+        "insights": ["문장"],
+    }
 
-    assert _checks(graded) == {"parsed": True, "카드3장": True}
+    assert _checks(graded) == {"parsed": True, "카드_개수_일치": True}
 
 
 def test_파싱_실패는_error_를_항목으로_세지_않는다():

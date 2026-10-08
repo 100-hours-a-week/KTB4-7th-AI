@@ -297,3 +297,34 @@ def test_처방형으로_끝나면_걸린다():
     result = _insight("커피 비중이 높으니 신메뉴를 추가하세요.")
 
     assert result["관찰형_종결"] is False
+
+
+def test_카드_개수는_배정된_장수로_채점한다():
+    """2026-10-07(#123) 부터 배정 지표가 3 종이 안 되면 서비스가 그만큼만 내보낸다.
+
+    3 으로 박아두면 설계대로 2 장을 낸 응답을 결함으로 센다 — 2026-10-08 실측에서
+    `카드3장` 66.7% 가 전부 그거였고, 모델 품질로 오해할 숫자였다.
+    """
+    import json
+
+    from devtools.grade import grade_solution
+
+    metrics = {"salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12}}
+    two = json.dumps(
+        {
+            "solutionCards": [
+                {
+                    "rankNo": index,
+                    "title": "가",
+                    "summaryText": "가",
+                    "detailText": "가\n가\n가",
+                    "evidence": "가",
+                }
+                for index in (1, 2)
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    assert grade_solution(two, metrics, expected_cards=2)["카드_개수_일치"] is True
+    assert grade_solution(two, metrics)["카드_개수_일치"] is False, "기본값은 3 이다"

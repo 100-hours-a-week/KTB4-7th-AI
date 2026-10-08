@@ -32,6 +32,7 @@ Claude 와 비교하려면 환경변수 없이 돌린다(`.env` 의 ANTHROPIC_AP
 
 import argparse
 import asyncio
+import functools
 import json
 import logging
 import statistics
@@ -45,6 +46,7 @@ import httpx
 from app.clients import llm
 from app.core.config import settings
 from app.main import app
+from app.services.solution_focus import assign as assign_focus
 from devtools import grade
 
 # ── 케이스 ────────────────────────────────────────────────────────────
@@ -330,6 +332,14 @@ async def _run(client: httpx.AsyncClient, kind: str, n: int) -> list[dict]:
         )
 
     for case_name, metrics in cases:
+        # 배정된 지표가 3 종이 안 되면 서비스가 그만큼만 내보낸다(#123). 채점기에 3 을 박으면
+        # 설계대로 2 장을 낸 응답을 결함으로 센다.
+        if kind == "solution":
+            expected = len(assign_focus(metrics)) or grade.MAX_CARDS
+            case_grader = functools.partial(grade.grade_solution, expected_cards=expected)
+        else:
+            case_grader = grader
+
         for i in range(n):
             if kind == "solution":
                 body = {
@@ -348,7 +358,7 @@ async def _run(client: httpx.AsyncClient, kind: str, n: int) -> list[dict]:
                     "metrics": metrics,
                     "maxInsightCount": 3,
                 }
-            rows.append(await _one(client, path, body, metrics, grader, key))
+            rows.append(await _one(client, path, body, metrics, case_grader, key))
             print(f"\r  {kind} {case_name} {i + 1}/{n}   ", end="", flush=True)
         print()
     return rows

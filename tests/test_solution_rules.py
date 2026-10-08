@@ -91,3 +91,75 @@ async def test_배율을_쓰면_재시도한다(monkeypatch):
 
     assert res.status_code == 200
     assert len(calls) == 2
+
+
+async def test_두_번_다_위반이면_500_이_아니라_남은_카드가_나간다(monkeypatch):
+    """예전에는 위반 카드가 있으면 세 장을 통째로 버려서, 두 번 다 걸리면 500 이었다.
+
+    2026-10-08 실측에서 9 번 중 1 번이 그랬다(Claude 기준). 같은 파일 generate() 에
+    "카드 2장이 나가는 것보다 500이 나가는 쪽이 점주에게 더 나쁘다"고 적어 둔 판단과
+    어긋난다 — 그날 솔루션이 아예 없어진다.
+    """
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        return _cards((1, "매출이 3만원인 시간대"), (2, "B"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200, "500 이 나가면 그날 솔루션이 없어진다"
+    assert len(calls) == 2, "3 장을 선호하는 건 그대로다 — 재시도는 돈다"
+    cards = res.json()["data"]["solutionCards"]
+    assert len(cards) == 2
+    assert "3만원" not in json.dumps(cards, ensure_ascii=False)
+
+
+async def test_남은_카드의_rankNo_는_다시_연속으로_매긴다(monkeypatch):
+    """중간이 빠지면 1·3 으로 나간다. 배정 지표가 2 종일 때는 늘 1·2 였으므로 연속성을
+    유지한다 — FE 가 번호를 그대로 쓰는지 확인된 바 없다.
+    """
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        return _cards((1, "A"), (2, "주말이 평일의 3배"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    cards = res.json()["data"]["solutionCards"]
+    assert [card["rankNo"] for card in cards] == [1, 2]
+
+
+async def test_세_장_다_위반이면_여전히_500_이다(monkeypatch):
+    """한 장도 못 건지면 내보낼 게 없다. 빈 배열을 200 으로 주면 화면이 비는 쪽이 더 나쁘다."""
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        return _cards((1, "3만원"), (2, "5만원"), (3, "7만원"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 500
+    assert res.json()["error"]["code"] == "SOLUTION_GENERATION_FAILED"
+
+
+async def test_재시도가_더_적게_주면_앞의_결과를_유지한다(monkeypatch):
+    """`parsed or cards` 로 두면 2 장을 받아둔 뒤 재시도가 1 장을 주면 더 나쁜 쪽으로 덮어쓴다."""
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _cards((1, "A"), (2, "B"), (3, "3만원"))
+        return _cards((1, "3만원"), (2, "5만원"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(res.json()["data"]["solutionCards"]) == 2, "1 장으로 덮어쓰면 안 된다"
