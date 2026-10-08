@@ -444,3 +444,26 @@ async def test_값이_있는_증감률은_프롬프트에_남는다(monkeypatch)
 
     assert "vsPrevPeriod" in seen[0]
     assert "0.042" in seen[0]
+
+
+async def test_출력_상한을_전역_기본값보다_낮춘다(monkeypatch):
+    """전역 2000 은 인사이트에 5 배 과다다 — 합법적으로 가장 긴 응답이 약 400 토큰이다.
+
+    상한이 크면 모델이 공백 반복 루프에 빠질 때 그만큼 더 길게 돈다. 솔루션에서 상한을
+    올렸다가 최악이 136초에서 276초가 된 적이 있다. 호출부가 값을 안 넘기면 조용히
+    2000 으로 돌아가므로 여기서 고정한다.
+    """
+    from app.services.insight import MAX_TOKENS
+
+    seen = {}
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        seen["max_tokens"] = max_tokens
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert seen["max_tokens"] == MAX_TOKENS
+    assert MAX_TOKENS < 2000
