@@ -1,4 +1,5 @@
 from app.prompts import insight, solution
+from app.services.insight_focus import assign as assign_insight_focus
 from app.services.solution_focus import assign
 
 METRICS = {
@@ -86,17 +87,35 @@ def test_인사이트_프롬프트는_다주_연속_표현을_금지한다():
 
 
 def test_인사이트_프롬프트에_지표가_들어간다():
-    prompt = insight.build(INSIGHT_METRICS, max_count=3, max_chars=100)
+    """2026-10-08 부터 metrics 전체가 아니라 문장별로 배정된 focus 가 들어간다."""
+    focus = assign_insight_focus(INSIGHT_METRICS, max_count=3)
+    prompt = insight.build(focus, max_chars=100)
+
     assert "커피" in prompt
     assert '"insights"' in prompt
     assert "100자 이내" in prompt, "길이 제한을 모델에게도 알려야 재시도가 줄어든다"
+
+
+def test_인사이트_프롬프트는_문장마다_근거를_하나씩_붙인다():
+    """지표 6 종을 통째로 주면 모델이 엉뚱한 값을 집는다(`수치_정확` 68%, n=48).
+
+    배정한 개수만큼 블록이 나가야 한다 — 개수가 어긋나면 모델이 빈 근거로 문장을 만든다.
+    """
+    focus = assign_insight_focus(INSIGHT_METRICS, max_count=3)
+    prompt = insight.build(focus, max_chars=100)
+
+    assert len(focus) == 2, "INSIGHT_METRICS 는 salesSummary·categorySales 둘뿐이다"
+    assert "[문장 1 근거]" in prompt and "[문장 2 근거]" in prompt
+    assert "[문장 3 근거]" not in prompt
+    assert "관찰 사실을 2개" in prompt
+    assert "자기 근거 지표만" in prompt
 
 
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
     assert solution.VERSION == "2026-10-07"
-    assert insight.VERSION == "2026-09-23"
+    assert insight.VERSION == "2026-10-08"
 
 
 def test_챗봇_프롬프트는_chatDate_를_오늘로_넣는다():

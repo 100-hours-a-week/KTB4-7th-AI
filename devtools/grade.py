@@ -36,7 +36,7 @@ def strip_fence(raw: str) -> str:
 # 검사 항목은 손대지 않았다. `카드_지표_중복없음` 이 100% 로 올라가는지 보는 게 이번 변경의
 # 측정 목표다.
 TARGET_SOLUTION_VERSION = "2026-10-07"
-TARGET_INSIGHT_VERSION = "2026-09-23"
+TARGET_INSIGHT_VERSION = "2026-10-08"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")

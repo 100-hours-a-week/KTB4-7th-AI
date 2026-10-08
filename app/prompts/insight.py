@@ -12,6 +12,11 @@
 그대로 읽어서 "이전 기간 대비 0.12 감소"가 나왔고, 금액의 천 단위 구분도 사라졌다. 계약상
 비율은 소수로 주고받지만(0.62), 점주에게 보여줄 문장에서는 백분율이어야 한다.
 
+2026-10-08: 문장마다 쓸 근거 지표를 서비스가 하나씩 배정해 넘긴다. 지표 6 종을 통째로
+던지던 방식은 실측에서 `수치_정확` 68% 였다(2026-10-06, n=48, 32B) — 인사이트 전 항목 중
+최악이고, 같은 조건에서 카드당 1 종만 받는 솔루션은 96% 였다. 숫자를 많이 보여줄수록
+모델이 엉뚱한 값을 집는다. 배정 기준은 app/services/insight_focus.py 에 있다.
+
 2026-09-22: 풀스택 확정 계약(metrics 교체)과 생성 규칙 4종을 반영했다.
 
 - **비율 반올림 금지.** 위 2026-09-21 지시가 금액만 막아서, 실호출 3회 중 1회가 0.042 를
@@ -34,7 +39,7 @@
 
 import json
 
-VERSION = "2026-09-23"
+VERSION = "2026-10-08"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -54,18 +59,26 @@ salesSummary.vsPrevPeriod 는 **총매출(totalSales)**의 증감률입니다. �
 무엇을 하라는 제안은 하지 말고, 데이터에서 관찰되는 사실만 말하세요.
 설명 없이 JSON만 출력하세요."""
 
-_USER = """{metrics}
+_USER = """점주가 알아두면 좋을 관찰 사실을 {count}개 찾아주세요.
+문장마다 쓸 근거 지표를 아래에 하나씩 배정했습니다. 각 문장은 **자기 근거 지표만** 쓰고,
+다른 문장에 배정된 지표를 끌어오지 마세요.
 
-위 지표에서 점주가 알아두면 좋을 관찰 사실을 최대 {max_count}개 찾아주세요.
-각 문장은 한국어 존댓말 한 문장으로, 공백 포함 {max_chars}자 이내로 쓰세요.
-같은 내용을 다른 표현으로 반복하지 말고, 서로 다른 지표를 다루세요.
+{focus_blocks}
+
+배정된 순서대로 쓰고, 각 문장은 한국어 존댓말 한 문장으로 공백 포함 {max_chars}자 이내로
+쓰세요. 같은 내용을 다른 표현으로 반복하지 마세요.
 
 {{"insights":["...", "..."]}}"""
 
 
-def build(metrics: dict, max_count: int, max_chars: int) -> str:
+def build(focus: list[dict], max_chars: int) -> str:
+    """focus 는 문장 순서대로의 근거 지표다 — app/services/insight_focus.py::assign 참고."""
+    blocks = "\n\n".join(
+        f"[문장 {index} 근거]\n{json.dumps(item, ensure_ascii=False)}"
+        for index, item in enumerate(focus, start=1)
+    )
     return _USER.format(
-        metrics=json.dumps(metrics, ensure_ascii=False),
-        max_count=max_count,
+        focus_blocks=blocks,
+        count=len(focus),
         max_chars=max_chars,
     )
