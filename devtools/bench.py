@@ -243,7 +243,11 @@ async def _one(
         row["error"] = f"{payload_key} 가 비었다: {res.text[:200]}"
         return row
 
-    row["service"] = _checks(grader(json.dumps({payload_key: items}), metrics))
+    graded = grader(json.dumps({payload_key: items}), metrics)
+    row["service"] = _checks(graded)
+    # 어떤 문장이 걸렸는지 못 보면 원인을 추측하게 된다 — 2026-10-08 에 `시각_24시간제`
+    # 77.8% 를 놓고 오탐인지 실제 위반인지 가릴 수 없었다.
+    row["sample"] = graded.get("cards") or graded.get("insights")
     return row
 
 
@@ -312,6 +316,16 @@ def _report(name: str, rows: list[dict]) -> None:
         if "error" in row:
             print(f"\n  [{row['status']}] {row['error']}")
             break
+
+    failed_keys = [key for key in keys if per_key[key][1] < 1.0]
+    if failed_keys:
+        print("\n  걸린 응답 (항목별 첫 건):")
+    for key in failed_keys:
+        row = next((r for r in rows if not r["service"].get(key) and r.get("sample")), None)
+        if row is None:
+            continue  # 응답 자체가 없는 경우(500·파싱 실패)는 위에 이미 찍었다
+        body = json.dumps(row["sample"], ensure_ascii=False)
+        print(f"    {key}: {body[:400]}")
 
 
 async def _run(client: httpx.AsyncClient, kind: str, n: int) -> list[dict]:

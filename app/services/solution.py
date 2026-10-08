@@ -43,12 +43,21 @@ _CLOCK = re.compile(
 # 접두어별 12시간제 → 24시간제 보정
 _PM_WORDS = {"오후", "저녁", "밤"}
 _AM_WORDS = {"오전", "새벽", "아침"}
+# "낮" 은 1~6 시가 오후다("낮 2시" = 14시). 11~12 시는 보정이 필요 없다("낮 11시" = 11시).
+# 그 사이(7~10 시)는 뜻이 정해지지 않아 손대지 않는다 — 그런 말을 쓰지 않으니 모델의 실수다.
+_NOON_PM_MAX = 6
+_NOON_PLAIN_MIN = 11
 
 
 # 아래 둘은 프롬프트가 금지하는데 실측 준수율이 금액 83%, 배율 77% 다(n=48, Qwen3-32B).
 # 시각처럼 치환할 수가 없어서 — "3만원" 이 어느 금액을 어림한 건지, "3배" 를 뭘로 바꿀지
 # 코드가 못 정한다 — 검출해서 재시도로 보낸다(#119 동형이의 문자와 같은 경로).
 #
+# _normalize 가 치환하지 못하고 남은 12 시간제. 애매해서 못 바꾼 것들("낮 7시")이라
+# 치환 대신 재시도로 보낸다 — 채점기 devtools/grade.py::_AMPM 과 같은 패턴이어야 하고,
+# tests/test_solution_time.py 가 둘이 어긋나면 실패한다.
+_AMPM_LEFT = re.compile(rf"(?:{_WORDS})\s*\d{{1,2}}\s*시(?!\uac04)")
+
 # "3만원", "1억2천만원" 처럼 만/억 단위로 줄여 쓴 금액
 _ROUNDED_AMOUNT = re.compile(r"\d[\d,]*\s*[억만][\d\s억만천백]*원")
 # 배율은 지표에 없는 계산값이다. 실호출에서 "7배"·"3분의 1" 날조가 나왔다.
@@ -67,7 +76,13 @@ def _hour24(word: str, hour: int) -> int | None:
         return 12 if hour == 12 else hour + 12
     if word in _AM_WORDS:
         return 0 if hour == 12 else hour
-    return hour  # "낮 12시" 처럼 보정이 필요 없는 경우
+    # 남은 건 "낮" 하나다. "낮 2시" 를 그대로 "2시" 로 내보내면 새벽 2시가 된다 —
+    # 12 시간이 틀린 값인데 화면에서는 멀쩡해 보인다(2026-10-08 실측 중 발견).
+    if hour <= _NOON_PM_MAX:
+        return hour + 12
+    if hour >= _NOON_PLAIN_MIN:
+        return hour
+    return None  # "낮 7시" 는 뜻이 안 정해진다 — 그대로 두면 채점기가 잡아 재시도로 간다
 
 
 def to_24h(text: str) -> str:
@@ -142,9 +157,11 @@ def _normalize(card: dict) -> dict:
 
 
 def _violations(card: SolutionCard) -> list[str]:
-    """재시도로 보낼 이유. 비어 있으면 통과다.
+    """재시도로 보낼 이유. 비어 있으면 통과다. _normalize 를 거친 카드를 받는다.
 
-    셋 다 프롬프트에 규칙이 있는데 지켜지지 않는 것들이고, 치환으로는 못 고친다.
+    넷 다 프롬프트에 규칙이 있는데 지켜지지 않는 것들이고, 치환으로는 못 고친다.
+    시각은 대부분 _normalize 가 치환하지만("오후 2시" → "14시") 뜻이 정해지지 않는
+    것들이 남는다("낮 7시") — 틀리게 바꾸느니 재시도가 낫다.
     """
     texts = (card.title, card.summaryText, card.detailText, card.evidence or "")
     reasons = []
@@ -154,6 +171,8 @@ def _violations(card: SolutionCard) -> list[str]:
         reasons.append("ROUNDED_AMOUNT")
     if any(_COMPUTED_RATIO.search(text) for text in texts):
         reasons.append("COMPUTED_RATIO")
+    if any(_AMPM_LEFT.search(text) for text in texts):
+        reasons.append("AMPM_LEFT")
     return reasons
 
 
