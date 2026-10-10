@@ -35,6 +35,7 @@ import asyncio
 import functools
 import json
 import logging
+import pathlib
 import statistics
 import sys
 import time
@@ -230,6 +231,9 @@ async def _one(
         )
 
     row: dict = {"status": res.status_code, "seconds": elapsed, "attempts": len(_raws)}
+    # 시도별 원문. 모델 열과 서비스 열이 갈라질 때 왜 갈라졌는지는 이게 없으면 못 가린다 —
+    # 주변 통과율만 보고 추측하게 된다(2026-10-08 에 그랬다).
+    row["raws"] = list(_raws)
     row["model"] = _checks(grader(_raws[0], metrics)) if _raws else {"parsed": False}
 
     if res.status_code != 200:
@@ -325,7 +329,7 @@ def _report(name: str, rows: list[dict]) -> None:
         if row is None:
             continue  # 응답 자체가 없는 경우(500·파싱 실패)는 위에 이미 찍었다
         body = json.dumps(row["sample"], ensure_ascii=False)
-        print(f"    {key}: {body[:400]}")
+        print(f"    {key}: {body[:900]}")
 
 
 async def _run(client: httpx.AsyncClient, kind: str, n: int) -> list[dict]:
@@ -382,6 +386,7 @@ async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=10, help="케이스당 호출 횟수")
     parser.add_argument("--endpoint", choices=["solution", "insight", "both"], default="both")
+    parser.add_argument("--dump", help="시도별 원문과 채점 결과를 JSON 으로 적을 경로")
     args = parser.parse_args()
 
     # 호출마다 httpx 가 한 줄씩 찍어 진행 표시를 덮는다
@@ -398,9 +403,17 @@ async def main() -> int:
     kinds = ["solution", "insight"] if args.endpoint == "both" else [args.endpoint]
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://bench") as client:
+        dumped: dict[str, list[dict]] = {}
         for kind in kinds:
             rows = await _run(client, kind, args.n)
             _report("솔루션" if kind == "solution" else "인사이트", rows)
+            dumped[kind] = rows
+
+    if args.dump:
+        pathlib.Path(args.dump).write_text(
+            json.dumps(dumped, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"\n  시도별 원문을 적었다: {args.dump}")
     return 0
 
 
