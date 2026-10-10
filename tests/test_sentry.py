@@ -24,12 +24,14 @@ def test_설정된_DSN과_release로_Sentry를_초기화한다(monkeypatch):
     assert options["include_local_variables"] is False
 
 
-def test_이벤트에서_요청과_예외_메시지를_제거한다():
+def test_이벤트에서_요청과_우리_예외_메시지를_제거한다():
     event = {
         "request": {"data": "prompt secret", "headers": {"Authorization": "Bearer secret"}},
         "breadcrumbs": {"values": [{"message": "prompt secret"}]},
         "extra": {"prompt": "secret"},
-        "exception": {"values": [{"value": "prompt secret", "type": "ApiError"}]},
+        "exception": {
+            "values": [{"value": "prompt secret", "type": "ApiError", "module": "app.core.errors"}]
+        },
         "tags": {"error_code": "PROVIDER_ERROR"},
     }
 
@@ -37,6 +39,27 @@ def test_이벤트에서_요청과_예외_메시지를_제거한다():
 
     assert "secret" not in str(scrubbed)
     assert scrubbed["exception"]["values"][0]["value"] == "PROVIDER_ERROR"
+
+
+def test_공급자_SDK_예외_메시지는_원문을_남긴다():
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "value": "Error code: 400 - model not found",
+                    "type": "BadRequestError",
+                    "module": "anthropic",
+                },
+                {"value": "PROVIDER_ERROR", "type": "ApiError", "module": "app.core.errors"},
+            ]
+        },
+        "tags": {"error_code": "PROVIDER_ERROR"},
+    }
+
+    scrubbed = sentry_config._strip_sensitive_data(event, {})
+
+    assert scrubbed["exception"]["values"][0]["value"] == "Error code: 400 - model not found"
+    assert scrubbed["exception"]["values"][1]["value"] == "PROVIDER_ERROR"
 
 
 @pytest.mark.parametrize("status", [422, 500, 502, 504])
