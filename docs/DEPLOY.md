@@ -45,7 +45,10 @@ ERROR app.main 환경변수가 비어 있다 — 배포 설정을 확인한다: 
 
 CI 이미지의 `SENTRY_RELEASE` 는 `pyproject.toml` 버전과 full commit SHA로 생성한다.
 배포 환경에서는 `SENTRY_DSN` 과 `SENTRY_ENVIRONMENT` 를 런타임에 주입한다.
-수집 대상은 HTTP 5xx와 챗봇 스트림의 서버 오류이며, 요청 본문과 예외 메시지는 전송하지 않는다.
+수집 대상은 HTTP 5xx와 챗봇 스트림의 서버 오류이며, 요청 본문과 예외 메시지는 전송하지 않는다
+(단, LLM 공급자 SDK가 직접 던진 예외는 원문 메시지를 남긴다 — 공급자 서버가 생성한 설명문이라
+매장 데이터를 담을 수 없고, 장애 원인 추적에 필요하다. `app/core/sentry.py`의
+`_strip_sensitive_data` 참고, 2026-10-10 결정).
 
 `/health` 는 **설정 상태를 보지 않는다.** 로드밸런서용 생존 확인이므로 키가 비어 있어도 200 이다.
 
