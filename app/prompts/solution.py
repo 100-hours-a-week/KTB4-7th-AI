@@ -7,6 +7,13 @@
   evidence 는 `solutions.evidence_text`(TEXT NULL)에 대응한다(2026-09-21 BE에 컬럼 추가 요청).
 - 최상위 aiInsight 는 제거했다 — 매출 AI 인사이트는 별도 `/internal/v1/ai/sales-insights` 담당.
 
+2026-10-11: 2회차 재시도가 1회차와 완전히 같은 프롬프트였다 — 1회차가 왜 거부됐는지 모델이
+모른 채로 다시 뽑기만 했다. 실측(n=15, Claude Sonnet 4.5)에서 재시도 3건 전부가
+COMPUTED_RATIO(배율)였고, 그중 1건은 2회차도 다른 카드·다른 문구로 또 배율을 썼다
+(devtools/bench.py 실측). `retry_feedback()`이 2회차 프롬프트에 "방금 이 규칙을 어겼다"를
+덧붙인다 — 카드를 부분적으로만 다시 쓰게 하는 건 아니고 여전히 전체를 다시 쓰게 하지만,
+같은 실수를 반복할 확률을 낮추려는 최소 변경이다.
+
 2026-10-08: 고정 규칙을 앞으로, 지표를 뒤로 옮겼다 — 문장은 한 글자도 바꾸지 않았고
 순서만 바꿨다. 지표가 맨 앞에 있으면 접두 캐싱(vLLM automatic prefix caching)이 거기서
 끊겨, 뒤에 있는 1,600자 규칙이 매장마다 매번 다시 계산된다. 규칙은 호출마다 완전히 같은
@@ -63,7 +70,7 @@ tests/test_prompts.py 가 순서를 지킨다.
 
 import json
 
-VERSION = "2026-10-08"
+VERSION = "2026-10-11"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -132,4 +139,32 @@ def build(focus: list[dict], target_date: str, day_of_week: str, is_weekend: boo
         target_date=target_date,
         day_of_week=day_of_week,
         weekend="주말" if is_weekend else "평일",
+    )
+
+
+# app/services/solution.py::_violations 가 돌려주는 위반 코드 → 사람이 읽는 규칙 문장.
+# 재시도 피드백에만 쓴다. 넷 다 이미 SYSTEM·_USER 에 있는 규칙이라 새 규칙을 추가하는
+# 게 아니라 "방금 그걸 어겼다"를 강조하는 것이다.
+_RETRY_RULE_TEXT = {
+    "FOREIGN_CHAR": "한글·영문이 아닌 문자(동형이의 문자 포함)를 쓰지 마세요.",
+    "ROUNDED_AMOUNT": "금액을 만·억 단위로 어림하지 말고 지표에 있는 값을 그대로 쓰세요.",
+    "COMPUTED_RATIO": '배율(예: "7배", "3분의 1")을 직접 계산해서 쓰지 마세요.',
+    "AMPM_LEFT": "시간은 지표에 있는 24시간제 그대로 쓰세요.",
+}
+
+
+def retry_feedback(reasons: set[str]) -> str:
+    """2회차 프롬프트 끝에 붙일 교정 문단. 위반이 없었으면 빈 문자열(= 1회차와 동일한 프롬프트).
+
+    2026-10-11: 실측(n=15)에서 재시도 3건 전부가 COMPUTED_RATIO였고, 1회차·2회차가 완전히
+    같은 프롬프트라 2회차도 다른 문구로 같은 종류의 위반을 낸 사례가 있었다. 위반 사유를
+    알려주면 같은 실수를 피할 신호가 생긴다.
+    """
+    rules = [_RETRY_RULE_TEXT[reason] for reason in sorted(reasons) if reason in _RETRY_RULE_TEXT]
+    if not rules:
+        return ""
+    bullet = "\n".join(f"- {rule}" for rule in rules)
+    return (
+        "\n\n방금 생성한 응답이 아래 규칙을 어겨서 거부됐습니다. 모든 카드에서 이 규칙을"
+        f" 지켜 다시 쓰세요.\n{bullet}"
     )

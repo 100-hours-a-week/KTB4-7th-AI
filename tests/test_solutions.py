@@ -257,6 +257,62 @@ async def test_동형이의_문자가_섞이면_재시도한다(monkeypatch):
     assert "П" not in json.dumps(res.json(), ensure_ascii=False)
 
 
+async def test_배율_위반으로_재시도하면_2회차_프롬프트에_위반_이유가_들어간다(monkeypatch):
+    """2026-10-11: 2회차가 1회차와 완전히 같은 프롬프트라 같은 종류의 위반이 반복될 수
+    있었다(devtools/bench.py 실측, n=15, 재시도 3건 전부 COMPUTED_RATIO). 2회차 프롬프트에
+    1회차 위반 사유를 덧붙인다.
+    """
+    prompts = []
+
+    def _raw_with_ratio() -> str:
+        return json.dumps(
+            {
+                "solutionCards": [
+                    {
+                        "rankNo": 1,
+                        "title": "오전 매출 집중 메뉴를 강화하세요",
+                        "summaryText": "평일 9시 매출이 12시보다 50배 이상 낮습니다.",
+                        "detailText": "상세",
+                        "evidence": "근거",
+                    },
+                    {
+                        "rankNo": 2,
+                        "title": "B",
+                        "summaryText": "요약",
+                        "detailText": "상세",
+                        "evidence": "근거",
+                    },
+                    {
+                        "rankNo": 3,
+                        "title": "C",
+                        "summaryText": "요약",
+                        "detailText": "상세",
+                        "evidence": "근거",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        prompts.append(user)
+        if len(prompts) == 1:
+            return _raw_with_ratio()
+        return _cards((1, "A"), (2, "B"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(res.json()["data"]["solutionCards"]) == 3
+    assert len(prompts) == 2
+    feedback_marker = "방금 생성한 응답이 아래 규칙을 어겨서 거부됐습니다"
+    assert feedback_marker not in prompts[0], "1회차는 피드백이 없다"
+    assert feedback_marker in prompts[1]
+    assert "배율" in prompts[1]
+
+
 def test_기호가_섞인_정상_문장은_재시도하지_않는다():
     """글자만 보는 이유 — 기호까지 막으면 모델이 즐겨 쓰는 "—"·"→" 하나에 매번 걸리고,
     재시도도 같은 이유로 실패해 그날 솔루션이 통째로 없어진다.
@@ -277,4 +333,5 @@ def test_기호가_섞인_정상_문장은_재시도하지_않는다():
         ensure_ascii=False,
     )
 
-    assert _parse(raw) is not None
+    cards, _ = _parse(raw)
+    assert cards is not None
