@@ -1,7 +1,8 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-08
-브랜치: `dev` (#132 까지 머지 완료, 열린 PR 없음)
+마지막 갱신: 2026-10-11
+브랜치: `feat/143-solution-retry-feedback` (Issue #143, 아래 "2026-10-10~11" 절 작업 중 —
+아직 커밋 전). `dev` 는 #140 까지 머지 완료.
 
 ## 지금 어디
 
@@ -963,8 +964,58 @@ BE 가 결정해야 하는 것:
 - **`ANTHROPIC_API_KEY` 로테이션 대기.** 채팅에 붙여넣어진 적이 있다. `.env`(gitignored,
   `chmod 600`, `.dockerignore` 포함)에만 썼고 커밋되지 않았지만 교체가 필요하다.
 
+## 2026-10-10~11 — 솔루션 재시도 하네스 분석 + 1회차 위반 피드백 추가 (A)
+
+"재시도가 왜 도는지, 과한 하네스가 있는지" 질문으로 시작해 `devtools/bench.py --n 5
+--endpoint solution`(Claude Sonnet 4.5, n=15 = 3케이스×5회)를 실제로 돌리고
+`_violations()`를 직접 재실행해 확인했다 — 추정이 아니라 실측 + 코드 추적이다.
+
+### 발견
+
+- 재시도율 20%(3/15). **재시도 3건 전부 `COMPUTED_RATIO`(배율) 하나 때문**이었다
+  (`FOREIGN_CHAR`·`ROUNDED_AMOUNT`·`AMPM_LEFT` 0건). 표본이 작아 일반화는 안 된다.
+- 2회차 프롬프트가 1회차와 완전히 동일해서(`prompt`가 루프 밖에서 한 번만 생성됨), 3건 중
+  1건은 2회차도 다른 카드·다른 문구로 또 배율을 썼다 — 최종 2장만 출하됐다. 데이터 자체가
+  극단적 시간대 격차(9시 8,200원 vs 12시 412,000원 ≈ 50배)인 케이스로, PR #138(헥터)이
+  먼저 지적한 "`COMPUTED_RATIO`와 `hourlyProfile` 카드의 구조적 충돌"과 같은 패턴이다.
+- evidence 필드를 배율 검사에서 빼는 안도 검토했으나 **철회** — `app/prompts/solution.py`가
+  evidence를 "챗봇 컨텍스트·저장용"이라 명시해서, 화면엔 안 보여도 챗봇을 통해 점주에게
+  전달될 수 있다. 반대로 `devtools/grade.py`의 `배율_없음`·`시각_24시간제` 채점기가
+  evidence를 빼고 보는 건 채점기 쪽 보완 대상일 수 있다(아래 "미해결 결정" 참고).
+
+### 적용한 것 — A: 2회차 프롬프트에 1회차 위반 피드백 추가
+
+B(멀티턴 교정)·C(위반 카드만 부분 재생성)도 비교했으나(비교표를 사용자가 헥터와 논의 중),
+구현 비용이 거의 0이고 관찰된 유일한 재시도 원인을 직접 겨냥해서 A부터 적용했다.
+
+- `app/services/solution.py::_parse()` 반환형이 `list[SolutionCard] | None` →
+  `tuple[list[SolutionCard] | None, set[str]]`(두 번째 값 = 위반 사유 집합)로 바뀜.
+- `app/prompts/solution.py::retry_feedback(reasons)` 신설 — 위반 사유를 규칙 문장으로
+  번역해 2회차 프롬프트 끝에 붙인다. 위반 없이 카드 수만 모자란 경우는 빈 문자열이라
+  2회차도 1회차와 같은 블라인드 재시도로 남는다.
+- `generate()` 루프가 매 시도마다 프롬프트를 새로 조립한다 — 1회차는 그대로, 2회차부터
+  피드백 추가. 3장 전체 재생성 구조·재시도 1회 제한은 안 바꿨다, 입력만 달라진다.
+- `VERSION` "2026-10-08" → "2026-10-11" (`devtools/grade.py::TARGET_SOLUTION_VERSION`,
+  `tests/test_prompts.py` 동기화).
+
+### 검증
+
+- `uv run pytest -q` — **287 passed** (기존 282 + `_parse` 튜플 변경에 맞춰 수정한 기존
+  테스트 3곳 + 신규 4개: 단위 테스트 3개(`test_prompts.py`), 통합 테스트 1개
+  (`test_solutions.py::test_배율_위반으로_재시도하면_2회차_프롬프트에_위반_이유가_들어간다` —
+  2회차에 실제로 전달되는 `user` 프롬프트 문자열에 피드백이 들어가는지 직접 확인).
+- `uv run ruff check --fix . && uv run ruff format .` — 통과.
+- **아직 실호출 재측정은 안 했다.** COMPUTED_RATIO 재시도가 줄었는지, row5 같은 "2회차도
+  실패" 케이스가 줄었는지는 `devtools/bench.py --n 5 --endpoint solution` 재실행으로
+  확인해야 한다 — 아래 "다음 한 걸음" 참고.
+
+🔴 **아직 커밋하지 않았다.** `feat/143-solution-retry-feedback` 브랜치(Issue #143)로
+옮겨서 작업 중이다 — 커밋·PR 은 사용자 승인 후.
+
 ## 마지막으로 통과한 것
 
+- `uv run pytest -q` — **287 passed** (2026-10-11, `feat/143-solution-retry-feedback`,
+  위 "2026-10-10~11" 절. 커밋 전)
 - `uv run pytest -q` — `dev` 기준 **265 passed** (2026-10-08)
 - `uv run python -m devtools.llm_smoke --with-chat` — 솔루션·인사이트·챗봇 3종 실호출 통과
 - `uv run python -m devtools.forecast_check --pos <엑셀> --be-daily <BE 샘플>` — 62/62일 일치
@@ -983,6 +1034,13 @@ BE 가 결정해야 하는 것:
 
 ### 이번 주 (2026-10-06~)
 
+- 🔴 **A 변경 커밋·PR** — 위 "2026-10-10~11" 절. `feat/143-solution-retry-feedback` 브랜치로
+  옮겨뒀다(Issue #143). `uv run pytest -q`(287 passed 확인됨) 재확인 후 커밋·PR, 본문에
+  `Closes #143`.
+- 🔴 **A 적용 후 재측정** — `devtools/bench.py --n 5 --endpoint solution`(또는 더 큰 n)으로
+  COMPUTED_RATIO 재시도율·"2회차도 실패" 비율이 줄었는지 확인한다. 효과가 작으면 B(멀티턴
+  교정)·C(위반 카드만 부분 재생성)로 올릴지 헥터와 판단 — 비교표는 위 "2026-10-10~11" 절에서
+  언급한 대로 논의 중.
 - 🔴 **재측정** — #128 러너로. 다른 모든 판단이 여기 걸려 있다.
   - `uv run python -m devtools.bench --n 3` 으로 Claude 기준선부터(몇 분, `.env` 사용).
     **응답 실패율이 거기서 바로 나온다** — 13% 추정이 맞는지 틀린지 갈린다.
@@ -1105,6 +1163,17 @@ BE 가 결정해야 하는 것:
   `model_version` 이 없다. 노션 사본이 낡은 건지 BE 가 버리는 건지 확인이 필요하다 —
   **ERD 는 BE 담당 문서라 AI 가 고치지 않는다.** 그리고 `SolutionData.modelVersion` 에
   `max_length` 가 없어서 길이 초과를 코드가 안 막는다.
+
+- **`COMPUTED_RATIO`(배율 금지) 규칙과 `hourlyProfile` 카드의 구조적 충돌** (2026-10-11
+  신규, PR #138 선제 발견을 실측으로 재확인): 데이터 자체가 극단적 시간대 격차면 모델이
+  배율로 표현하려는 경향이 있어, 재시도 로직을 어떻게 바꿔도(A/B/C 전부) 근본 해결은 안
+  된다. 규칙을 카드 타입별로 다르게 적용할지, `hourlyProfile` 표현 방식 자체를 바꿀지는
+  제나·헥터 논의 필요.
+- **`devtools/grade.py`의 `배율_없음`·`시각_24시간제` 채점기가 evidence 를 안 본다**
+  (2026-10-11 신규): `app/services/solution.py::_violations()`는 evidence 도 보는데
+  채점기는 "화면에 안 나온다"는 이유로 뺐다 — 그런데 evidence 는 챗봇 컨텍스트로 쓰여서
+  화면에 안 보여도 다른 경로로 샐 수 있다. 운영 코드가 맞고 채점기가 보완 대상일 가능성이
+  높지만, 채점기를 고치기 전에 한 번 더 확인이 필요하다.
 
 ## 설계상 확정된 사실 (미해결 아님 — 혼동 방지용)
 

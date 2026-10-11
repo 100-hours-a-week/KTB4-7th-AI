@@ -114,8 +114,25 @@ def test_인사이트_프롬프트는_문장마다_근거를_하나씩_붙인다
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-10-08"
+    assert solution.VERSION == "2026-10-11"
     assert insight.VERSION == "2026-10-08"
+
+
+def test_재시도_피드백은_위반_사유가_없으면_빈_문자열이다():
+    """위반 없이 카드 수만 모자란 경우는 2회차도 1회차와 같은 프롬프트로 블라인드 재시도한다."""
+    assert solution.retry_feedback(set()) == ""
+
+
+def test_재시도_피드백은_위반_규칙을_설명한다():
+    feedback = solution.retry_feedback({"COMPUTED_RATIO"})
+    assert feedback.startswith("\n\n")
+    assert "배율" in feedback
+
+
+def test_재시도_피드백은_위반이_여러개면_전부_담는다():
+    feedback = solution.retry_feedback({"COMPUTED_RATIO", "ROUNDED_AMOUNT"})
+    assert "배율" in feedback
+    assert "어림" in feedback
 
 
 def test_챗봇_프롬프트는_chatDate_를_오늘로_넣는다():

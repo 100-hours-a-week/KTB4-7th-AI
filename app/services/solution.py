@@ -109,7 +109,7 @@ def _day_facts(target_date: str) -> tuple[str, bool]:
     return code, code in ("SAT", "SUN")
 
 
-def _parse(raw: str) -> list[SolutionCard] | None:
+def _parse(raw: str) -> tuple[list[SolutionCard] | None, set[str]]:
     """계약·ERD 를 만족하는 카드만 돌려준다. 한 장도 안 남으면 None 이라 재시도한다.
 
     카드별 길이·범위 제약(rankNo ≥ 1, title 200자)은 스키마가 본다. 여기서는 스키마가
@@ -121,28 +121,40 @@ def _parse(raw: str) -> list[SolutionCard] | None:
     "카드 2장이 나가는 것보다 500이 나가는 쪽이 점주에게 더 나쁘다"고 적어 둔 판단과
     어긋나서, 위반한 카드만 버리고 남은 걸 돌려준다. 재시도는 그대로 돈다 — 3 장을
     선호하는 건 변하지 않았고, 다만 재시도도 실패하면 빈손이 아니라 남은 카드가 나간다.
+
+    2026-10-11: 위반 사유를 두 번째 값으로 같이 돌려준다. generate() 가 2회차 프롬프트에
+    "방금 이 규칙을 어겼다"를 덧붙이는 데 쓴다(`solution_prompt.retry_feedback`) — 실측
+    (n=15, Claude Sonnet 4.5)에서 재시도 3건 전부가 COMPUTED_RATIO 였는데, 2회차가 1회차와
+    완전히 같은 프롬프트라 같은 종류의 위반이 또 나온 사례가 있었다.
     """
     try:
         data = json.loads(llm.strip_fence(raw))
         cards = [SolutionCard(**_normalize(card)) for card in data["solutionCards"]]
     except Exception:
-        return None
+        return None, set()
 
     if not 1 <= len(cards) <= MAX_CARDS:
-        return None
+        return None, set()
     ranks = [card.rankNo for card in cards]
     if len(set(ranks)) != len(ranks):
         # 어느 쪽이 맞는 순위인지 알 수 없어 버린다 — 둘 다 남기면 BE 저장이 깨진다.
-        return None
+        return None, set()
 
-    kept = [card for card in cards if not _violations(card)]
+    reasons: set[str] = set()
+    kept: list[SolutionCard] = []
+    for card in cards:
+        violations = _violations(card)
+        if violations:
+            reasons.update(violations)
+        else:
+            kept.append(card)
     if not kept:
-        return None
+        return None, reasons
     # 중간이 빠지면 rankNo 가 1·3 으로 나간다. 장수가 줄어드는 경우(배정 지표가 2 종일 때)
     # 는 늘 1·2 였으므로 연속성을 유지한다 — FE 가 번호를 그대로 쓰는지 확인된 바 없다.
     for index, card in enumerate(kept, start=1):
         card.rankNo = index
-    return kept
+    return kept, reasons
 
 
 _TEXT_FIELDS = ("title", "summaryText", "detailText", "evidence")
@@ -189,14 +201,18 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
     # 카드마다 쓸 근거 지표를 코드가 배정한다 — 모델이 고르게 두면 같은 지표로 두 장을
     # 만든다(실측 10 번 중 4 번). app/services/solution_focus.py 참고.
     focus = assign_focus(metrics)
-    prompt = solution_prompt.build(focus, req.targetDate, day_of_week, is_weekend)
+    base_prompt = solution_prompt.build(focus, req.targetDate, day_of_week, is_weekend)
 
     # 3장을 선호하되, 모자란 응답이라고 버리지는 않는다. 카드 2장이 나가는 것보다
     # 500 이 나가는 쪽이 점주에게 더 나쁘다 — 그날 솔루션이 아예 없어진다.
     wanted = len(focus) or MAX_CARDS
     cards = None
-    for _ in range(MAX_RETRY + 1):
-        parsed = _parse(await llm.complete(solution_prompt.SYSTEM, prompt))
+    reasons: set[str] = set()
+    for attempt in range(MAX_RETRY + 1):
+        # 2026-10-11: 2회차부터는 1회차가 어긴 규칙을 프롬프트에 덧붙인다. 전에는
+        # 1·2회차가 완전히 같은 프롬프트라 같은 종류의 위반이 반복될 수 있었다.
+        prompt = base_prompt + (solution_prompt.retry_feedback(reasons) if attempt else "")
+        parsed, reasons = _parse(await llm.complete(solution_prompt.SYSTEM, prompt))
         # 더 많이 남은 쪽을 쥔다. `parsed or cards` 로 두면 2 장을 받아둔 뒤 재시도가
         # 1 장을 주면 더 나쁜 쪽으로 덮어쓴다.
         if parsed and (cards is None or len(parsed) > len(cards)):
