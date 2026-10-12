@@ -18,6 +18,58 @@ OCR(옵션 2)"을 논의했는데, **최종 구현은 옵션 2(OCR)로 간다**.
 담당할 부분은 **BE가 배치 단위로 1회 호출하는 내부 엔드포인트 하나**로 좁혀진다:
 `POST /internal/v2/ai/menu-recognition`. 이 스펙은 그 엔드포인트의 AI 쪽 구현만 다룬다.
 
+## 갱신 (2026-10-12, Upstage 문서 조사 반영) — 아래 "설계" 절보다 우선
+
+> 이슈 #147 구현 착수 전 Upstage 공식 문서를 확인한 결과다. 아래 "설계 — OCR 중심"의 1·2·3절과 "평가" 절 중 이 절과 충돌하는 부분은 이 절이 우선한다. 로컬 비전 LLM·오픈소스 OCR 대안은 검토했으나 이번 PR 은 Upstage 로 가고, 공급자 경계를 `extract_items()` 하나로 좁혀 둔다.
+
+기존 `docs/superpowers/specs/2026-10-12-menu-recognition-design.md` 대비 바뀌는 부분만 적는다.
+
+### 변경 요약
+
+| 절 | 기존 | 갱신 |
+|---|---|---|
+| OCR 제품 | Document Parse 또는 Information Extract 미정 | **Information Extract** (`POST https://api.upstage.ai/v1/information-extraction`, 모델 별칭 `information-extract`) |
+| 이름-가격 짝짓기 | 좌표 기반 직접 구현 가능성 | 불필요. `response_format.json_schema` 로 `{name, price, category}` 배열을 직접 받는다 |
+| 카테고리 | 텍스트 LLM 2단계 (`llm.complete`) | 스키마 `category` enum(6종)으로 같은 호출에서 분류. 품질이 나쁘면 그때 2단계로 올린다 |
+| confidence | OCR 신뢰도 0~1 | `extra_body={"confidence": true}` 로 필드별 `high`/`low` 라벨만 온다 → 임시 매핑 `high=0.9`, `low=0.5` |
+| 병렬 | `asyncio.gather` | 별칭 한도가 동기 1건/초(웹 확인, 제한 페이지는 미확인) → 세마포어 1~2, 429 는 재시도 1회 |
+| 이미지 전달 | URL 그대로 | Upstage 가 원격 URL 을 직접 가져오는지 문서에 없음 → AI 가 `httpx` 로 받아 base64 data URL 로 전달 |
+| 비교 실험 | 같은 PR | 이번 PR 범위 밖(별도 이슈) |
+
+### 경계 (교체 가능성)
+
+`app/clients/ocr.py::extract_items(image_bytes) -> list[RawItem]` 하나만 공급자를 안다.
+`RawItem = {name, price, category, confidence_label}`. 로컬 비전 LLM 으로 바꾸려면 이 함수 안쪽만 교체한다.
+
+### 처리 흐름 (`app/services/menu.py::recognize`)
+
+1. 이미지마다 `httpx` 로 다운로드(타임아웃, 실패 시 해당 이미지는 실패 처리) → `extract_items`
+2. 보정: 이름 공백이면 제외 / 가격 음수·1,000,000 초과면 `None` + `priceReviewRequired=true` /
+   category 가 6종 밖이면 `OTHER` / 라벨 `low` 이거나 가격 `None` 이면 `priceReviewRequired=true`
+3. 항목에 `sourceImageId` 를 붙여 평평하게 합친다 (이미지 간 병합은 BE)
+4. 전체 항목 0개 → `ApiError(422, "MENU_TEXT_NOT_FOUND")`. 공급자 오류·다운로드 실패 등 → 500.
+   일부 이미지만 실패하면 나머지 항목으로 200 (BE 확인 대기)
+
+### 라우터·스키마
+
+- `app/api/menu.py`: prefix `/internal/v2/ai`, `verify_internal_token`
+- `app/schemas/menu.py`: `MenuImageInput`, `MenuRecognitionRequest(images 1~10)`, `DetectedMenuItem`,
+  `MenuRecognitionResponse`. 응답에 `message` 를 넣을지는 BE 확인 대기(ST-04 예시에는 있음)
+
+### BE 에 확인할 것
+
+1. 200 응답 `message` 를 AI 가 줘야 하는가 (ST-04 예시에 있음)
+2. 422/500 바디: 계약 `{"failReason":...,"data":null}` vs 이 레포 `error.code` 형식
+3. 일부 이미지만 실패 시 200 + 나머지 항목이 맞는가
+4. BE → AI 호출 타임아웃 (이미지 10장 순차 처리 시 수십 초 가능)
+5. `LOW_IMAGE_QUALITY` 판정 기준 (모델 출력만으로는 구분 근거가 없음)
+
+### 테스트 (Upstage·다운로드는 mock)
+
+정상 200 / 이미지 0장·11장 422 / 이름 공백 제외 / 가격 범위 밖 보정 / 카테고리 밖 값 → OTHER /
+low 라벨 → priceReviewRequired / 전부 빈 결과 → 422 MENU_TEXT_NOT_FOUND / 공급자 예외 → 500 /
+일부 실패 시 나머지 반환. 실호출은 요금 발생이라 승인 후 소량.
+
 ## 범위
 
 - **포함**: 배치(이미지 1~10장, 각각 URL)를 받아 이미지별 메뉴 후보(이름·카테고리·가격·
