@@ -14,8 +14,8 @@
 
 | 도메인 코드 | 도메인명 | 테이블 |
 | --- | --- | --- |
-| AUTH | 인증·계정 | users, signup_drafts, business_verifications, user_auth_providers, user_sessions, password_reset_tokens |
-| STORE | 매장 | stores, store_business_hours, store_holidays, menus, menu_images, menu_image_items |
+| AUTH | 인증·계정 | users, signup_drafts, business_verifications, user_auth_providers, user_sessions, login_attempts, password_reset_tokens, password_reset_email_attempts |
+| STORE | 매장 | stores, store_business_hours, store_holidays, menus, menu_upload_batches, menu_write_requests, menu_images, menu_image_items |
 | SOL | 솔루션 | solution_bundles, solutions, saved_solutions, chat_messages |
 | SALES | 매출 분석 | sales_uploads, sales_orders, sales_order_items, store_menu_categories, sales_daily_summaries, sales_hourly_summaries, sales_daily_category_summaries, sales_daily_menu_summaries, sales_forecasts, analysis_runs, sales_analyses, sales_ai_insights, analysis_metrics, menu_analysis_results, review_analyses, store_cost_items, reviews, weather_observations |
 | RANK | 성장 랭킹 | ranking_profiles, ranking_snapshots, ranking_entries |
@@ -62,7 +62,7 @@
 
 ### ✅business_verifications - 사업자등록번호 인증 결과
 
-회원가입 2단계에서 사업자등록번호 외부 인증이 성공한 결과를 임시로 저장한다. 인증 결과는 발급 후 10분 동안만 유효하고, 회원가입 완료에 한 번 사용하면 즉시 재사용할 수 없다.
+회원가입 또는 ST-02 매장 정보 수정에서 사업자등록번호 외부 인증이 성공한 결과를 임시로 저장한다. 인증 결과는 발급 후 10분 동안만 유효하고, 회원가입 완료나 매장 번호 등록·변경에 한 번 사용하면 즉시 재사용할 수 없다.
 
 | 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
 | --- | --- | --- | --- | --- |
@@ -70,10 +70,10 @@
 | 사업자등록번호 | `business_reg_number` | NOT NULL | CHAR(10) | 하이픈을 제외한 인증 대상 번호 |
 | 인증 완료 일시 | `verified_at` | NOT NULL | DATETIME | 외부 인증 성공 시각 |
 | 만료 일시 | `expires_at` | NOT NULL, INDEX | DATETIME | verified_at부터 10분 후 |
-| 사용 완료 일시 | `used_at` | NULL 허용 | DATETIME | 회원가입 2단계 완료 시 기록. 값이 있으면 재사용 불가 |
+| 사용 완료 일시 | `used_at` | NULL 허용 | DATETIME | 회원가입 완료 또는 매장 사업자번호 등록·변경 시 기록. 값이 있으면 재사용 불가 |
 | 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 인증 결과 생성 시각 |
 
-테이블 제약: 회원가입 2단계는 `id` 존재, 요청한 사업자등록번호 일치, `expires_at` 미만, `used_at IS NULL`을 모두 만족할 때만 처리한다.
+테이블 제약: 회원가입 완료 또는 ST-02 번호 등록·변경은 `id` 존재, 요청한 사업자등록번호 일치, `expires_at` 미만, `used_at IS NULL`을 모두 만족할 때만 처리한다. 매장 수정 시 번호·인증 시각 갱신과 `used_at` 기록은 하나의 트랜잭션으로 처리한다.
 
 ### ✅user_auth_providers - 외부 본인인증 식별값 연동
 
@@ -121,6 +121,33 @@ V2에서 도입하는 토스 본인인증 완료 후 제공되는 사용자 고�
 | 사용 일시 | `used_at` | NULL 허용 | DATETIME | 재설정 링크 사용 완료 시각 |
 | 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 재설정 링크 발급 시각 |
 
+### ✅password_reset_email_attempts - 비밀번호 재설정 이메일 요청 이력
+
+가입 여부와 관계없이 비밀번호 재설정 이메일 요청의 이메일·IP별 제한을 적용하기 위한 최근 요청 이력을 저장한다. 원문 이메일과 IP는 저장하지 않으며, 서버 비밀키로 HMAC-SHA-256 처리한 해시만 저장한다. 최근 24시간이 지난 행은 정리한다.
+
+| 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
+| --- | --- | --- | --- | --- |
+| 요청 이력 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 비밀번호 재설정 이메일 요청 이력 식별자 |
+| 이메일 키 해시 | `email_hash` | NOT NULL, INDEX (`email_hash`, `requested_at`) | CHAR(64) | 공백 제거·소문자 정규화 이메일의 HMAC-SHA-256 해시 |
+| 요청 IP 키 해시 | `ip_hash` | NOT NULL, INDEX (`ip_hash`, `requested_at`) | CHAR(64) | 신뢰된 요청 IP의 HMAC-SHA-256 해시 |
+| 요청 일시 | `requested_at` | NOT NULL, INDEX | DATETIME(6) | 이메일·IP별 rolling window 요청 수 계산에 사용하며, 최근 24시간이 지난 이력은 삭제 |
+
+이메일별 최근 2분 1회·최근 24시간 5회, IP별 최근 1시간 20회 정책을 적용한다. 가입 여부와 무관하게 이력을 남기며, 여러 BE 인스턴스의 동시 요청은 MySQL named lock으로 직렬화한다. 이메일·IP 원문은 저장하지 않는다.
+
+### ✅login_attempts - 로그인 실패 시도 이력
+
+로그인 자격 증명 실패를 계정·IP별 rolling window로 집계한다. 이메일과 IP는 HMAC-SHA-256으로 해시하여 저장하며, 원문은 저장하지 않는다. 로그인 성공 시 `email_hash`와 `account_blocked_until`을 NULL로 바꿔 계정 실패 상태만 초기화하고, 같은 행의 `ip_hash`와 `failed_at`은 유지하여 IP 제한 이력을 보존한다.
+
+| 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
+| --- | --- | --- | --- | --- |
+| 로그인 실패 이력 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 실패 요청 이력 식별자 |
+| 이메일 키 해시 | `email_hash` | NULL 허용, INDEX (`email_hash`, `failed_at`), INDEX (`email_hash`, `account_blocked_until`) | CHAR(64) | 공백 제거·소문자 정규화 이메일의 HMAC-SHA-256 해시. 로그인 성공 시 NULL로 변경하여 계정별 실패 횟수와 제한 상태를 초기화한다. |
+| 요청 IP 키 해시 | `ip_hash` | NOT NULL, INDEX (`ip_hash`, `failed_at`) | CHAR(64) | 신뢰된 클라이언트 IP의 HMAC-SHA-256 해시. 계정 성공 시에도 유지해 IP 실패 횟수를 보존한다. |
+| 실패 일시 | `failed_at` | NOT NULL, INDEX | DATETIME(6) | 계정 15분·IP 10분 rolling window 계산 및 만료 이력 정리에 사용한다. |
+| 계정 제한 종료 일시 | `account_blocked_until` | NULL 허용, INDEX (`email_hash`, `account_blocked_until`) | DATETIME(6) | 계정 실패 단계에 도달한 시각부터 30초·1분·5분·15분 후의 제한 종료 시각. 제한 단계에 도달하지 않았거나 로그인 성공 시 NULL이다. |
+
+계정별 최근 15분 실패 횟수가 5~9회면 30초, 10~14회면 1분, 15~19회면 5분, 20회 이상이면 15분 제한한다. 해당 실패 요청은 401을 반환하고 이후 제한 중 요청은 429와 `retryAfterSeconds`를 반환한다. 제한 중 요청은 집계하지 않고 제한을 연장하지 않는다. IP별 최근 10분 30회 실패 후의 요청은 가장 오래된 실패가 구간에서 만료될 때까지 429로 제한한다. 제한 상태는 계정/IP별로 독립적이며 모든 BE 인스턴스에서 MySQL named lock으로 직렬화한다. 최근 15분이 지난 이력은 정리한다.
+
 ## 4. STORE · 매장
 
 사업자등록번호, 매장 기본 정보, 영업시간·휴무일, 메뉴 및 메뉴 이미지(OCR)를 담당한다. 메뉴 등록·조회·수정은 V2 확장 범위다.
@@ -133,15 +160,16 @@ V2에서 도입하는 토스 본인인증 완료 후 제공되는 사용자 고�
 | --- | --- | --- | --- | --- |
 | 매장 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 매장 식별자 |
 | 소유자 사용자 ID | `owner_user_id` | FK → `users.id`, NOT NULL, UNIQUE | BIGINT UNSIGNED | MVP에서 사용자 1명당 매장 1개를 보장 |
-| 사업자등록번호 | `business_registration_no` | NOT NULL, UNIQUE | CHAR(10) | 하이픈을 제외한 사업자등록번호 |
-| 사업자 인증 일시 | `business_verified_at` | NOT NULL | DATETIME | 사업자 인증 완료 시각 |
+| 사업자등록번호 | `business_registration_no` | NULL 허용, UNIQUE | CHAR(10) | 하이픈을 제외한 사업자등록번호. 회원가입에서 생략할 수 있고, 매장 수정에서 인증 후 등록·변경한다. |
+| 사업자 인증 일시 | `business_verified_at` | NULL 허용 | DATETIME | 현재 저장된 사업자등록번호의 인증 완료 시각. 번호 미등록 상태에서는 NULL |
 | 매장명 | `name` | NOT NULL | VARCHAR(100) | 매장 이름 |
 | 우편번호 | `postal_code` | NOT NULL | CHAR(5) | 도로명 주소 우편번호 |
 | 도로명 주소 | `address` | NOT NULL | VARCHAR(255) | 매장 도로명 주소 |
 | 상세 주소 | `address_detail` | NULL 허용 | VARCHAR(255) | 건물·호수 등 상세 주소 |
-| 위도 | `latitude` | NOT NULL, CHECK (latitude BETWEEN -90 AND 90) | DECIMAL(10,7) | 주소 검색 결과를 프론트엔드가 전달한 매장 위치 위도 |
-| 경도 | `longitude` | NOT NULL, CHECK (longitude BETWEEN -180 AND 180) | DECIMAL(10,7) | 주소 검색 결과를 프론트엔드가 전달한 매장 위치 경도 |
+| 위도 | `latitude` | NULL 허용, CHECK (latitude BETWEEN -90 AND 90) | DECIMAL(10,7) | MVP에서는 저장하지 않으며, V2에서 카카오 로컬 API 지오코딩 결과를 저장하는 매장 위치 위도 |
+| 경도 | `longitude` | NULL 허용, CHECK (longitude BETWEEN -180 AND 180) | DECIMAL(10,7) | MVP에서는 저장하지 않으며, V2에서 카카오 로컬 API 지오코딩 결과를 저장하는 매장 위치 경도 |
 | 매장 상태 | `status` | NOT NULL, DEFAULT 'ACTIVE', CHECK (status IN ('ACTIVE', 'INACTIVE', 'SUSPENDED')) | VARCHAR(20) | 정상 운영·운영 중지·이용 제한 상태 |
+| 메뉴 개정 번호 | `menu_revision` | NOT NULL, DEFAULT 0 | BIGINT UNSIGNED | MY-04 메뉴 저장의 낙관적 동시성 기준 |
 | 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 매장 등록 시각 |
 | 수정 일시 | `updated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP, ON UPDATE CURRENT_TIMESTAMP | DATETIME | 매장 정보 최종 수정 시각 |
 
@@ -180,57 +208,82 @@ V2에서 도입하는 토스 본인인증 완료 후 제공되는 사용자 고�
 
 테이블 제약: UNIQUE(store_id, holiday_date).
 
-### ✅menus - 메뉴
+### MY-04 메뉴 사진 인식 데이터 모델 (V2)
 
-매장이 관리하는 메뉴와 판매 상태를 저장한다.
+한 번의 업로드는 1~10장의 이미지 묶음이다. AI 추출 결과는 저장 전 후보이며, 저장된 메뉴와 분리한다. 현재 메뉴를 교체할 때 이전 메뉴는 `removed_at`으로 목록에서 숨기고 매출·분석 FK를 보존한다.
 
-| 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
-| --- | --- | --- | --- | --- |
-| 메뉴 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 메뉴 식별자 |
-| 매장 ID | `store_id` | FK → `stores.id`, NOT NULL | BIGINT UNSIGNED | 메뉴가 등록된 매장 식별자 |
-| 메뉴명 | `name` | NOT NULL | VARCHAR(100) | 메뉴 이름 |
-| 메뉴 카테고리 | `category` | NOT NULL | VARCHAR(50) | 메뉴 분류 |
-| 메뉴 가격 | `price` | NOT NULL, CHECK (`price` >= 0) | BIGINT
-UNSIGNED | 메뉴 판매 가격 |
-| 판매 상태 | `status` | NOT NULL, DEFAULT `'ACTIVE'`, CHECK (`status` IN ('ACTIVE', 'INACTIVE', 'SOLD_OUT')) | VARCHAR(20) | 메뉴 판매 가능 상태 |
-| 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 메뉴 등록 시각 |
-| 수정 일시 | `updated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP, ON UPDATE CURRENT_TIMESTAMP | DATETIME | 메뉴 정보 최종 수정 시각 |
+### ✅menus - 저장된 메뉴
 
-테이블 제약: UNIQUE(store_id, name). 추가 권장: price >= 0, status 허용값 제한.
+| 논리명 | 물리명 | 제약사항 / 타입 | 설명 |
+| --- | --- | --- | --- |
+| 메뉴 ID | id | PK, BIGINT UNSIGNED | 메뉴 식별자 |
+| 매장 ID | store_id | FK → `stores.id`, NOT NULL | 소유 매장 |
+| 메뉴명 / 정규화명 | name / normalized_name | VARCHAR(100), NOT NULL | 중복 비교는 trim·공백 정리·Unicode NFC 후 정규화명으로 수행 |
+| 가격 | price | BIGINT UNSIGNED, NOT NULL, CHECK 0~1,000,000 | 원 단위 정수 |
+| 카테고리 | category | VARCHAR(50), NOT NULL | COFFEE/NON_COFFEE/BEVERAGE/CAKE/BAKERY/OTHER |
+| 표시 순서 | sort_order | INT UNSIGNED, NOT NULL | 목록 순서 |
+| 판매 상태 | status | VARCHAR(20), NOT NULL | ACTIVE/INACTIVE/SOLD_OUT |
+| 제거 시각 | removed_at | DATETIME, NULL | 새 결과 저장으로 현재 목록에서 빠진 경우. 이전 매출 참조는 유지 |
+| 활성 정규화명 | active_normalized_name | VARCHAR(100) GENERATED, NULL | removed_at IS NULL일 때 normalized_name, 그 외 NULL; 현재 메뉴의 복합 UNIQUE용 |
+| 생성/수정 시각 | created_at / updated_at | DATETIME, NOT NULL | 저장·수정 이력 |
 
-### ✅menu_images - 메뉴 이미지 및 OCR 결과
+제약: `UNIQUE(store_id, active_normalized_name, price, category)`로 현재 목록의 동일 이름·가격·카테고리 조합만 금지한다. 이름만 같은 메뉴는 허용한다. 저장 목록 조회는 `removed_at IS NULL ORDER BY sort_order,id`이다. `stores.menu_revision`(BIGINT UNSIGNED, 기본 0)을 저장 트랜잭션마다 증가시켜 동시 수정 충돌을 검사한다.
 
-메뉴판 이미지와 OCR 작업 결과 원본을 저장한다. 인식된 개별 메뉴 후보와 확정 상태는 `menu_image_items`에서 관리한다.
+### ✅menu_upload_batches - 업로드·AI 분석 묶음
 
-| 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
-| --- | --- | --- | --- | --- |
-| 메뉴 이미지 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 메뉴 이미지 식별자 |
-| 매장 ID | `store_id` | FK → `stores.id`, NOT NULL | BIGINT UNSIGNED | 이미지가 등록된 매장 식별자 |
-| 이미지 주소 | `image_url` | NOT NULL | VARCHAR(2048) | 메뉴판 이미지 저장 주소 |
-| OCR 처리 상태 | `ocr_status` | NOT NULL, DEFAULT `'PENDING'`, CHECK (`ocr_status` IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')) | VARCHAR(20) | 이미지 OCR 작업 진행 상태 |
-| OCR 결과 | `ocr_result` | NULL 허용 | JSON | OCR로 추출한 메뉴 정보 원본 결과 |
-| 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 메뉴 이미지 등록 시각 |
+| 논리명 | 물리명 | 제약사항 / 타입 | 설명 |
+| --- | --- | --- | --- |
+| 배치 ID | id | PK, BIGINT UNSIGNED | 한 번의 업로드 1~10장을 식별 |
+| 매장 ID | store_id | FK → `stores.id`, NOT NULL | 본인 매장만 조회·저장 |
+| 작업 상태 | status | VARCHAR(20), NOT NULL | PENDING/PROCESSING/COMPLETED/FAILED |
+| 실패 사유 | fail_reason | VARCHAR(50), NULL | 업로드·분석 실패 코드 |
+| 기준 메뉴 개정 | base_menu_revision | BIGINT UNSIGNED, NOT NULL | 업로드 당시 `stores.menu_revision` |
+| 멱등 키·요청 해시 | `idempotency_key_hash` / `request_hash` | CHAR(64), 각각 NOT NULL | 같은 키·같은 이미지 묶음 재전송 판별; 다르면 409 |
+| 업로드/완료/저장/교체 시각 | uploaded_at / completed_at / saved_at / superseded_at | DATETIME, 해당 단계 전 NULL | 임시 결과의 수명·최신 배치 판정 |
 
-추가 권장: ocr_status는 PENDING, PROCESSING, COMPLETED, FAILED 값만 허용한다. OCR 후보별 확정·제외 상태는 `menu_image_items.status`에서 관리한다.
+제약: `UNIQUE(store_id,idempotency_key_hash)`, `INDEX(store_id,uploaded_at,id)`. `saved_at`은 추출 결과 저장 성공 뒤에만 채운다. 재업로드는 이전 미저장 배치에 `superseded_at`을 기록한다. `saved_at`과 AI 처리 `status`는 서로 다른 상태다.
 
-### ✅menu_image_items - OCR 메뉴 후보
+### ✅menu_write_requests - 메뉴 저장 멱등 처리
 
-메뉴판 이미지에서 인식한 메뉴 후보를 항목별로 저장한다. 사용자가 후보별로 메뉴명·카테고리·가격을 검토한 뒤 확정하거나 제외한다.
+| 논리명 | 물리명 | 제약사항 / 타입 | 설명 |
+| --- | --- | --- | --- |
+| 요청 ID | `id` | PK, BIGINT UNSIGNED | 저장 요청 식별자 |
+| 매장 ID | `store_id` | FK → `stores.id`, NOT NULL | 요청 대상 매장 |
+| 작업 종류 | `operation` | VARCHAR(20), NOT NULL | MENU_PATCH 또는 MENU_CONFIRM |
+| 키·본문 해시 | `key_hash` / `request_hash` | CHAR(64), NOT NULL | 원문 키와 본문 대신 SHA-256 보관 |
+| 성공 응답 | `response_json` | JSON, NOT NULL | 재전송 시 같은 응답 반환 |
+| 생성 시각 | `created_at` | DATETIME, NOT NULL | 멱등 기록 정리 기준 |
 
-| 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
-| --- | --- | --- | --- | --- |
-| OCR 메뉴 후보 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | OCR로 추출한 메뉴 후보 식별자 |
-| 메뉴 이미지 ID | `menu_image_id` | FK → `menu_images.id`, NOT NULL | BIGINT UNSIGNED | 후보가 추출된 메뉴판 이미지 |
-| 확정 메뉴 ID | `menu_id` | FK → `menus.id`, NULL 허용 | BIGINT UNSIGNED | 확정 후 생성·연결된 메뉴. 확정 전 또는 제외된 후보는 NULL |
-| 인식 메뉴명 | `detected_name` | NOT NULL | VARCHAR(100) | OCR이 인식한 메뉴명 후보 |
-| 인식 카테고리 | `detected_category` | NULL 허용 | VARCHAR(50) | OCR이 추정한 메뉴 카테고리 |
-| 인식 가격 | `detected_price` | NULL 허용, CHECK (`detected_price` >= 0) | BIGINT UNSIGNED | OCR이 인식한 가격 후보 |
-| 신뢰도 | `confidence` | NULL 허용, CHECK (`confidence` BETWEEN 0 AND 1) | DECIMAL(5,4) | OCR 인식 신뢰도 |
-| 검토 상태 | `status` | NOT NULL, DEFAULT `'PENDING'`, CHECK (`status` IN ('PENDING', 'CONFIRMED', 'REJECTED')) | VARCHAR(20) | 사용자 검토 전·확정·제외 상태 |
-| 검토 일시 | `reviewed_at` | NULL 허용 | DATETIME | 후보 메뉴 검토 완료 시각 |
-| 생성 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | OCR 후보 생성 시각 |
+`UNIQUE(store_id,operation,key_hash)`를 적용한다. 메뉴 변경과 성공 응답 기록은 같은 트랜잭션에서 완료한다. 같은 키·같은 본문은 저장된 응답을 재사용하고, 다른 본문은 409다. 기록은 최소 24시간 보존하며 이후 재전송도 `expectedMenuRevision`으로 중복 적용을 막는다.
 
-테이블 제약: CHECK(detected_price IS NULL OR detected_price >= 0), CHECK(confidence IS NULL OR confidence BETWEEN 0 AND 1), CHECK(status IN ('PENDING', 'CONFIRMED', 'REJECTED')), CHECK(status <> 'CONFIRMED' OR menu_id IS NOT NULL).
+### ✅menu_images - 배치 내 원본 이미지
+
+| 논리명 | 물리명 | 제약사항 / 타입 | 설명 |
+| --- | --- | --- | --- |
+| 이미지 ID | id | PK, BIGINT UNSIGNED | 이미지 식별자 |
+| 배치 ID | batch_id | FK → `menu_upload_batches.id`, NOT NULL | 한 배치에 최대 10장 |
+| 매장 ID | store_id | FK → `stores.id`, NOT NULL | 배치의 store_id와 일치해야 함 |
+| 이미지 순서 | image_order | TINYINT UNSIGNED, NOT NULL | 1~10, 배치 내 UNIQUE |
+| 저장 키 | storage_key | VARCHAR(512), NOT NULL, UNIQUE | 비공개 객체 스토리지 키; 조회용 서명 URL은 저장하지 않음 |
+| 파일 크기 / MIME | file_size_bytes / mime_type | BIGINT UNSIGNED / VARCHAR(30), NOT NULL | 장당 5MiB(5,242,880바이트), jpg/jpeg/png |
+| OCR 상태 / 결과 | ocr_status / ocr_result | VARCHAR(20), NOT NULL / JSON, NULL | 이미지별 처리 상태·원본 결과 |
+| 생성 시각 | created_at | DATETIME, NOT NULL | 업로드 시각 |
+
+배치가 1~10장·총 50MiB인지 서비스 계층에서 검증한다. 실제 파일 시그니처도 검사한다. 각 이미지 상태를 집계해 배치 상태를 정한다.
+
+### ✅menu_image_items - AI 추출 후보
+
+| 논리명 | 물리명 | 제약사항 / 타입 | 설명 |
+| --- | --- | --- | --- |
+| 후보 ID | id | PK, BIGINT UNSIGNED | 추출 항목 식별자 |
+| 이미지 ID / 확정 메뉴 ID | menu_image_id / menu_id | FK → `menu_images.id`, NOT NULL / FK → `menus.id`, NULL | 원본 이미지와 저장 후 메뉴 연결 |
+| 검출 메뉴명/카테고리/가격 | detected_name / detected_category / detected_price | VARCHAR(100) NOT NULL / VARCHAR(50) NULL / BIGINT UNSIGNED NULL | AI 원본 후보; 불완전 값은 저장 전 보정 |
+| 순서 / 신뢰도 | sort_order / confidence | INT UNSIGNED NOT NULL / DECIMAL(5,4) NULL | 전체 목록 순서, 신뢰도 0~1 |
+| 가격 확인 필요 | price_review_required | BOOLEAN NOT NULL DEFAULT FALSE | 낮은 신뢰도·이상 가격의 행 강조 |
+| 검토 상태 / 시각 | status / reviewed_at | VARCHAR(20) NOT NULL / DATETIME NULL | PENDING/CONFIRMED/REJECTED; 저장 전 PENDING |
+| 생성 시각 | created_at | DATETIME, NOT NULL | 추출 시각 |
+
+AI 원본 후보는 검토·재업로드 중에 `menus`를 변경하지 않는다. 동일한 이름·가격·카테고리 후보가 이미지 여러 장에 중복되면 응답에서 하나로 합치고 저장 트랜잭션에서 다시 검사한다. 확정 시 후보 상태·`menu_id` 연결·배치 `saved_at`·기존 메뉴 제거·신규 목록 저장·`menu_revision` 증가를 원자적으로 처리한다. 저장 실패 시 모두 롤백한다.
 
 ## 5. SOL · 솔루션
 
@@ -250,6 +303,7 @@ AI가 생성한 개별 솔루션 카드를 저장한다. 각 카드는 하나의
 | 솔루션 제목 | `title` | NOT NULL | VARCHAR(200) | 카드 제목 |
 | 솔루션 요약 | `summary_text` | NOT NULL | TEXT | 목록에 표시할 요약 |
 | 솔루션 상세 내용 | `detail_text` | NOT NULL | TEXT | 상세 화면 내용 |
+| 솔루션 근거 | `evidence_text` | NULL 허용 | TEXT | AI가 생성한 카드 근거 한 문장. 생성하지 못한 경우 NULL |
 | AI 생성 일시 | `generated_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | AI가 생성한 시각 |
 | 저장 일시 | `created_at` | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | DB 저장 시각 |
 | 표시 순서 | `rank_no` | NOT NULL, CHECK (`rank_no` > 0) | INT UNSIGNED | 묶음 안의 노출 순서 |
@@ -315,17 +369,16 @@ AI가 생성한 개별 솔루션 카드를 저장한다. 각 카드는 하나의
 | `id` | BIGINT UNSIGNED | PK, AUTO_INCREMENT | 업로드 ID |
 | `requested_by_user_id` | BIGINT UNSIGNED | FK → `users.id`, NOT NULL | 요청 사용자 |
 | `store_id` | BIGINT UNSIGNED | FK → `stores.id`, NOT NULL | 대상 매장 |
-| `period_start` | DATE | NOT NULL | 파일의 첫 매출일 |
-| `period_end` | DATE | NOT NULL | 데이터 기준 시트의 종료일 |
-| `source_type` | VARCHAR(30) | NOT NULL, DEFAULT `TOSS_POS` | 원본 파일 유형 |
+| `period_start` | DATE | NULL 허용 | 파일의 첫 매출일. 파싱 완료 전에는 NULL |
+| `period_end` | DATE | NULL 허용 | 데이터 기준 시트의 종료일. 파싱 완료 전에는 NULL |
 | `original_file_name` | VARCHAR(255) | NOT NULL | 원본 파일명 |
 | `storage_key` | VARCHAR(512) | NOT NULL, UNIQUE | 비공개 저장소 객체 키 |
 | `file_checksum` | CHAR(64) | NOT NULL | SHA-256 체크섬. 차단이 아닌 추적용 |
 | `status` | VARCHAR(20) | NOT NULL, DEFAULT `PENDING` | PENDING/PROCESSING/COMPLETED/FAILED |
 | `processing_phase` | VARCHAR(20) | NULL | VALIDATING/NORMALIZING/AGGREGATING/ANALYZING |
-| `total_row_count` | INT UNSIGNED | NOT NULL, DEFAULT 0 | 전체 데이터 행 수 |
-| `valid_row_count` | INT UNSIGNED | NOT NULL, DEFAULT 0 | 검증 통과 행 수 |
-| `invalid_row_count` | INT UNSIGNED | NOT NULL, DEFAULT 0 | 오류 행 수 |
+| `total_row_count` | BIGINT UNSIGNED | NOT NULL, DEFAULT 0 | 전체 데이터 행 수 |
+| `valid_row_count` | BIGINT UNSIGNED | NOT NULL, DEFAULT 0 | 검증 통과 행 수 |
+| `invalid_row_count` | BIGINT UNSIGNED | NOT NULL, DEFAULT 0 | 오류 행 수 |
 | `error_code` | VARCHAR(50) | NULL | 구조화된 실패 코드 |
 | `error_message` | TEXT | NULL | 사용자 안내용 실패 사유 |
 | `uploaded_at` | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 업로드 시각 |
@@ -333,7 +386,9 @@ AI가 생성한 개별 솔루션 카드를 저장한다. 각 카드는 하나의
 
 테이블 제약:
 
-- `CHECK(period_start <= period_end)`
+- `CHECK(status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'))`
+- `CHECK(processing_phase IS NULL OR processing_phase IN ('VALIDATING', 'NORMALIZING', 'AGGREGATING', 'ANALYZING'))`
+- `CHECK(period_start IS NULL OR period_end IS NULL OR period_start <= period_end)`
 - `CHECK(total_row_count = valid_row_count + invalid_row_count)`
 - `INDEX(store_id, uploaded_at)`, `INDEX(store_id, period_start, period_end)`, `INDEX(store_id, file_checksum)`
 - 동일 체크섬과 기간 중첩 업로드를 막는 UNIQUE 제약은 두지 않는다.
@@ -413,7 +468,7 @@ AI가 생성한 개별 솔루션 카드를 저장한다. 각 카드는 하나의
 
 ### ✅sales_daily_summaries - 일별 매출 요약
 
-화면 KPI와 일별 추이를 위한 매장·날짜 단위 집계다. 커버리지 내 매출 없는 날도 0원 행을 생성한다.
+화면 KPI·일별 추이와 랭킹 데이터 완전성 판정을 위한 매장·날짜 단위 집계다. 데이터 판정 범위에서는 매장·날짜별 행을 관리하며, 영업일 데이터 누락도 MISSING 상태의 행으로 기록한다. day_status로 COMPLETE(처리 완료, 매출 0원 포함), CLOSED(저장된 영업시간·휴무일 근거로 휴무 확인), MISSING(영업일 데이터 누락), UNKNOWN(상태를 판단할 신뢰 가능한 근거 없음)을 구분한다. 근거가 없는 기존 이력은 임의 판정하지 않고 UNKNOWN으로 둔다. 필요한 영업일에 MISSING/UNKNOWN이 있으면 해당 매장은 DATA_INCOMPLETE로 랭킹에서 제외한다.
 
 | 물리명 | 타입 | 제약사항 | 설명 |
 | --- | --- | --- | --- |
@@ -424,6 +479,7 @@ AI가 생성한 개별 솔루션 카드를 저장한다. 각 카드는 하나의
 | `menu_net_amount` | BIGINT | NOT NULL, DEFAULT 0 | MENU 항목 실판매금액 합계 |
 | `order_count` | INT UNSIGNED | NOT NULL, DEFAULT 0 | 유효 주문 수 |
 | `menu_quantity` | INT | NOT NULL, DEFAULT 0 | MENU 순수량 |
+| `day_status` | VARCHAR(20) | NOT NULL, DEFAULT 'UNKNOWN', CHECK (`day_status` IN ('COMPLETE', 'CLOSED', 'MISSING', 'UNKNOWN')) | COMPLETE=처리 완료(매출 0원 포함), CLOSED=확인된 휴무, MISSING=영업일 데이터 누락, UNKNOWN=판정 근거 부족. 필요한 영업일의 MISSING/UNKNOWN은 랭킹 참여 불가 |
 | `updated_at` | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP | 갱신 시각 |
 
 테이블 제약: `UNIQUE(store_id, sales_date)`.
@@ -506,7 +562,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | --- | --- | --- | --- |
 | id | BIGINT UNSIGNED | PK, NOT NULL, AUTO_INCREMENT | 분석 실행 ID |
 | based_on_upload_id | BIGINT UNSIGNED | FK → sales_uploads.id, NOT NULL | 기준 업로드 |
-| store_id | BIGINT UNSIGNED | FK → stores.id, NOT NULL | 분석 매장 |
+| store_id | BIGINT UNSIGNED | FK → `stores.id`, NOT NULL | 분석 매장 |
 | requested_by_user_id | BIGINT UNSIGNED | FK → users.id, NOT NULL | 요청 사용자 |
 | analysis_type | VARCHAR(30) | NOT NULL | SALES, REVIEW 등 분석 유형 |
 | period_start | DATE | NOT NULL | 분석 기간 시작일 |
@@ -539,16 +595,16 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 물리명 | 타입 | 제약사항 | 설명 |
 | --- | --- | --- | --- |
 | id | BIGINT UNSIGNED | PK, NOT NULL, AUTO_INCREMENT | 인사이트 ID |
-| store_id | BIGINT UNSIGNED | FK → stores.id, NOT NULL | 인사이트 대상 매장 |
+| store_id | BIGINT UNSIGNED | FK → `stores.id`, NOT NULL | 인사이트 대상 매장 |
 | sales_analysis_id | BIGINT UNSIGNED | FK → sales_analyses.id, NOT NULL, INDEX | 인사이트 생성 근거가 된 매출 분석 결과 |
 | target_month | DATE | NOT NULL | 인사이트를 노출하는 월의 첫째 날 |
-| insights | JSON | NOT NULL, JSON 배열 | 화면에 표시할 1~3개 인사이트 문구. 예: [“최근 화요일 매출이 3주 연속 감소하고 있어요.”, “오후 3~5시는 다른 시간대보다 매출이 낮아요.”] |
+| insights | JSON | NULL 허용, JSON 배열 | PENDING/GENERATING 상태에서는 NULL이며, COMPLETED 상태에서는 화면에 표시할 1~3개 인사이트 문구를 저장한다. |
 | status | VARCHAR(20) | NOT NULL, DEFAULT 'PENDING', CHECK (status IN ('PENDING', 'GENERATING', 'COMPLETED', 'FAILED')) | 인사이트 생성 상태 |
 | generated_at | DATETIME | NULL 허용 | 인사이트 생성 완료 시각 |
 | created_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 레코드 생성 시각 |
 | updated_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP, ON UPDATE CURRENT_TIMESTAMP | 상태·내용 수정 시각 |
 
-테이블 제약: UNIQUE(`store_id`, `target_month`)로 매장별 월 1건만 저장한다. INDEX(`sales_analysis_id`), INDEX(`store_id`, `target_month`, `status`). `insights`는 JSON 배열만 저장하며, 서비스 계층에서 배열 길이 1~3개·각 항목의 비어 있지 않은 문자열 여부를 검증한다.
+테이블 제약: UNIQUE(`store_id`, `target_month`)로 매장별 월 1건만 저장한다. INDEX(`sales_analysis_id`), INDEX(`store_id`, `target_month`, `status`). `insights`는 NULL 또는 JSON 배열로 저장한다. `status='COMPLETED'`일 때 서비스 계층에서 배열 길이 1~3개와 각 항목이 비어 있지 않은 문자열인지 검증한다.
 
 ### ✅analysis_metrics - 분석 지표
 
@@ -575,7 +631,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | --- | --- | --- | --- |
 | id | BIGINT UNSIGNED | PK, NOT NULL, AUTO_INCREMENT | 결과 ID |
 | sales_analysis_id | BIGINT UNSIGNED | FK → sales_analyses.id, NOT NULL | 상위 매출 분석 |
-| menu_id | BIGINT UNSIGNED | FK → menus.id, NULL 허용 | 현재 메뉴 연결. 삭제·미매칭된 메뉴의 과거 분석도 보존할 수 있어 NULL을 허용한다. |
+| menu_id | BIGINT UNSIGNED | FK → `menus.id`, NULL 허용 | 현재 메뉴 연결. 삭제·미매칭된 메뉴의 과거 분석도 보존할 수 있어 NULL을 허용한다. |
 | menu_name_snapshot | VARCHAR(100) | NOT NULL | 분석 당시 메뉴명 |
 | sales_amount | BIGINT UNSIGNED | NOT NULL, CHECK (sales_amount >= 0) | 메뉴 매출액(원) |
 | sales_quantity | INT UNSIGNED | NOT NULL, CHECK (sales_quantity >= 0) | 판매 수량 |
@@ -609,7 +665,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
 | --- | --- | --- | --- | --- |
 | 비용 항목 ID | id | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 비용 항목 식별자 |
-| 매장 ID | store_id | FK → stores.id, NOT NULL | BIGINT UNSIGNED | 비용이 적용되는 매장 |
+| 매장 ID | store_id | FK → `stores.id`, NOT NULL | BIGINT UNSIGNED | 비용이 적용되는 매장 |
 | 비용 기준 월 | cost_month | NOT NULL | DATE | 비용 적용 월. 해당 월의 첫째 날로 저장 |
 | 임대료 | rent_amount | NOT NULL, DEFAULT 0 | BIGINT UNSIGNED | 월 임대료(원) |
 | 인건비 | labor_amount | NOT NULL, DEFAULT 0 | BIGINT UNSIGNED | 월 인건비(원) |
@@ -619,6 +675,12 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 
 테이블 제약: UNIQUE(store_id, cost_month), CHECK(ingredient_cost_rate BETWEEN 0 AND 1).
 
+월별 비용 입력은 선택 사항이다. 사용자가 건너뛰면 해당 매장·월의 행을 만들지 않는다. 행이 없는 상태는 임대료·인건비·원가율을 0으로 입력해 저장한 상태와 다르다. 저장을 선택하면 세 값을 모두 입력한 한 행을 저장한다.
+
+최초 입력은 입력일이 속한 월(Asia/Seoul 기준)에 저장한다. 매출 파일 업로드가 완료되면 파일에 포함된 매출 발생 월마다 기존 비용 행을 확인한다. 행이 없고 그 월보다 이전에 저장된 비용이 있으면 가장 최근 이전 월의 세 값을 새 월 행으로 복사한다. 이미 존재하는 월의 값은 덮어쓰지 않는다. 이전 비용이 전혀 없으면 행을 만들지 않으며 매출 업로드는 계속 처리한다. 여러 매출 월이 있으면 오래된 월부터 처리한다.
+
+달별로 저장된 값을 선택해 서로 다르게 수정하는 화면은 후속 기능이다. 위 동작에는 새 테이블이나 컬럼이 필요하지 않다.
+
 ### ✅reviews - 리뷰
 
 네이버에서 크롤링한 원본 리뷰를 저장한다. 리뷰 분석 결과는 review_analyses에 저장하며, 이 테이블은 화면의 관련 리뷰 조회와 재분석의 원본 데이터로 사용한다.
@@ -626,7 +688,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
 | --- | --- | --- | --- | --- |
 | 리뷰 ID | id | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 리뷰 식별자 |
-| 매장 ID | store_id | FK → stores.id, NOT NULL | BIGINT UNSIGNED | 리뷰 대상 매장 |
+| 매장 ID | store_id | FK → `stores.id`, NOT NULL | BIGINT UNSIGNED | 리뷰 대상 매장 |
 | 외부 리뷰 ID | external_review_id | NOT NULL | VARCHAR(100) | 네이버에서 제공하는 리뷰 고유 식별값 |
 | 별점 | rating | NULL 허용, CHECK(rating BETWEEN 0 AND 5) | DECIMAL(3,2) | 네이버 별점. 별점이 없는 경우 NULL |
 | 리뷰 본문 | content | NULL 허용 | TEXT | 크롤링한 리뷰 원문 |
@@ -669,7 +731,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
 | --- | --- | --- | --- | --- |
 | 랭킹 프로필 ID | id | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 랭킹 프로필 식별자 |
-| 매장 ID | store_id | FK → stores.id, NOT NULL | BIGINT UNSIGNED | 랭킹 대상 매장 |
+| 매장 ID | store_id | FK → `stores.id`, NOT NULL | BIGINT UNSIGNED | 랭킹 대상 매장 |
 | 익명 닉네임 | anonymous_nickname | NOT NULL | VARCHAR(50) | 외부 랭킹에 표시할 익명 닉네임 |
 | 생성 일시 | created_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 랭킹 프로필 생성 시각 |
 
@@ -680,7 +742,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 
 ### ✅ranking_snapshots - 랭킹 집계
 
-비교 기간별 랭킹 집계 실행 정보를 저장한다.
+기간 조합별 랭킹 집계와 `revision_no`(기간별 1부터 증가)를 보존한다. 재계산 중에는 이전 완료 결과를 유지하고, 새 revision이 COMPLETED된 뒤 최신 완료 결과를 공개한다.
 
 | 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
 | --- | --- | --- | --- | --- |
@@ -689,13 +751,15 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 선정 기간 종료일 | period_end | NOT NULL | DATE | 랭킹 산정 대상 기간 종료일 |
 | 비교 기간 시작일 | comparison_start | NOT NULL | DATE | 성장률 비교 기준 기간 시작일 |
 | 비교 기간 종료일 | comparison_end | NOT NULL | DATE | 성장률 비교 기준 기간 종료일 |
+| 집계 버전 | revision_no | NOT NULL, DEFAULT 1 | INT UNSIGNED | 같은 기간의 랭킹을 다시 계산할 때 증가하는 번호 |
 | 집계 완료 일시 | calculated_at | NULL 허용 | DATETIME | 랭킹 집계가 완료된 시각 |
 | 집계 상태 | status | NOT NULL, DEFAULT 'PENDING' | VARCHAR(20) | 랭킹 집계 처리 상태 |
 | 생성 일시 | created_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 집계 요청 레코드가 생성된 시각 |
 
 테이블 제약:
 
-- UNIQUE(period_start, period_end, comparison_start, comparison_end)
+- UNIQUE(period_start, period_end, comparison_start, comparison_end, revision_no)
+- CHECK(revision_no > 0)
 - CHECK(period_start <= period_end)
 - CHECK(comparison_start <= comparison_end)
 - CHECK(status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'))
@@ -710,7 +774,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 랭킹 집계 ID | ranking_snapshot_id | FK → ranking_snapshots.id, NOT NULL | BIGINT UNSIGNED | 상위 랭킹 집계 |
 | 랭킹 프로필 ID | ranking_profile_id | FK → ranking_profiles.id, NOT NULL | BIGINT UNSIGNED | 랭킹 대상 프로필 |
 | 순위 | rank_no | NOT NULL | INT UNSIGNED | 집계 내 순위. 공동 순위 허용 |
-| 성장률 | growth_rate | NOT NULL | DECIMAL(10,4) | 매출 성장률(%). 음수 가능 |
+| 성장률 | growth_rate | NOT NULL | DECIMAL(10,4) | 성장률 퍼센트 숫자값(예: 28.45는 28.45%). 음수 가능. 순위는 반올림 전 값을 사용하고 API 응답은 소수 첫째 자리로 반올림한다. |
 | 선정 기간 매출 | selected_period_sales | NOT NULL | BIGINT UNSIGNED | 선정 기간 총매출(원) |
 | 비교 기간 매출 | comparison_period_sales | NOT NULL | BIGINT UNSIGNED | 비교 기간 총매출(원) |
 | 생성 일시 | created_at | NOT NULL, DEFAULT CURRENT_TIMESTAMP | DATETIME | 랭킹 결과가 저장된 시각 |
@@ -727,15 +791,17 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 
 ### ✅notifications - 알림
 
-사용자에게 발송되는 분석 완료·랭킹 변동 알림과 읽음 상태를 저장한다.
+사용자에게 발송되는 분석 완료·랭킹 변동 알림과 읽음 상태를 저장한다. 기존 notification_key와 (user_id, notification_type, notification_key) UNIQUE 제약을 랭킹 알림의 기준일별 멱등 키로 사용한다.
 
 | 논리명 | 물리명 | 제약사항 | 타입 | 부가 설명 |
 | --- | --- | --- | --- | --- |
 | 알림 ID | `id` | PK, NOT NULL, AUTO_INCREMENT | BIGINT UNSIGNED | 알림 식별자 |
 | 사용자 ID | `user_id` | FK → `users.id`, NOT NULL | BIGINT UNSIGNED | 알림 수신 사용자 식별자 |
-| 알림 유형 | `notification_type` | NOT NULL | VARCHAR(50) | 예: `SOLUTION`, `RANKING_CHANGE` |
+| 알림 유형 | `notification_type` | NOT NULL | VARCHAR(50) | V1: `SOLUTION_READY`, `SALES_UPLOAD_REMINDER` / V2: `RANKING_CHANGED` |
 | 제목 | `title` | NOT NULL | VARCHAR(255) | 알림 제목 |
 | 내용 | `content` | NOT NULL | TEXT | 알림 본문 |
+| 연결 대상 유형 | `related_entity_type` | NULL 허용 | VARCHAR(50) | 알림 클릭 시 이동할 대상 유형. 연결 대상이 없으면 NULL |
+| 연결 대상 ID | `related_entity_id` | NULL 허용 | BIGINT UNSIGNED | 알림 클릭 시 이동할 대상 식별자. 연결 대상이 없으면 NULL |
 | 예약 발송 일시 | `scheduled_at` | NULL 허용 | DATETIME | 예약된 알림 발송 시각 |
 | 발송 일시 | `sent_at` | NULL 허용 | DATETIME | 실제 알림 발송 시각 |
 | 읽음 일시 | `read_at` | NULL 허용 | DATETIME | 사용자가 알림을 읽은 시각 |
@@ -759,7 +825,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 
 - 사용자 1명은 여러 세션, 인증 토큰, 알림을 가질 수 있다.
 - 사용자와 매장은 MVP에서 1:1이다. owner_user_id의 UNIQUE가 이를 보장한다.
-- 매장 1곳은 여러 메뉴, 업로드, 주문, 분석, 솔루션을 가진다.
+- 매장 1곳은 여러 메뉴, 메뉴 업로드 배치, 매출 업로드, 주문, 분석, 솔루션을 가진다. 메뉴 배치 1건은 이미지 1~10장과 여러 AI 후보를 가지며, 확정 전 후보는 저장 메뉴와 분리한다.
 - 업로드 1건은 여러 주문을, 주문 1건은 완료·취소를 포함한 여러 주문 항목을 가진다.
 - 주문은 `(store_id, channel, pos_order_no, ordered_at)`으로 식별하고, 기간 중첩 재업로드는 새 커버리지의 기존 주문 항목을 교체한다.
 - 매장별 메뉴 카테고리는 `store_menu_categories`에서 관리하며 일별·시간대별·카테고리별·메뉴별 집계를 재계산한다.
@@ -771,7 +837,7 @@ MENU 항목을 정규화된 메뉴 키별로 집계한다.
 | 도메인 | 요구사항 ID | ERD 반영 |
 | --- | --- | --- |
 | AUTH | BR-AUTH-05, BR-AUTH-21, BR-AUTH-25 | users, user_sessions, password_reset_tokens |
-| STORE | BR-STORE-05 ~ 08 | stores, store_business_hours, store_holidays, menus, menu_images, menu_image_items |
+| STORE | BR-STORE-05 ~ 08 | stores, store_business_hours, store_holidays, menus, menu_upload_batches, menu_write_requests, menu_images, menu_image_items |
 | SOL | BR-SOL-03 ~ 16 | solutions, saved_solutions |
 | SALES | BR-SALES-04, BR-SALES-07 ~ 16 | sales_uploads, sales_orders, sales_order_items, store_menu_categories, sales_daily_summaries, sales_hourly_summaries, sales_daily_category_summaries, sales_daily_menu_summaries, sales_forecasts, analysis_runs, sales_analyses, sales_ai_insights, analysis_metrics, menu_analysis_results, review_analyses |
 | RANK | BR-RANK-05 ~ 10 | ranking_profiles, ranking_snapshots, ranking_entries |
@@ -860,8 +926,8 @@ CREATE TABLE password_reset_tokens (
 CREATE TABLE stores (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   owner_user_id BIGINT UNSIGNED NOT NULL,
-  business_registration_no CHAR(10) NOT NULL,
-  business_verified_at DATETIME NOT NULL,
+  business_registration_no CHAR(10) NULL,
+  business_verified_at DATETIME NULL,
   name VARCHAR(100) NOT NULL,
   postal_code CHAR(5) NOT NULL,
   address VARCHAR(255) NOT NULL,
@@ -869,6 +935,7 @@ CREATE TABLE stores (
   latitude DECIMAL(10,7) NOT NULL,
   longitude DECIMAL(10,7) NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  menu_revision BIGINT UNSIGNED NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -914,27 +981,79 @@ CREATE TABLE menus (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   store_id BIGINT UNSIGNED NOT NULL,
   name VARCHAR(100) NOT NULL,
+  normalized_name VARCHAR(100) NOT NULL,
   category VARCHAR(50) NOT NULL,
   price BIGINT UNSIGNED NOT NULL,
+  sort_order INT UNSIGNED NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  removed_at DATETIME NULL,
+  active_normalized_name VARCHAR(100) GENERATED ALWAYS AS
+    (CASE WHEN removed_at IS NULL THEN normalized_name ELSE NULL END) STORED,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uk_menu_store_name (store_id, name),
+  UNIQUE KEY uk_menus_active_tuple (store_id, active_normalized_name, price, category),
+  KEY idx_menus_store_current_order (store_id, removed_at, sort_order, id),
   CONSTRAINT fk_menu_store FOREIGN KEY (store_id) REFERENCES stores(id),
-  CONSTRAINT ck_menu_status CHECK (status IN ('ACTIVE','INACTIVE','SOLD_OUT'))
+  CONSTRAINT ck_menu_price CHECK (price <= 1000000),
+  CONSTRAINT ck_menu_status CHECK (status IN ('ACTIVE','INACTIVE','SOLD_OUT')),
+  CONSTRAINT ck_menu_category CHECK (category IN ('COFFEE','NON_COFFEE','BEVERAGE','CAKE','BAKERY','OTHER'))
+) ENGINE=InnoDB;
+
+CREATE TABLE menu_upload_batches (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  store_id BIGINT UNSIGNED NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  fail_reason VARCHAR(50) NULL,
+  base_menu_revision BIGINT UNSIGNED NOT NULL,
+  idempotency_key_hash CHAR(64) NOT NULL,
+  request_hash CHAR(64) NOT NULL,
+  uploaded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  saved_at DATETIME NULL,
+  superseded_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_menu_batch_store_idempotency (store_id, idempotency_key_hash),
+  UNIQUE KEY uk_menu_batch_id_store (id, store_id),
+  KEY idx_menu_batch_latest (store_id, uploaded_at, id),
+  CONSTRAINT fk_menu_batch_store FOREIGN KEY (store_id) REFERENCES stores(id),
+  CONSTRAINT ck_menu_batch_status CHECK (status IN ('PENDING','PROCESSING','COMPLETED','FAILED'))
+) ENGINE=InnoDB;
+
+CREATE TABLE menu_write_requests (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  store_id BIGINT UNSIGNED NOT NULL,
+  operation VARCHAR(20) NOT NULL,
+  key_hash CHAR(64) NOT NULL,
+  request_hash CHAR(64) NOT NULL,
+  response_json JSON NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_menu_write_store_operation_key (store_id, operation, key_hash),
+  KEY idx_menu_write_created (created_at),
+  CONSTRAINT fk_menu_write_store FOREIGN KEY (store_id) REFERENCES stores(id),
+  CONSTRAINT ck_menu_write_operation CHECK (operation IN ('MENU_PATCH','MENU_CONFIRM'))
 ) ENGINE=InnoDB;
 
 CREATE TABLE menu_images (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  batch_id BIGINT UNSIGNED NOT NULL,
   store_id BIGINT UNSIGNED NOT NULL,
-  image_url VARCHAR(2048) NOT NULL,
+  image_order TINYINT UNSIGNED NOT NULL,
+  storage_key VARCHAR(512) NOT NULL,
+  file_size_bytes BIGINT UNSIGNED NOT NULL,
+  mime_type VARCHAR(30) NOT NULL,
   ocr_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
   ocr_result JSON NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_menu_images_store (store_id),
-  CONSTRAINT fk_menu_image_store FOREIGN KEY (store_id) REFERENCES stores(id),
+  UNIQUE KEY uk_menu_image_batch_order (batch_id, image_order),
+  UNIQUE KEY uk_menu_image_storage_key (storage_key),
+  CONSTRAINT fk_menu_image_batch_store FOREIGN KEY (batch_id, store_id)
+    REFERENCES menu_upload_batches(id, store_id),
+  CONSTRAINT ck_menu_image_order CHECK (image_order BETWEEN 1 AND 10),
+  CONSTRAINT ck_menu_image_size CHECK (file_size_bytes <= 5242880),
+  CONSTRAINT ck_menu_image_mime CHECK (mime_type IN ('image/jpeg','image/png')),
   CONSTRAINT ck_menu_image_ocr_status CHECK (ocr_status IN ('PENDING','PROCESSING','COMPLETED','FAILED'))
 ) ENGINE=InnoDB;
 
@@ -945,7 +1064,9 @@ CREATE TABLE menu_image_items (
   detected_name VARCHAR(100) NOT NULL,
   detected_category VARCHAR(50) NULL,
   detected_price BIGINT UNSIGNED NULL,
+  sort_order INT UNSIGNED NOT NULL,
   confidence DECIMAL(5,4) NULL,
+  price_review_required BOOLEAN NOT NULL DEFAULT FALSE,
   status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
   reviewed_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -954,7 +1075,7 @@ CREATE TABLE menu_image_items (
   KEY idx_menu_image_items_menu (menu_id),
   CONSTRAINT fk_menu_image_item_image FOREIGN KEY (menu_image_id) REFERENCES menu_images(id),
   CONSTRAINT fk_menu_image_item_menu FOREIGN KEY (menu_id) REFERENCES menus(id),
-  CONSTRAINT ck_menu_image_item_price CHECK (detected_price IS NULL OR detected_price >= 0),
+  CONSTRAINT ck_menu_image_item_price CHECK (detected_price IS NULL OR detected_price <= 1000000),
   CONSTRAINT ck_menu_image_item_confidence CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 1),
   CONSTRAINT ck_menu_image_item_status CHECK (status IN ('PENDING','CONFIRMED','REJECTED')),
   CONSTRAINT ck_menu_image_item_confirmed_menu CHECK (status <> 'CONFIRMED' OR menu_id IS NOT NULL)
@@ -1324,6 +1445,7 @@ CREATE TABLE solutions (
   title VARCHAR(200) NOT NULL,
   summary_text TEXT NOT NULL,
   detail_text TEXT NOT NULL,
+  evidence_text TEXT NULL,
   generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   rank_no INT UNSIGNED NOT NULL,
@@ -1383,11 +1505,13 @@ CREATE TABLE ranking_snapshots (
   period_end DATE NOT NULL,
   comparison_start DATE NOT NULL,
   comparison_end DATE NOT NULL,
+  revision_no INT UNSIGNED NOT NULL DEFAULT 1,
   calculated_at DATETIME NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uk_ranking_snapshot_periods (period_start, period_end, comparison_start, comparison_end),
+  UNIQUE KEY uk_ranking_snapshot_period_revision (period_start, period_end, comparison_start, comparison_end, revision_no),
+  CONSTRAINT ck_ranking_revision CHECK (revision_no > 0),
   CONSTRAINT ck_ranking_period CHECK (period_start <= period_end),
   CONSTRAINT ck_ranking_comparison_period CHECK (comparison_start <= comparison_end),
   CONSTRAINT ck_ranking_snapshot_status CHECK (status IN ('PENDING','PROCESSING','COMPLETED','FAILED'))
@@ -1414,6 +1538,7 @@ CREATE TABLE notifications (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id BIGINT UNSIGNED NOT NULL,
   notification_type VARCHAR(50) NOT NULL,
+  notification_key VARCHAR(100) NOT NULL,
   title VARCHAR(255) NOT NULL,
   content TEXT NOT NULL,
   scheduled_at DATETIME NULL,
@@ -1421,6 +1546,7 @@ CREATE TABLE notifications (
   read_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
+  UNIQUE KEY uk_notifications_user_type_key (user_id, notification_type, notification_key),
   KEY idx_notifications_user_read_created (user_id, read_at, created_at),
   CONSTRAINT fk_notification_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
