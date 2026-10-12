@@ -34,6 +34,7 @@ class ProfitPeriod(Contract):
     startDate: str
     endDate: str
 
+
 class ProfitSummary(Contract):
     totalNetAmount: int
     ingredientCost: int
@@ -43,19 +44,23 @@ class ProfitSummary(Contract):
     previousNetProfit: int | None = None
     netProfitChangeRate: float | None = None
 
+
 class DailyProfitPoint(Contract):
     date: str
     netProfit: int
+
 
 class ProfitInsightRequest(Contract):
     storeId: int
     period: ProfitPeriod
     summary: ProfitSummary
-    dailyProfits: list[DailyProfitPoint]   # 계약상 필수
-    maxInsightCount: int                    # 계약상 필수 (BE는 항상 3을 보냄)
+    dailyProfits: list[DailyProfitPoint]  # 계약상 필수
+    maxInsightCount: int  # 계약상 필수 (BE는 항상 3을 보냄)
+
 
 class ProfitInsightData(Contract):
-    insights: list[str] = []   # INSUFFICIENT_DATA 때도 빈 배열(계약 예시와 일치)
+    insights: list[str] = []  # INSUFFICIENT_DATA 때도 빈 배열(계약 예시와 일치)
+
 
 class ProfitInsightResponse(Contract):
     status: Literal["COMPLETED", "INSUFFICIENT_DATA"]
@@ -77,6 +82,7 @@ MAX_CHARS = 100
 # v1 insight.py와 동일 근거: 합법적으로 가장 긴 응답이 100자×3+JSON ≈ 326자(≈400 토큰).
 MAX_TOKENS = 700
 
+
 def _insufficient(summary: ProfitSummary, daily: list[DailyProfitPoint]) -> bool:
     """BE가 COST_INPUT_REQUIRED/EMPTY를 걸러주지만, 그 게이트를 통과했는데도
     관찰할 재료가 없는 경우(전부 0원)를 AI 쪾에서 한 번 더 막는다 — v1 insight.py의
@@ -87,8 +93,10 @@ def _insufficient(summary: ProfitSummary, daily: list[DailyProfitPoint]) -> bool
         and all(d.netProfit == 0 for d in daily)
     )
 
+
 def _parse(raw: str, max_count: int) -> list[str] | None:
     """v1 insight.py._parse와 동일한 검증: JSON 파싱, 1~max_count개, 공백 아님, 100자 이하."""
+
 
 async def generate(req: ProfitInsightRequest) -> ProfitInsightResponse:
     if _insufficient(req.summary, req.dailyProfits):
@@ -108,7 +116,9 @@ async def generate(req: ProfitInsightRequest) -> ProfitInsightResponse:
             break
 
     if not insights:
-        raise ApiError(500, "PROFIT_INSIGHT_GENERATION_FAILED", "순이익 인사이트 생성에 실패했습니다.")
+        raise ApiError(
+            500, "PROFIT_INSIGHT_GENERATION_FAILED", "순이익 인사이트 생성에 실패했습니다."
+        )
 
     return ProfitInsightResponse(status="COMPLETED", data=ProfitInsightData(insights=insights))
 ```
@@ -138,6 +148,7 @@ VERSION = "2026-10-12".
 
 ```python
 router = APIRouter(prefix="/internal/v2/ai", dependencies=[Depends(verify_internal_token)])
+
 
 @router.post("/profit-insights", response_model=ProfitInsightResponse)
 async def generate_profit_insight(req: ProfitInsightRequest) -> ProfitInsightResponse:
