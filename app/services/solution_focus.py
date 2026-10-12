@@ -95,6 +95,33 @@ def _prediction_score(predicted: int | None, net_sales: int) -> float:
     return min(abs(predicted - net_sales) / net_sales * _PREDICTION_WEIGHT, 1.0)
 
 
+# 상권은 매장별로 상수다 — 카페 수가 날마다 바뀌지 않는다. 점수를 다른 축과 같은 범위에
+# 두면 그 매장에서 항상 뽑히거나 항상 탈락한다. 항상 뽑히면 같은 카드가 매일 나가고,
+# 항상 탈락하면 넣은 의미가 없다. 그래서 낮게 두고 "다른 축이 조용한 날" 에만 올라오게 한다.
+# 실측 참고값: hourlyProfile 0.857, categoryBreakdown 0.620, salesSummary 0.360.
+# **잠정값이다** — 실제로 어떤 카드가 나오는지 측정한 뒤 올리거나 뺀다.
+_DISTRICT_SCORE = 0.25
+
+
+def _district_focus(district: dict) -> dict | None:
+    """상권 근거. 모델에게 보여줄 것만 남긴다. 쓸 게 없으면 None.
+
+    `basisYm`·`queriedAt` 은 뺀다. 상권 API 응답에 기준월이 없어서 시점을 단정하면 틀리는데
+    (2026-10-12 승민님 확인), 날짜를 안 주면 "10월 기준" 을 쓸 수가 없다. 프롬프트 규칙을
+    늘리는 것보다 확실하다.
+
+    `foodBizCount` 가 없거나 0 이면 뺀다 — 분모가 없으면 "음식업소 중 카페 비중" 이
+    안 나온다. 0 으로 나누는 문장을 금지하는 것보다 숫자를 안 보여주는 쪽이 낫다.
+    """
+    if not district or district.get("cafeCount") is None:
+        return None
+    focus: dict = {"cafeCount": district["cafeCount"]}
+    food = district.get("foodBizCount")
+    if food:
+        focus["foodBizCount"] = food
+    return {"districtBenchmark": focus}
+
+
 def assign(metrics: dict) -> list[dict]:
     """카드별 근거 지표를 돌려준다. 앞에서부터 rankNo 1·2·3 에 대응한다.
 
@@ -104,13 +131,14 @@ def assign(metrics: dict) -> list[dict]:
     지표가 3 종이 안 되면 그만큼만 돌려준다. 없는 근거로 카드를 만들게 하느니 장수를
     줄이는 편이 낫다 — 서비스가 카드 2 장도 그대로 내보내는 것과 같은 판단이다.
 
-    지금은 축이 셋뿐이라 사실상 순서만 정해진다. V2 에서 순이익·날씨·상권이 들어와 축이
-    여섯이 되면 그때부터 "오늘 할 말이 있는 것만 고른다"가 실제로 작동한다.
+    2026-10-12: 상권(`districtBenchmark`)을 넷째 축으로 넣었다. 날씨·순이익이 들어오면
+    여섯이 되고, 그때부터 "오늘 할 말이 있는 것만 고른다"가 실제로 작동한다.
     """
     summary = metrics.get("salesSummary") or {}
     hourly = metrics.get("hourlyProfile") or []
     category = metrics.get("categoryBreakdown") or []
     predicted = metrics.get("predictedSalesToday")
+    district = _district_focus(metrics.get("districtBenchmark") or {})
 
     total_focus: dict = {"salesSummary": summary} if summary else {}
     if predicted is not None and total_focus:
@@ -129,6 +157,7 @@ def assign(metrics: dict) -> list[dict]:
             _category_score(category) if category else -1.0,
         ),
         (total_focus, total_score if total_focus else -1.0),
+        (district or {}, _DISTRICT_SCORE if district else -1.0),
     ]
     usable = [(focus, score) for focus, score in candidates if score >= 0.0]
     usable.sort(key=lambda pair: pair[1], reverse=True)

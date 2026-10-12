@@ -174,3 +174,81 @@ def test_선별이_계열별_최고_최저를_보존한다():
         kept = [p["amount"] for p in rows if p["dayType"] == day]
         assert max(kept) == max(full), f"{day} 최고가 빠졌다"
         assert min(kept) == min(full), f"{day} 최저가 빠졌다"
+
+
+# ── 상권 (districtBenchmark, 2026-10-12) ──────────────────────────────
+
+DISTRICT = {
+    "cafeCount": 12,
+    "foodBizCount": 28,
+    "basisYm": "2026-09",
+    "queriedAt": "2026-10-12T09:00:00",
+}
+
+QUIET = {
+    # 다른 축이 전부 조용한 날 — 격차 없음, 쏠림 없음, 비교 기간 없음
+    "salesSummary": {"netSales": 1183600, "vsPrevPeriod": None},
+    "hourlyProfile": [{"dayType": "WEEKDAY", "hour": h, "amount": 100000} for h in (9, 18)],
+    "categoryBreakdown": [{"name": "커피", "share": 0.34}, {"name": "디저트", "share": 0.33}],
+    "districtBenchmark": DISTRICT,
+}
+
+
+def test_상권은_다른_축이_활발하면_탈락한다():
+    """카페 수는 매장별로 상수라 점수가 날마다 안 변한다. 다른 축과 같은 범위에 두면
+    그 매장에서 항상 뽑히거나 항상 탈락한다 — 항상 뽑히면 같은 카드가 매일 나간다.
+    """
+    focus = assign({**METRICS, "districtBenchmark": DISTRICT})
+
+    assert not any("districtBenchmark" in item for item in focus)
+
+
+def test_상권은_다른_축이_조용하면_올라온다():
+    """점수를 낮게 둔 건 빼려는 게 아니라 "할 말 없는 날" 용으로 쓰려는 것이다."""
+    focus = assign(QUIET)
+
+    assert any("districtBenchmark" in item for item in focus)
+
+
+def test_기준월과_조회시각은_근거로_주지_않는다():
+    """상권 API 응답에 기준월이 없어서 시점을 단정하면 틀린다(2026-10-12 승민님 확인).
+
+    "시점을 쓰지 마세요" 를 프롬프트로 부탁하면 지켜지는 비율이 90% 대다 — 날짜를
+    안 주면 쓸 재료 자체가 없다. 지표를 빼는 쪽이 규칙을 늘리는 것보다 확실하다.
+    """
+    district = next(
+        item["districtBenchmark"] for item in assign(QUIET) if "districtBenchmark" in item
+    )
+
+    assert "basisYm" not in district
+    assert "queriedAt" not in district
+    assert set(district) == {"cafeCount", "foodBizCount"}
+
+
+def test_음식업소_수가_0이면_비중_재료를_주지_않는다():
+    """분모가 0 이면 "음식업소 중 카페 비중" 이 안 나온다. 0 으로 나누는 문장을
+    금지하는 것보다 숫자를 안 보여주는 쪽이 낫다.
+    """
+    metrics = {**QUIET, "districtBenchmark": {"cafeCount": 12, "foodBizCount": 0}}
+    district = next(
+        item["districtBenchmark"] for item in assign(metrics) if "districtBenchmark" in item
+    )
+
+    assert district == {"cafeCount": 12}
+
+
+def test_카페가_0곳이면_그것도_근거다():
+    """조회가 정상 완료되고 0 곳인 것과 조회 실패는 다르다 — 0 곳은 말할 수 있는 사실이다."""
+    metrics = {**QUIET, "districtBenchmark": {"cafeCount": 0, "foodBizCount": 28}}
+    district = next(
+        item["districtBenchmark"] for item in assign(metrics) if "districtBenchmark" in item
+    )
+
+    assert district["cafeCount"] == 0
+
+
+def test_상권_조회_실패는_축에서_빠진다():
+    """BE 가 districtBenchmark 전체를 생략하는 경우(카페 조회 실패·좌표 없음)."""
+    focus = assign({**QUIET, "districtBenchmark": None})
+
+    assert not any("districtBenchmark" in item for item in focus)

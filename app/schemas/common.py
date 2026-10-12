@@ -37,12 +37,33 @@ class CategoryPoint(Contract):
     vsPrevPeriod: float | None = None
 
 
+class DistrictBenchmark(Contract):
+    """반경 500m 상권 업소 수 (2026-10-12 승민님 제안 기준).
+
+    소상공인시장진흥공단 상가(상권)정보에는 매출이 없다 — 업소 수뿐이다. 그래서 "상권 평균
+    대비" 는 만들 수 없고, 현황 설명에만 쓴다. 우리 매장도 집계에 포함될 수 있어서
+    "경쟁 카페 수" 가 아니라 "반경 내 카페 수" 다.
+
+    basisYm·queriedAt 은 받아서 로그·추적에만 쓰고 **프롬프트에는 넘기지 않는다**
+    (app/services/solution_focus.py::_district_focus). 상권 API 응답에 기준월이 없어서
+    시점을 단정하면 틀리는데, "시점을 쓰지 마세요" 를 프롬프트로 부탁하면 지켜지는 비율이
+    90% 대다(실측: 공허한 조언 금지 88.9%, 금액 어림 금지 83%). 안 보여주는 쪽이 확실하다.
+    """
+
+    cafeCount: int
+    # 음식업 전체 조회만 실패하면 BE 가 생략한다. 0 이면 분모가 없어 비중을 못 만든다.
+    foodBizCount: int | None = None
+    basisYm: str | None = None
+    queriedAt: str | None = None
+
+
 class Metrics(Contract):
     salesSummary: SalesSummary
     hourlyProfile: list[HourlyPoint]
     categoryBreakdown: list[CategoryPoint]
     predictedSalesToday: int | None = None
     reviewSummary: dict | None = None
+    districtBenchmark: DistrictBenchmark | None = None
 
 
 # ── 인사이트 전용 지표 ──────────────────────────────────────────────
