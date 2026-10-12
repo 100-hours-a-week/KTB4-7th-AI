@@ -2,7 +2,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.api import chat, forecast, insights, solutions
+from app.api import chat, forecast, insights, profit_insights, solutions
 from app.core.config import missing_required, settings
 from app.core.errors import register_error_handlers
 from app.core.sentry import init_sentry
@@ -22,6 +22,7 @@ register_error_handlers(app)
 app.include_router(chat.router)
 app.include_router(forecast.router)
 app.include_router(insights.router)
+app.include_router(profit_insights.router)
 app.include_router(solutions.router)
 
 
