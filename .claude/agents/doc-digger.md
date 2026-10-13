@@ -47,9 +47,10 @@ print([m.start() for m in re.finditer('키워드', t, re.I)][:20])
 python3 -c "print(open('<파일>').read()[20000:33000])"
 ```
 
-주요 문서:
-- 팀 파이널 프로젝트: `3dcbdeb92c6680b1a8ced254c9661d89`
-- **API 정의서**: `3dcbdeb92c66804c8ff9f4c2dc9e48ee` (90,000자)
+주요 문서 (팀 노션 워크스페이스 — Notion 커넥터가 개인 워크스페이스로 연결돼 있으면
+`object_not_found`가 난다, 2026-10-13 확인):
+- **API 정의서**: `3d57f3fa-ed48-806b-b27f-d7f04ba53d5a` (10만 자 이상)
+- **ERD 정의서**: `3d07f3fa-ed48-807a-a1e0-efe32abd2283` (10만 자 이상)
 
 ## 보고 규칙
 
