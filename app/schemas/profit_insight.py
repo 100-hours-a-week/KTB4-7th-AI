@@ -37,5 +37,6 @@ class ProfitInsightData(Contract):
 
 
 class ProfitInsightResponse(Contract):
+    message: str
     status: Literal["COMPLETED", "INSUFFICIENT_DATA"]
     data: ProfitInsightData

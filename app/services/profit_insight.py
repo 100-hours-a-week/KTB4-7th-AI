@@ -42,7 +42,9 @@ def _highlights(days: list[DailyProfit]) -> dict:
 async def generate(req: ProfitInsightRequest) -> ProfitInsightResponse:
     if req.summary.totalNetAmount == 0:
         return ProfitInsightResponse(
-            status="INSUFFICIENT_DATA", data=ProfitInsightData(insights=[])
+            message="순이익 인사이트에 필요한 데이터가 부족합니다.",
+            status="INSUFFICIENT_DATA",
+            data=ProfitInsightData(insights=[]),
         )
 
     summary = req.summary.model_dump(exclude_none=True)
@@ -78,4 +80,8 @@ async def generate(req: ProfitInsightRequest) -> ProfitInsightResponse:
             500, "PROFIT_INSIGHT_GENERATION_FAILED", "순이익 인사이트 생성에 실패했습니다."
         )
 
-    return ProfitInsightResponse(status="COMPLETED", data=ProfitInsightData(insights=insights))
+    return ProfitInsightResponse(
+        message="순이익 인사이트를 생성했습니다.",
+        status="COMPLETED",
+        data=ProfitInsightData(insights=insights),
+    )

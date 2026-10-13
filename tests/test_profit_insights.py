@@ -51,14 +51,18 @@ def _fake(monkeypatch, raw: str, calls: list | None = None):
     monkeypatch.setattr(llm, "complete", fake_complete)
 
 
-async def test_정상_요청이_인사이트를_반환하고_message_는_없다(monkeypatch):
+async def test_정상_요청이_인사이트와_message를_반환한다(monkeypatch):
     _fake(monkeypatch, LLM_SUCCESS)
 
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
     expected = json.loads(LLM_SUCCESS)
-    assert res.json() == {"status": "COMPLETED", "data": expected}
+    assert res.json() == {
+        "message": "순이익 인사이트를 생성했습니다.",
+        "status": "COMPLETED",
+        "data": expected,
+    }
 
 
 async def test_필수_필드가_없으면_422():
@@ -141,7 +145,11 @@ async def test_매출이_0원이면_LLM을_부르지_않고_INSUFFICIENT_DATA(mo
     res = await _post(body)
 
     assert res.status_code == 200
-    assert res.json() == {"status": "INSUFFICIENT_DATA", "data": {"insights": []}}
+    assert res.json() == {
+        "message": "순이익 인사이트에 필요한 데이터가 부족합니다.",
+        "status": "INSUFFICIENT_DATA",
+        "data": {"insights": []},
+    }
     assert calls == []
 
 
