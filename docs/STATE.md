@@ -1108,7 +1108,7 @@ B(멀티턴 교정)·C(위반 카드만 부분 재생성)도 비교했으나(비
 
 PR #151에 BE에게 확인받을 것으로 남겨둔 두 질문에 답이 왔고, 그중 하나가 전날 결정을 뒤집었다.
 
-- **`message` 필드 — 있는 것으로 확정, 반영 완료(`223a81e`).** BE 가 "v1 과 동일하게
+- **`message` 필드 — 있는 것으로 확정, 반영 완료(`8e43b11`).** BE 가 "v1 과 동일하게
   `message` 를 포함하기로 하겠다"고 답했고, 같은 날 노션 API 정의서 SALES-06 도 갱신돼
   `COMPLETED`/`INSUFFICIENT_DATA` 모두 `message` 가 비어 있지 않은 문자열로 필수임이
   확인됐다(`notion-contract` 스킬로 원문 재확인). `ProfitInsightResponse` 에 `message: str`
@@ -1120,6 +1120,35 @@ PR #151에 BE에게 확인받을 것으로 남겨둔 두 질문에 답이 왔고
   빈 배열 허용, v1 DTO는 그대로 둠). AI 코드는 이미 계약대로였다.
 - PR #151 본문의 "BE에 확인할 것" 절을 "→ 확인 완료"로 교체해 두 답변을 적어뒀다.
 - `uv run pytest` 298 passed, ruff 통과 재확인.
+
+### BE 리뷰 반영 — 요청 검증 3건 (`9b5b902`)
+
+BE 가 PR #151 을 리뷰하며 실제 연동에서 터지는 버그 3개를 짚었다. 전부 "정상적인 BE 요청인데
+AI 가 거절하거나 500 을 낸다"는 종류라 먼저 고쳤다.
+
+- **`netProfitRate` 가 `float` 필수였다.** BE 는 `totalNetAmount == 0`(0으로 나눌 수 없음)이면
+  `netProfitRate: null` 을 보내는데, 스키마가 필수라 422 로 막혀 의도한 `INSUFFICIENT_DATA`
+  까지 못 갔다. `float | None` 으로 변경.
+- **날짜를 `str` 로 받아 서비스에서 `date.fromisoformat()` 을 호출했다.** 잘못된 날짜가
+  그대로 들어오면 422 가 아니라 500 으로 샜다(검증이 스키마가 아니라 서비스 내부에 있었음).
+  `Period.startDate/endDate`, `DailyProfit.date` 를 `datetime.date` 타입으로 바꿔 파싱
+  단계에서 422 로 거절되게 했다.
+- **`maxInsightCount` 에 범위 제한이 없었다.** 0 이나 4 이상도 받았다. `Field(ge=1, le=3)` 로
+  계약대로 제한.
+- 테스트 3개 추가(매출 0원+`netProfitRate` null, 잘못된 날짜, 범위 밖 `maxInsightCount`).
+  `uv run pytest` 301 passed, ruff 통과.
+
+### 커밋·PR 본문의 Claude 생성 표시 정리
+
+- PR #151 본문에 "🤖 Generated with Claude Code" 배너가 들어가 있었다(집 PC 세션이 PR
+  생성 시 붙인 것, 이 세션이 이어서 본문을 두 번 더 고치면서도 못 보고 지나쳤다) — 지웠다.
+- 이 세션이 이날 만든 커밋 4개(스펙 문서, message 필드, STATE 갱신, BE 리뷰 반영)에
+  `Co-Authored-By: Claude Sonnet 5 ...` 트레일러가 붙어 있었다. **`CLAUDE.md` 에 이미
+  "커밋에 이 트레일러를 넣지 않는다"는 규칙이 2026-10-12 부터 있었는데도 지켜지지 않았다**
+  — 세션 시작 때 한 번 읽고 그 뒤로는 기본 커밋 템플릿을 그대로 썼기 때문. `git filter-branch`
+  로 해당 구간 7개 커밋 메시지에서 트레일러만 제거하고(트리는 완전히 동일, 해시만 바뀜)
+  force-push 했다. `CLAUDE.md` 규칙을 PR 본문까지 범위를 넓혀 다시 적어뒀다 — 세션 시작 때
+  뿐 아니라 커밋·PR 작성 직전에도 다시 확인하라는 문구를 추가했다.
 
 ## 2026-10-07~08 — 로컬 LLM 재평가 및 GPU/운영 재검토
 
