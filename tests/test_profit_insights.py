@@ -153,6 +153,40 @@ async def test_매출이_0원이면_LLM을_부르지_않고_INSUFFICIENT_DATA(mo
     assert calls == []
 
 
+async def test_매출_0원에_순이익률_null_이어도_422가_아니고_INSUFFICIENT_DATA(monkeypatch):
+    """BE 는 totalNetAmount == 0 이면 0 으로 나눌 수 없어 netProfitRate 를 null 로 보낸다."""
+    calls: list = []
+    _fake(monkeypatch, LLM_SUCCESS, calls)
+    body = json.loads(json.dumps(REQUEST_BODY))
+    body["summary"].update(
+        totalNetAmount=0, ingredientCost=0, netProfit=-400000, netProfitRate=None
+    )
+    for day in body["dailyProfits"]:
+        day["netProfit"] = 0
+
+    res = await _post(body)
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "INSUFFICIENT_DATA"
+    assert calls == []
+
+
+async def test_잘못된_날짜_형식은_500이_아니라_422(monkeypatch):
+    _fake(monkeypatch, LLM_SUCCESS)
+    body = json.loads(json.dumps(REQUEST_BODY))
+    body["dailyProfits"][0]["date"] = "2026-13-40"
+
+    assert (await _post(body)).status_code == 422
+
+
+async def test_maxInsightCount가_1_3_범위_밖이면_422():
+    for value in (0, 4):
+        body = json.loads(json.dumps(REQUEST_BODY))
+        body["maxInsightCount"] = value
+        res = await _post(body)
+        assert res.status_code == 422, value
+
+
 async def test_전기와의_차액을_코드가_계산해_프롬프트에_넣는다(monkeypatch):
     calls: list = []
     _fake(monkeypatch, LLM_SUCCESS, calls)

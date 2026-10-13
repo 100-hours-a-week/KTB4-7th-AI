@@ -4,8 +4,6 @@ BE 가 COST_INPUT_REQUIRED·EMPTY 를 걸러서 호출하지만, 통과하고도
 남아 그때는 LLM 을 부르지 않고 INSUFFICIENT_DATA 를 돌려준다. 파싱이 실패하면 1회만 재시도한다.
 """
 
-from datetime import date
-
 from app.clients import llm
 from app.core.config import settings
 from app.core.errors import ApiError
@@ -23,8 +21,8 @@ _WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "�
 
 def _day(item: DailyProfit) -> dict:
     return {
-        "date": item.date,
-        "dayOfWeek": _WEEKDAYS[date.fromisoformat(item.date).weekday()],
+        "date": item.date.isoformat(),
+        "dayOfWeek": _WEEKDAYS[item.date.weekday()],
         "netProfit": item.netProfit,
     }
 
