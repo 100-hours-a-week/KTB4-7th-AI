@@ -1,0 +1,106 @@
+[
+  {
+    "sourceImageId": 1,
+    "name": "라떼 Latte (hot/ice)",
+    "category": "COFFEE",
+    "price": 5500,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "TEA",
+    "category": "OTHER",
+    "price": 7900,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "카페오레 cafe ore (only ice)",
+    "category": "COFFEE",
+    "price": 5500,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "백도우롱 (hot/ice)",
+    "category": "TEA",
+    "price": 7900,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "카페오테 cafe lait the (hot/ice)",
+    "category": "COFFEE",
+    "price": 6500,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "카시스 블루베리 (hot/ice)",
+    "category": "BEVERAGE",
+    "price": 7900,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "카다멈라떼 cardamom (hot/ice)",
+    "category": "COFFEE",
+    "price": 6500,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "코코아 Cocoa (hot/ice)",
+    "category": "BEVERAGE",
+    "price": 6500,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "딸기우유 (only ice)",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "진저 바닐라 레몬티 (hot/ice)",
+    "category": "TEA",
+    "price": 5500,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "탄산을 더한 상큼한 에이드",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "광양매실로 담근 매실청에 탄산수를 넣은 에이드",
+    "category": "BEVERAGE",
+    "price": 5700,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  },
+  {
+    "sourceImageId": 1,
+    "name": "매실차 Green Plum tea",
+    "category": "TEA",
+    "price": 5500,
+    "confidence": 0.95,
+    "priceReviewRequired": false
+  }
+]

@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     upstage_api_key: str = ""
 
+    # 네이버 클로바 OCR(메뉴판 인식용) — LLM_PROVIDER 와 무관하게 항상 고정이다.
+    # Invoke URL 은 NCP 콘솔에서 도메인 생성 시 발급되는 고유 주소(.apigw.ntruss.com/...)다.
+    clova_ocr_secret_key: str = ""
+    clova_ocr_invoke_url: str = ""
+
     # OpenAI 호환 서버를 가리킬 때만 채운다(vLLM 등). 비어 있으면 OpenAI 공식 엔드포인트다.
     # 로컬 LLM 검증용이다 — RunPod 등에 띄운 vLLM 의 /v1 주소를 넣는다(이슈 #113).
     llm_base_url: str | None = None
@@ -64,6 +69,10 @@ class Settings(BaseSettings):
     # 위키 단계2: 툴 6종은 사전 집계 테이블 조회이므로 개별 50ms가 목표.
     # 네트워크 왕복을 감안해 상한만 강제한다.
     backend_timeout_seconds: float = 2.0
+
+    # 메뉴판 업로드가 동기 호출로 바뀌어(2026-10-13 BE 재동기화) 이 지연이 곧 점주의
+    # 대기 시간이다. 이미지 1장당 호출 1회 기준 — 실측 전 임시값, devtools 측정 후 조정.
+    clova_ocr_timeout_seconds: float = 5.0
 
 
 _API_KEY_FIELDS = {
