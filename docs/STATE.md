@@ -1,8 +1,50 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-11
-브랜치: `feat/143-solution-retry-feedback` (Issue #143, 아래 "2026-10-10~11" 절 작업 중 —
-아직 커밋 전). `dev` 는 #140 까지 머지 완료.
+마지막 갱신: 2026-10-14
+브랜치: `feat/147-menu-recognition` (Issue #147, 제나). `dev` 는 #146 까지 머지 완료. 아래
+"2026-10-11" 이전 절들은 그 전 작업(#143 등)의 기록이고 이미 머지됐다 — 지금 작업과는
+별개다.
+
+## 지금 어디 (2026-10-14, 메뉴판 사진 인식)
+
+`POST /internal/v2/ai/menu-recognition` — 네이버 클로바 OCR + 기존 텍스트 LLM으로 메뉴판
+사진에서 메뉴명·가격·카테고리 후보를 뽑는다. 스키마·OCR 클라이언트·매칭 서비스(PR #156,
+머지 전)에 이어 라우터(`app/api/menu.py`)와 배치 오케스트레이션(`recognize_menu`)까지
+끝냈다 — 이제 실제로 호출 가능한 엔드포인트다. Issue #147은 라우터가 머지돼야 닫는다(PR
+#156을 아직 안 머지한 이유).
+
+### 마지막으로 통과한 것
+- `uv run pytest` — 293 passed (`tests/test_menu.py` 6개 포함: 정상 200, 필수 필드 누락
+  422, 전부 실패 422+failReason, 부분 실패 200+failedImages, 카테고리 판별 실패 시 null,
+  텍스트 없음 422).
+- `uv run ruff check . && uv run ruff format --check .` — 통과.
+- curl 로 `/openapi.json`에 경로 노출 확인, `-d '{}'` → 422 + `data:null` 확인(둘 다 로컬
+  uvicorn 실호출). **정상 200 경로는 실제 클로바·LLM 호출로는 검증하지 않았다** — 요금
+  발생이라 pytest의 monkeypatch 검증으로 대체했다(devtools/menu_recognition_eval.py로
+  사진 3장 기준 재현율 93%/가격 정확도 91% 실측은 이미 PR #156에서 함).
+
+### 다음 한 걸음
+- PR #156에 지금 커밋들을 추가로 push하고, 끝나면 사용자 확인 후 머지 → Issue #147 닫기.
+- `docs/superpowers/specs/2026-10-12-menu-recognition-design.md`의 "BE에 확인할 것"
+  항목(LOW_IMAGE_QUALITY vs MENU_TEXT_NOT_FOUND 판정 기준, BE→AI 타임아웃 값) 답변 대기.
+
+### 미해결 결정
+- **LOW_IMAGE_QUALITY vs MENU_TEXT_NOT_FOUND 판정 기준이 계약에 값으로 없다.** 지금은
+  `app/services/menu.py::_classify_content_failure`가 "토큰이 전혀 없으면
+  MENU_TEXT_NOT_FOUND, 평균 신뢰도 0.3 미만이면 LOW_IMAGE_QUALITY"로 임시 처리한다 —
+  실측 데이터 없이 고른 값이라 BE 확인 필요.
+- **`category: null` 처리를 막 반영했다(2026-10-14).** 노션 ST-04에 "판별 불가하면
+  null"이라고 적혀 있어서 기존 "실패하면 OTHER" 동작을 null로 바꿨다 — BE가 `category:
+  null`을 실제로 받을 준비가 됐는지(화면 처리) 확인 필요.
+
+### 함정
+- `docs/api정의서.md`·`docs/ERD정의서.md` 로컬 사본은 이 브랜치가 `dev`의 #153(노션 직접
+  조회로 전환) 머지 전에 갈라져서 **그 두 파일만 stale한 채로 남아 있다** —
+  `.claude/skills/notion-contract`·`ai-endpoint`·`AGENTS.md`·`CLAUDE.md`는 이번에
+  `origin/dev` 기준으로 동기화했지만 그 두 문서 파일 자체는 지우지 않았다(머지 때 `dev`
+  쪽 삭제가 정리해줄 것). 이 둘을 계약 기준으로 보고 작업하면 `failedImages`·
+  `AI_PROCESSING_ERROR`·`TEA` 카테고리가 전부 빠진 구버전을 보게 된다 — 노션
+  원본(`notion-contract` 스킬)을 믿는다.
 
 ## 지금 어디
 

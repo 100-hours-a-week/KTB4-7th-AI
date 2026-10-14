@@ -314,6 +314,27 @@ menu_recognition_compare.py`(신규, 1회성 평가 스크립트 — 프로덕�
 사용자 지시로 재현율·가격 정확도를 1순위, 카테고리는 후순위로 두고 여기까지
 마무리한다 — 우선순위에 안 맞는 추가 튜닝은 보류.
 
+## 라우터·배치 오케스트레이션 (2026-10-14, 구현 완료)
+
+`app/api/menu.py` + `app/services/menu.py::recognize_menu`로 "구현 순서" 6번까지 끝냈다.
+
+- `asyncio.Semaphore(2)`로 이미지별 OCR 동시 호출을 제한한다("5. 동시 처리와 재시도").
+- 카테고리 분류는 배치 전체 메뉴명을 모아 **한 번만** 호출한다(이미지마다 부르지 않음).
+- OCR 공급자 오류(`ApiError`, 재시도까지 실패한 뒤)는 그 이미지만 `failedImages`에
+  `AI_PROCESSING_ERROR`로 담고 배치를 500으로 내리지 않는다. 설정 오류 등 배치 자체를
+  시도조차 못 하는 예외만 잡지 않고 전파해 공용 500 핸들러로 보낸다.
+- `LOW_IMAGE_QUALITY` vs `MENU_TEXT_NOT_FOUND` 판정(위 "BE에 확인할 것" 1번)은
+  `_classify_content_failure`로 **임시 구현**했다 — 토큰이 전혀 없으면
+  `MENU_TEXT_NOT_FOUND`, 토큰 평균 신뢰도가 0.3 미만이면 `LOW_IMAGE_QUALITY`. 실측 근거
+  없는 값이라 BE 확인 전까지는 provisional이다.
+- `DetectedMenuItem.category`를 non-nullable → `MenuCategory | None`으로 변경했다. 노션
+  ST-04 원문("판별할 수 없으면 null로 반환한다")을 그대로 반영 — 기존 "판별 실패 시
+  OTHER로 강제" 동작을 없앴다(`classify_categories`도 `null`을 돌려주도록 수정).
+- `tests/test_menu.py` 6개(정상 200 / 필수 필드 누락 422 / 전부 실패 422+failReason /
+  부분 실패 200+failedImages / 카테고리 판별 실패 시 null / 텍스트 없음 422)로 검증.
+  정상 200 경로의 실제 클로바·LLM 실호출 curl 검증은 요금 문제로 생략 — pytest의
+  monkeypatch 커버리지로 대체.
+
 ## 추후 고도화 (지금은 보류, 사용자 지시)
 
 - **더콤마 가격 정확도(85%)가 다른 두 메뉴판(100%)보다 낮음**: 이름-가격이 멀리
