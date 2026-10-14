@@ -146,11 +146,15 @@ async def main() -> int:
                 f" ({result['price_correct'] / result['price_checkable']:.0%})"
             )
         if result["matched"]:
-            print(f"  카테고리 정확도: {result['cat_correct']}/{result['matched']}"
-                  f" ({result['cat_correct'] / result['matched']:.0%})")
+            print(
+                f"  카테고리 정확도: {result['cat_correct']}/{result['matched']}"
+                f" ({result['cat_correct'] / result['matched']:.0%})"
+            )
         if result["misses"]:
-            print(f"  놓친 항목({len(result['misses'])}): "
-                  + ", ".join(m["name"] for m in result["misses"]))
+            print(
+                f"  놓친 항목({len(result['misses'])}): "
+                + ", ".join(m["name"] for m in result["misses"])
+            )
         if result["mismatches"]:
             print(f"  값 틀림({len(result['mismatches'])}):")
             for m in result["mismatches"]:
@@ -160,8 +164,10 @@ async def main() -> int:
                     f" / 추출 price={got['price']} cat={got['category']}"
                 )
         if result["extras"]:
-            print(f"  환각(정답에 없는 추출, {len(result['extras'])}): "
-                  + ", ".join(e["name"] for e in result["extras"]))
+            print(
+                f"  환각(정답에 없는 추출, {len(result['extras'])}): "
+                + ", ".join(e["name"] for e in result["extras"])
+            )
 
         for k in overall:
             overall[k] += result[k]
@@ -178,12 +184,12 @@ async def main() -> int:
     if overall["price_checkable"]:
         print(
             f"  가격 정확도: {overall['price_correct']}/{overall['price_checkable']}"
-            f" ({overall['price_correct']/overall['price_checkable']:.0%})"
+            f" ({overall['price_correct'] / overall['price_checkable']:.0%})"
         )
     if overall["matched"]:
         print(
             f"  카테고리 정확도: {overall['cat_correct']}/{overall['matched']}"
-            f" ({overall['cat_correct']/overall['matched']:.0%})"
+            f" ({overall['cat_correct'] / overall['matched']:.0%})"
         )
 
     if args.report:

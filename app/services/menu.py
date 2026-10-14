@@ -184,9 +184,7 @@ def cluster_columns(lines: list[Line]) -> list[list[Line]]:
         return [lines]
     threshold = total_range * _COLUMN_GAP_RATIO
     split_at = [
-        i + 1
-        for i in range(len(by_x) - 1)
-        if by_x[i + 1].center_x - by_x[i].center_x > threshold
+        i + 1 for i in range(len(by_x) - 1) if by_x[i + 1].center_x - by_x[i].center_x > threshold
     ]
     if not split_at:
         return [lines]
@@ -226,7 +224,7 @@ def _find_price_in_line(text: str) -> tuple[int, bool, str] | None:
 
 
 def _name_candidate_score(text: str) -> float:
-    """"메뉴명답게 생긴 정도" 점수. 높을수록 이름 후보로 더 적합하다.
+    """ "메뉴명답게 생긴 정도" 점수. 높을수록 이름 후보로 더 적합하다.
 
     `(hot/ice)` 같은 괄호가 있으면 가산. 한글 포함이면 가산 — 실제 메뉴판 3장
     전부 큰 글씨(주 메뉴명)가 한글이고 영문은 작은 보조 표기였다(2026-10-14
@@ -288,9 +286,7 @@ def _extract_pairs_in_column(lines: list[Line]) -> list[RawPair]:
         if remainder:
             pairs.append(RawPair(name=remainder, price=price, price_ambiguous=ambiguous))
         elif pending is not None:
-            pairs.append(
-                RawPair(name=pending.text.strip(), price=price, price_ambiguous=ambiguous)
-            )
+            pairs.append(RawPair(name=pending.text.strip(), price=price, price_ambiguous=ambiguous))
             pending, pending_score = None, float("-inf")
             # 밀려난 후보가 1개 이하(같은 품목의 다른 언어 표기 정도)면 정상적인 한
             # 품목 처리로 보고 버린다. 2개 이상이면 가격 없이 다른 품목 이름이
