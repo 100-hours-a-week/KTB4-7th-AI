@@ -58,14 +58,23 @@ y좌표(세로 위치) 최근접으로 다시 묶는다. 순서가 아니라 좌
 안 된다 — 사용자 판단으로 지금은 보류, 추후 고도화 과제로 남긴다.
 """
 
+import asyncio
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 
-from app.clients import llm
+from app.clients import llm, ocr
 from app.clients.ocr import OcrToken
+from app.core.errors import ApiError
 from app.prompts import menu as menu_prompt
-from app.schemas.menu import DetectedMenuItem
+from app.schemas.menu import (
+    DetectedMenuItem,
+    FailedImage,
+    MenuImageInput,
+    MenuRecognitionData,
+    MenuRecognitionRequest,
+)
 
 _PRICE_COMMA = re.compile(r"^\d{1,3}(,\d{3})+$")
 _PRICE_SHORTHAND = re.compile(r"^\d{1,2}\.\d$")
@@ -352,8 +361,13 @@ def extract_raw_pairs(lines: list[Line]) -> list[RawPair]:
     return pairs
 
 
-async def classify_categories(names: list[str]) -> list[str]:
-    """메뉴명 목록을 6종 카테고리로 분류한다. 실패하면 전부 OTHER로 떨어진다."""
+async def classify_categories(names: list[str]) -> list[str | None]:
+    """메뉴명 목록을 6종 카테고리로 분류한다.
+
+    판별 불가(응답 파싱 실패, 허용 범위 밖 값)는 `null`로 둔다 — OTHER는 "6종 중
+    하나로 확정됐지만 그게 OTHER"인 경우에만 쓰는 값이라 둘을 섞지 않는다
+    (2026-10-14 노션 ST-04 확인).
+    """
     if not names:
         return []
     raw = await llm.complete(menu_prompt.SYSTEM, menu_prompt.build(names), max_tokens=1000)
@@ -363,24 +377,14 @@ async def classify_categories(names: list[str]) -> list[str]:
         if len(categories) != len(names):
             raise ValueError("개수가 안 맞음")
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-        return ["OTHER"] * len(names)
+        return [None] * len(names)
     allowed = {"COFFEE", "TEA", "BEVERAGE", "CAKE", "BAKERY", "OTHER"}
-    return [c if c in allowed else "OTHER" for c in categories]
+    return [c if c in allowed else None for c in categories]
 
 
-async def build_detected_items(
-    source_image_id: int, tokens: list[OcrToken]
+def _assemble_items(
+    source_image_id: int, pairs: list[RawPair], categories: list[str | None]
 ) -> list[DetectedMenuItem]:
-    """한 이미지의 OCR 토큰을 실제 계약 응답 형태(`DetectedMenuItem`)로 조립한다.
-
-    `POST /internal/v2/ai/menu-recognition` 응답의 `detectedItems`에 그대로 들어가는
-    형태다 — BE가 받는 JSON과 동일한 구조로 평가(`devtools/menu_recognition_eval.py`)
-    할 수 있게 한다.
-    """
-    lines = group_lines(tokens)
-    pairs = extract_raw_pairs(lines)
-    categories = await classify_categories([p.name for p in pairs])
-
     items = []
     for pair, category in zip(pairs, categories, strict=True):
         name = pair.name.strip()
@@ -407,3 +411,121 @@ async def build_detected_items(
             )
         )
     return items
+
+
+async def build_detected_items(
+    source_image_id: int, tokens: list[OcrToken]
+) -> list[DetectedMenuItem]:
+    """한 이미지의 OCR 토큰을 실제 계약 응답 형태(`DetectedMenuItem`)로 조립한다.
+
+    `POST /internal/v2/ai/menu-recognition` 응답의 `detectedItems`에 그대로 들어가는
+    형태다 — BE가 받는 JSON과 동일한 구조로 평가(`devtools/menu_recognition_eval.py`)
+    할 수 있게 한다. 배치 전체를 처리하는 `recognize_menu`는 카테고리 분류를 이미지
+    단위로 쪼개 부르지 않는다(아래 참고) — 이 함수는 사진 1장만 볼 때(devtools 평가)
+    쓰는 편의 함수로 남긴다.
+    """
+    lines = group_lines(tokens)
+    pairs = extract_raw_pairs(lines)
+    categories = await classify_categories([p.name for p in pairs])
+    return _assemble_items(source_image_id, pairs, categories)
+
+
+# 스펙 "5. 동시 처리와 재시도" — 공급자 호출 한도·429에 취약해 무제한 동시 호출을 하지
+# 않는다. 실측 전 임시값.
+_OCR_CONCURRENCY = 2
+
+# OCR은 성공했지만 결과가 흐려 신뢰할 수 없는 수준인지 판단하는 임시 기준. 계약에 값으로
+# 박혀있지 않다(스펙 "BE에 확인할 것" 1번 — 아직 미확정) — 토큰 평균 신뢰도가 이 값보다
+# 낮으면 LOW_IMAGE_QUALITY, 토큰 자체가 없으면 MENU_TEXT_NOT_FOUND로 가른다.
+_LOW_IMAGE_QUALITY_CONFIDENCE = 0.3
+
+
+def _classify_content_failure(tokens: list[OcrToken]) -> str:
+    """OCR 공급자 장애가 아닌, 콘텐츠 문제로 후보를 못 뽑았을 때 실패 사유를 고른다.
+
+    시스템 오류(OCR 공급자 타임아웃/5xx)는 호출부가 `ApiError`를 잡아 바로
+    AI_PROCESSING_ERROR로 분류하므로 여기 들어오지 않는다.
+    """
+    if not tokens:
+        return "MENU_TEXT_NOT_FOUND"
+    avg_confidence = sum(t.confidence for t in tokens) / len(tokens)
+    if avg_confidence < _LOW_IMAGE_QUALITY_CONFIDENCE:
+        return "LOW_IMAGE_QUALITY"
+    return "MENU_TEXT_NOT_FOUND"
+
+
+def _majority_fail_reason(reasons: list[str]) -> str:
+    """배치 전체가 실패했을 때 최상위 `failReason`을 다수결로 정한다.
+
+    동률이면 LOW_IMAGE_QUALITY 우선(스펙 "6. 배치 처리와 부분 실패" 임시 규칙, 실측 후
+    조정 가능).
+    """
+    counts = Counter(reasons)
+    top = max(counts.values())
+    tied = [reason for reason, count in counts.items() if count == top]
+    return "LOW_IMAGE_QUALITY" if "LOW_IMAGE_QUALITY" in tied else tied[0]
+
+
+async def _ocr_one(
+    image: MenuImageInput, semaphore: asyncio.Semaphore
+) -> tuple[MenuImageInput, list[OcrToken], str | None]:
+    """이미지 한 장을 OCR 처리한다. 공급자 오류는 그 이미지만의 실패로 담아 돌려준다
+
+    (배치 전체를 500으로 떨어뜨리지 않는다 — 스펙 "6. 배치 처리와 부분 실패"). OCR
+    클라이언트의 `_call_clova`가 이미 429·5xx에 한해 1회 재시도하므로, 여기서 잡히는
+    `ApiError`는 그 재시도까지 실패한 뒤다.
+    """
+    async with semaphore:
+        try:
+            tokens = await ocr.extract_text_blocks(image.imageUrl)
+        except ApiError:
+            return image, [], "AI_PROCESSING_ERROR"
+    return image, tokens, None
+
+
+async def recognize_menu(req: MenuRecognitionRequest) -> MenuRecognitionData:
+    """`POST /internal/v2/ai/menu-recognition` 배치 오케스트레이션.
+
+    이미지별 OCR은 세마포어로 동시성을 제한한다(스펙 5번). 카테고리 분류는 배치 전체
+    메뉴명을 모아 한 번만 호출한다 — LLM 재시도 1회 제한·비용 때문에 이미지마다 따로
+    부르지 않는다(스펙 4번, `AGENTS.md` "LLM 재시도는 1회로 제한").
+
+    1장 이상 처리에 성공하면(실패해도 OK) 200을 반환하고, 전부 실패하면 422 + 최상위
+    `failReason`을 올린다. OCR 공급자 장애로 그 이미지만 실패한 경우는 여기서 잡아
+    `failedImages`로 담는다 — 그 밖의 예상 못 한 예외(설정 오류 등 배치 자체를 시도조차
+    못 하는 경우)는 잡지 않고 그대로 전파해 공용 500 핸들러가 받게 한다.
+    """
+    semaphore = asyncio.Semaphore(_OCR_CONCURRENCY)
+    results = await asyncio.gather(*(_ocr_one(image, semaphore) for image in req.images))
+
+    failed_images: list[FailedImage] = []
+    per_image_pairs: list[tuple[int, list[RawPair]]] = []
+    for image, tokens, fail_reason in results:
+        if fail_reason is not None:
+            failed_images.append(FailedImage(sourceImageId=image.imageId, failReason=fail_reason))
+            continue
+        pairs = extract_raw_pairs(group_lines(tokens))
+        if not pairs:
+            failed_images.append(
+                FailedImage(
+                    sourceImageId=image.imageId, failReason=_classify_content_failure(tokens)
+                )
+            )
+            continue
+        per_image_pairs.append((image.imageId, pairs))
+
+    all_names = [pair.name for _, pairs in per_image_pairs for pair in pairs]
+    categories = await classify_categories(all_names)
+
+    detected_items: list[DetectedMenuItem] = []
+    offset = 0
+    for source_image_id, pairs in per_image_pairs:
+        item_categories = categories[offset : offset + len(pairs)]
+        offset += len(pairs)
+        detected_items.extend(_assemble_items(source_image_id, pairs, item_categories))
+
+    if not detected_items:
+        reason = _majority_fail_reason([f.failReason for f in failed_images])
+        raise ApiError(422, "MENU_RECOGNITION_FAILED", "메뉴를 인식하지 못했습니다.", reason)
+
+    return MenuRecognitionData(detectedItems=detected_items, failedImages=failed_images)
