@@ -328,3 +328,31 @@ def test_카드_개수는_배정된_장수로_채점한다():
 
     assert grade_solution(two, metrics, expected_cards=2)["카드_개수_일치"] is True
     assert grade_solution(two, metrics)["카드_개수_일치"] is False, "기본값은 3 이다"
+
+
+def test_상권_단정을_잡는다():
+    """상권 지표는 업소 수뿐이고 매출이 없다. 거기서 경쟁 강도나 매출 수준을 단정하면
+    근거 없는 문장이다. 우리 매장도 집계에 포함될 수 있어 "경쟁 카페" 도 막는다
+    (2026-10-12 승민님 제안).
+
+    아직 서비스 `_violations` 에는 넣지 않았다 — 먼저 얼마나 어기는지 재고 정한다.
+    """
+    from devtools.grade import _DISTRICT_CLAIM
+
+    걸려야 = [
+        "반경 내 경쟁 카페가 12곳입니다",
+        "경쟁 업체가 많습니다",
+        "경쟁이 치열한 상권입니다",
+        "경쟁이 과열된 지역입니다",
+        "주변 카페가 많아 매출이 낮을 수 있습니다",
+    ]
+    통과해야 = [
+        "반경 500m 내 카페가 12곳입니다",
+        "음식업소 28곳 중 카페가 12곳입니다",
+        "커피 매출이 낮은 시간대입니다",  # 상권 단정이 아니라 시간대 사실
+        "경쟁력을 높이려면 메뉴를 점검하세요",
+    ]
+    for text in 걸려야:
+        assert _DISTRICT_CLAIM.search(text), text
+    for text in 통과해야:
+        assert not _DISTRICT_CLAIM.search(text), text

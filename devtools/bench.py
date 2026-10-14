@@ -103,6 +103,32 @@ SOLUTION_CASES = [
     ),
 ]
 
+# 상권(2026-10-12)은 매장별 상수라 점수를 낮게 뒀다 — 다른 축이 활발하면 탈락한다.
+# 그래서 실험하려면 조용한 날을 만들어야 한다: 격차 없음·쏠림 없음·비교 기간 없음.
+SOLUTION_CASES.append(
+    (
+        "상권",
+        {
+            "salesSummary": {"netSales": 842000},
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 9, "amount": 103000},
+                {"dayType": "WEEKDAY", "hour": 13, "amount": 118000},
+                {"dayType": "WEEKDAY", "hour": 18, "amount": 109000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.34},
+                {"name": "논커피", "share": 0.33},
+                {"name": "디저트", "share": 0.33},
+            ],
+            "districtBenchmark": {
+                "cafeCount": 12,
+                "foodBizCount": 28,
+                "queriedAt": "2026-10-12T09:00:00",
+            },
+        },
+    )
+)
+
 INSIGHT_CASES = [
     (
         "기본",

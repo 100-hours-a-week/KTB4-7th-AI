@@ -40,7 +40,7 @@ def strip_fence(raw: str) -> str:
 # 2026-10-07 은 입력 구조만 바뀌었고(카드별 근거 지표 배정) 카드 작성 규칙은 그대로라
 # 검사 항목은 손대지 않았다. `카드_지표_중복없음` 이 100% 로 올라가는지 보는 게 이번 변경의
 # 측정 목표다.
-TARGET_SOLUTION_VERSION = "2026-10-11"
+TARGET_SOLUTION_VERSION = "2026-10-12"
 TARGET_INSIGHT_VERSION = "2026-10-08"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
@@ -71,6 +71,15 @@ _FABRICATED_AMOUNT = re.compile(
     r"|\d+\s*(?:kg|키로|g|그램|잔|개|병|박스|리터)\s*[을를]?\s*(?:준비|발주|주문|구비|입고)"
 )
 # 누구나 할 수 있는 말. 점주가 오늘 무엇을 다르게 할지가 안 나온다.
+# 상권 지표는 업소 수뿐이고 매출이 없다. 거기서 경쟁 강도나 매출 수준을 단정하면 근거가
+# 없는 문장이다. 우리 매장도 집계에 포함될 수 있어 "경쟁 카페" 도 막는다(2026-10-12).
+# 아직 서비스 `_violations` 에는 넣지 않았다 — 먼저 얼마나 어기는지 재고 정한다.
+_DISTRICT_CLAIM = re.compile(
+    r"경쟁\s*(?:카페|업체|점포|매장|점)(?!관)"
+    r"|경쟁이?\s*(?:치열|심각|과열|과밀)"
+    r"|매출이?\s*(?:낮을|적을|부진할)"
+)
+
 _VAGUE_ACTION = re.compile(
     r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[을를]?\s*"
     r"(?:강화|개선|변경|확대|진행|실행|집중)"
@@ -277,6 +286,7 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     actions = titles + [line for d in details for line in d.split("\n")[:2]]
     result["실행수치_날조_없음"] = not any(_FABRICATED_AMOUNT.search(t) for t in actions)
     result["공허한_조언_없음"] = not any(_VAGUE_ACTION.search(t) for t in actions)
+    result["상권_단정_없음"] = not any(_DISTRICT_CLAIM.search(t) for t in visible + evidences)
 
     result["기대효과_정성적"] = not any(_DISPLAY_NUM.search(d.split("\n")[-1]) for d in details)
 
