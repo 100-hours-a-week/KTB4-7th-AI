@@ -37,12 +37,30 @@ class CategoryPoint(Contract):
     vsPrevPeriod: float | None = None
 
 
+class WeatherContext(Contract):
+    """V2: 기상청 단기예보 요약(오늘 남은 영업시간분). 2026-10-14 BE 협의 확정.
+
+    maxPop 단위는 BE 확인 대기 중이다 — 일단 소수(0.0~1.0)로 가정한다(AGENTS.md "비율은
+    소수" 원칙). BE가 정수(%)로 확정하면 이 필드 타입만 바꾸면 된다.
+    """
+
+    basisDateTime: str
+    skyText: str
+    minTempC: int
+    maxTempC: int
+    maxPop: float
+    rainHours: list[int]
+    precipitationMm: float
+    isNotable: bool
+
+
 class Metrics(Contract):
     salesSummary: SalesSummary
     hourlyProfile: list[HourlyPoint]
     categoryBreakdown: list[CategoryPoint]
     predictedSalesToday: int | None = None
     reviewSummary: dict | None = None
+    weatherContext: WeatherContext | None = None
 
 
 # ── 인사이트 전용 지표 ──────────────────────────────────────────────

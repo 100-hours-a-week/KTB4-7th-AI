@@ -42,6 +42,17 @@ _METRICS = {
     ],
     "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
     "reviewSummary": None,
+    # V2: 2026-10-14 BE 협의 확정. maxPop 단위(소수/정수)는 BE 확인 대기 — 일단 소수로 가정.
+    "weatherContext": {
+        "basisDateTime": "2026-10-07 11:00",
+        "skyText": "비",
+        "minTempC": 14,
+        "maxTempC": 24,
+        "maxPop": 0.7,
+        "rainHours": [15, 16, 17],
+        "precipitationMm": 5.0,
+        "isNotable": True,
+    },
 }
 
 _INSIGHT_METRICS = {
