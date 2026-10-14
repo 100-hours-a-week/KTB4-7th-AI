@@ -7,10 +7,10 @@ description: AI 서버에 내부 엔드포인트를 추가하는 표준 절차. 
 
 엔드포인트 4개가 전부 같은 모양이다. 순서를 지키면 계약이 어긋나지 않는다.
 
-**시작 전 확인**: `docs/api정의서.md`·`docs/ERD정의서.md`의 해당 절을 읽었는가? 이 두 문서가
-BE와 합의한 최종 계약이다(위키·`contract-diff-wiki-vs-notion.md`는 과거 대조 기록일 뿐, 실제와
-다를 수 있다 — 실제로 그랬던 적이 있다). 안 읽었으면 `doc-digger` 에이전트로 먼저 가져온다.
-기억으로 쓰지 않는다.
+**시작 전 확인**: `notion-contract` 스킬로 API 정의서·ERD 정의서의 해당 절을 노션에서
+직접 확인했는가? 이 두 문서가 BE와 합의한 최종 계약이다(위키·`contract-diff-wiki-vs-notion.md`
+는 과거 대조 기록일 뿐, 실제와 다를 수 있다 — 실제로 그랬던 적이 있다). 로컬 사본은
+2026-10-13부로 두지 않으므로 기억으로 쓰지 않는다 — 매번 다시 조회한다.
 
 ## 절차
 
@@ -61,11 +61,11 @@ LLM 호출은 실제로 때리지 않는다. `app/clients/llm.py` 를 monkeypatc
 `app/api/<name>.py` → `app/main.py` 에 `include_router`.
 
 ```python
-router = APIRouter(prefix="/internal/v1/ai")
+router = APIRouter(prefix="/internal/v1/ai", dependencies=[Depends(verify_internal_token)])
 ```
 
-서버 간 인증은 앱 레벨에서 검증하지 않는다(2026-09-16 팀 결정 — 클라우드 보안그룹이 인바운드를
-BE로만 제한). `Depends(verify_internal_key)` 를 붙이지 않는다.
+`app/core/auth.py::verify_internal_token` 을 쓴다(기존 4개 라우터 전부 이 패턴 — 2026-10-13
+코드 확인. 이 절이 과거에 "앱 레벨 인증 없음"으로 잘못 적혀 있었다).
 
 → **확인**: `/docs` 에 노출되고 경로가 API 정의서와 글자 단위로 같은가(`/internal/v1/ai/...`)
 
@@ -97,4 +97,4 @@ curl -s -X POST localhost:8000/internal/v1/ai/<path> -d '{}'
 - 성공 응답을 플랫으로 반환 — API 정의서 기준은 `{"message":"...", "data": {...}}` 래퍼다
 - `INSUFFICIENT_*`/`INSUFFICIENT_DATA` 상태를 4xx로 반환 — **200**이다
 - 실패 응답에 `data` 키 빠뜨리기 — API 정의서 전역 규칙상 실패 응답은 항상 `"data":null`을 포함한다
-- `Depends(verify_internal_key)` 되살리기 — 서버 간 인증은 앱 레벨에서 안 한다(4절 참고)
+- `Depends(verify_internal_token)` 빠뜨리기 — 기존 4개 라우터 전부 이 의존성을 쓴다(4절 참고)
