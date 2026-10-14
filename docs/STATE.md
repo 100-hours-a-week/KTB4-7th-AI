@@ -1,20 +1,22 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-14
-브랜치: `feat/147-menu-recognition` (Issue #147, 제나). `dev` 는 #146 까지 머지 완료. 아래
-"2026-10-11" 이전 절들은 그 전 작업(#143 등)의 기록이고 이미 머지됐다 — 지금 작업과는
-별개다.
+마지막 갱신: 2026-10-15
+브랜치: `feat/147-menu-recognition` (Issue #147, 제나). `dev`는 #158까지 머지 완료(순이익
+인사이트 #151, 날씨 반영 #155 포함 — 전부 이미 머지돼 있어 이 브랜치와는 두 번 충돌만
+해소하면 된다). 아래 "2026-10-11" 이전 절들은 그 전 작업(#143 등)의 기록이고 이미
+머지됐다 — 지금 작업과는 별개다.
 
-## 지금 어디 (2026-10-14, 메뉴판 사진 인식)
+## 지금 어디 (2026-10-15, 메뉴판 사진 인식)
 
 `POST /internal/v2/ai/menu-recognition` — 네이버 클로바 OCR + 기존 텍스트 LLM으로 메뉴판
-사진에서 메뉴명·가격·카테고리 후보를 뽑는다. 스키마·OCR 클라이언트·매칭 서비스(PR #156,
-머지 전)에 이어 라우터(`app/api/menu.py`)와 배치 오케스트레이션(`recognize_menu`)까지
-끝냈다 — 이제 실제로 호출 가능한 엔드포인트다. Issue #147은 라우터가 머지돼야 닫는다(PR
-#156을 아직 안 머지한 이유).
+사진에서 메뉴명·가격·카테고리 후보를 뽑는다. 스키마·OCR 클라이언트·매칭 서비스에 이어
+라우터(`app/api/menu.py`)와 배치 오케스트레이션(`recognize_menu`)까지 끝냈다 — 이제
+실제로 호출 가능한 엔드포인트다. PR #156 열려 있고 CI 통과, `dev`와 두 차례 충돌
+해소(main.py 라우터 등록 중복, 이 파일) 완료. Issue #147은 PR #156이 머지돼야 닫힌다 —
+머지는 사용자 승인 후 진행(아직 승인 안 됨).
 
 ### 마지막으로 통과한 것
-- `uv run pytest` — 293 passed (`tests/test_menu.py` 6개 포함: 정상 200, 필수 필드 누락
+- `uv run pytest` — 307 passed (`tests/test_menu.py` 6개 포함: 정상 200, 필수 필드 누락
   422, 전부 실패 422+failReason, 부분 실패 200+failedImages, 카테고리 판별 실패 시 null,
   텍스트 없음 422).
 - `uv run ruff check . && uv run ruff format --check .` — 통과.
@@ -24,7 +26,8 @@
   사진 3장 기준 재현율 93%/가격 정확도 91% 실측은 이미 PR #156에서 함).
 
 ### 다음 한 걸음
-- PR #156에 지금 커밋들을 추가로 push하고, 끝나면 사용자 확인 후 머지 → Issue #147 닫기.
+- 사용자 승인 받으면 PR #156 머지 → Issue #147 닫기. BE에 GitHub 리뷰를 요청할지,
+  평소처럼 노션/슬랙 공유만 하고 머지할지는 아직 사용자 결정 대기.
 - `docs/superpowers/specs/2026-10-12-menu-recognition-design.md`의 "BE에 확인할 것"
   항목(LOW_IMAGE_QUALITY vs MENU_TEXT_NOT_FOUND 판정 기준, BE→AI 타임아웃 값) 답변 대기.
 
@@ -33,20 +36,17 @@
   `app/services/menu.py::_classify_content_failure`가 "토큰이 전혀 없으면
   MENU_TEXT_NOT_FOUND, 평균 신뢰도 0.3 미만이면 LOW_IMAGE_QUALITY"로 임시 처리한다 —
   실측 데이터 없이 고른 값이라 BE 확인 필요.
-- **`category: null` 처리를 막 반영했다(2026-10-14).** 노션 ST-04에 "판별 불가하면
+- **`category: null` 처리를 반영했다(2026-10-14).** 노션 ST-04에 "판별 불가하면
   null"이라고 적혀 있어서 기존 "실패하면 OTHER" 동작을 null로 바꿨다 — BE가 `category:
   null`을 실제로 받을 준비가 됐는지(화면 처리) 확인 필요.
 
 ### 함정
-- `docs/api정의서.md`·`docs/ERD정의서.md` 로컬 사본은 이 브랜치가 `dev`의 #153(노션 직접
-  조회로 전환) 머지 전에 갈라져서 **그 두 파일만 stale한 채로 남아 있다** —
-  `.claude/skills/notion-contract`·`ai-endpoint`·`AGENTS.md`·`CLAUDE.md`는 이번에
-  `origin/dev` 기준으로 동기화했지만 그 두 문서 파일 자체는 지우지 않았다(머지 때 `dev`
-  쪽 삭제가 정리해줄 것). 이 둘을 계약 기준으로 보고 작업하면 `failedImages`·
-  `AI_PROCESSING_ERROR`·`TEA` 카테고리가 전부 빠진 구버전을 보게 된다 — 노션
-  원본(`notion-contract` 스킬)을 믿는다.
-- `feat/148-profit-insights`(순이익 인사이트 엔드포인트)는 이미 `dev`에 머지됐다(#151) —
-  아래 "## 지금 어디"(날짜 없는 절)와 "2026-10-12"·"2026-10-13" 절은 그 작업 기록이다.
+- 이 브랜치는 `dev`가 몇 커밋 앞서 있을 때마다 `docs/STATE.md`(다른 작업자도 이 파일
+  상단을 갱신함)와 `app/main.py`(라우터 등록 줄)가 거의 매번 충돌한다. `dev`를 자주
+  merge해서 격차를 줄이거나, 머지 직전에 한 번에 처리한다.
+- `docs/api정의서.md`·`docs/ERD정의서.md` 로컬 사본은 `dev`의 #153(노션 직접 조회로
+  전환)에서 이미 삭제됐다 — 이 브랜치도 `dev` 머지로 같이 삭제됐다. 계약 확인은
+  `notion-contract` 스킬로 노션 원본을 본다.
 
 ## 지금 어디
 
@@ -1254,8 +1254,35 @@ AI 가 거절하거나 500 을 낸다"는 종류라 먼저 고쳤다.
 **다음 단계**: A40/A6000 실제 지연(p50/p95/max) 실측, 32B PASS_THRESHOLD 재검증,
 주말 운영 필요성 기획 확인, GPU→API 폴백 구현 여부 결정.
 
+## 2026-10-14 — 날씨(weatherContext) 반영 완료 + 상권(districtBenchmark) 재설계
+
+**날씨.** Issue #154, PR #155(dev, BE 코드리뷰 요청). `app/schemas/common.py::WeatherContext`
+(`basisDateTime`/`skyText`/`minTempC`/`maxTempC`/`maxPop`/`rainHours`/`precipitationMm`/
+`isNotable`) 추가, `solution_focus._weather_score`로 솔루션 후보 맨 뒤에 배치(`isNotable`이면
+고정 0.3점 — 1.0으로 뒀다가 다른 세 축을 밀어내는 걸 실측으로 확인하고 낮췄다). `maxPop`
+단위(소수/정수)는 BE 확인 대기, 일단 소수로 구현.
+
+**상권.** 2026-10-07~08 "목적 자체가 불가"로 범위에서 뺐던 상권 벤치마크를 다시 살렸다 —
+소상공인시장진흥공단 API가 아니라 **서울시 상권분석 Open API**(추정매출·점포·유동인구,
+행정동 단위)로 데이터 소스를 바꿔서다. HTTPS 미지원 문제가 있었는데 BE가 HTTP로 그대로
+연동하기로 하면서 재개됐다. Issue #157에 필드 확정:
+`basisQuarter`/`districtAvgMonthlySalesPerCafe`/`cafeStoreCount`/`peakSalesHourBand`/
+`peakFootTrafficHourBand`. **배치는 솔루션이 아니라 인사이트**(`sales-insights` metrics)다.
+
+**충돌 발견.** Issue #149(호준, "반경 500m 카페·음식업소 수" 모델)에 이미 PR #150이 열려
+있었다 — 데이터 소스·필드·배치가 전부 다른 폐기 설계다. PR #150은 `app/prompts/solution.py`·
+`app/services/solution_focus.py`(제나 영역)도 건드렸는데 작성자가 자진 self-flag 해뒀다.
+#149는 닫지 않고 코멘트로 변경 사유 남김, PR #150도 코멘트로 유지/변경 표 남기고 열어둠 —
+**헥터 복귀 후 같이 논의하고 방향 결정.** 헥터 쪽을 안 쓰면 #157 쪽으로 머지해서 서버 가동.
+
+PR #150에서 별개 버그도 발견됨: 크레딧 부족이 `retryable:true`로 BE에 나간다 —
+`app/clients/llm.py`의 마지막 `except Exception`이 전부 502로 묶이고 `retryable`이 상태
+코드로 파생돼(502/503/504), 영구 오류도 재시도 대상이 된다. 제나 영역이라 PR #150에는
+안 넣음 — 별도 수정 필요.
+
 ## 마지막으로 통과한 것
 
+- `uv run pytest -q` — **291 passed** (2026-10-14, `feat/154-weather-context-solution`, 날씨 반영 후)
 - `uv run pytest -q` — **287 passed** (2026-10-11, `feat/143-solution-retry-feedback`,
   위 "2026-10-10~11" 절. 커밋 전)
 - `uv run pytest -q` — `dev` 기준 **265 passed** (2026-10-08)
@@ -1273,6 +1300,16 @@ AI 가 거절하거나 500 을 낸다"는 종류라 먼저 고쳤다.
   `devtools/llm_smoke.py --with-chat` 로 바로 확인 가능하다.
 
 ## 다음 한 걸음
+
+### 이번 주 (2026-10-14~)
+
+- 🔴 **PR #155 BE 리뷰 대기** — 날씨. 피드백 오면 반영.
+- 🔴 **상권(#157) 구현** — `dev` 기준 새 worktree 생성 → `DistrictBenchmark` 스키마
+  (`app/schemas/common.py`) → 실패 테스트(`tests/test_insight_focus.py`) → `insight_focus.py`에
+  `_district_score`(cafeStoreCount 표본 가드 + 매장-행정동평균 격차 점수) → `insight.py` 프롬프트
+  규칙("행정동 평균 추정치, 매장 개별 실적 아님") → devtools 픽스처(광명을 서울 인접지역으로
+  임시 취급) → `grade.py` 버전 갱신 → PR.
+- 🟡 **PR #150/#149 방향 결정** — 헥터 복귀 후. 안 쓰면 #157 쪽으로 머지.
 
 ### 이번 주 (2026-10-06~)
 
@@ -1385,10 +1422,17 @@ AI 가 거절하거나 500 을 낸다"는 종류라 먼저 고쳤다.
 - **v2 외부 데이터(날씨·공휴일·상권)를 누가 가져오나** (2026-10-06 신규 → **2026-10-07~08
   확정**, 위 "외부 데이터 — 상권·날씨 확정" 절 참고): **BE 수집으로 확정**됐다. 특히
   공휴일은 AI 가 이미 코드로 계산하고 있어서, BE 가 보내면 같은 사실의 출처가 둘이 된다.
-- **상권 벤치마크 데이터 출처** (2026-10-06 신규 → **2026-10-07~08 확인 완료, 목적 자체가
-  불가로 결론**): 소상공인시장진흥공단 상가(상권)정보 API 는 찾았지만 무료 데이터에
-  매출이 없어 "상권 평균 대비" 비교는 애초에 못 만든다 — 점포 수·업종만 나온다. v2 범위에서
-  빠진다.
+- **상권 벤치마크 데이터 출처** (2026-10-06 신규 → 2026-10-07~08 "목적 자체가 불가"로
+  빠졌었으나 → **2026-10-14 재개**): 소상공인시장진흥공단 API는 매출이 없어 포기했지만,
+  서울시 상권분석 Open API(행정동 단위 추정매출)로 소스를 바꿔 다시 살렸다. 상세는 위
+  "2026-10-14" 절, Issue #157.
+- **vsPrevQuarter(상권 전분기 대비)** (2026-10-14 신규): 1차 후보에 있었는데 이번 범위에서
+  보류. 필요해지면 추가.
+- **cafeStoreCount 표본 가드 임계치** (2026-10-14 신규): AI 쪽에서 자체 상수로 가드를
+  만들기로 했다(코드에 명시, BE가 자기 필터링 기준과 크로스체크 가능하게). 실제 임계값은
+  구현하면서 정함 — 숫자 자체가 미해결.
+- **서울 외 매장 districtBenchmark 처리** (2026-10-14 신규): BE가 필드 생략으로 확정 전까지,
+  AI 쪽 테스트는 광명을 "가장 가까운 서울 지역"으로 임시 취급한다.
 - **인사이트 metrics의 정확한 MENU 전용 필드명**: "menu_net_amount와 MENU 전용 일별·요일별·
   시간대별·카테고리별 지표"라는 서술만 있고 리터럴 JSON 예시가 없다. BE 확인 필요.
 - **`modelVersion` 을 저장할 것인가** (2026-09-21 신규): #61 이 형식을 `{provider}:{model}` 로

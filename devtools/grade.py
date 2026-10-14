@@ -40,7 +40,10 @@ def strip_fence(raw: str) -> str:
 # 2026-10-07 은 입력 구조만 바뀌었고(카드별 근거 지표 배정) 카드 작성 규칙은 그대로라
 # 검사 항목은 손대지 않았다. `카드_지표_중복없음` 이 100% 로 올라가는지 보는 게 이번 변경의
 # 측정 목표다.
-TARGET_SOLUTION_VERSION = "2026-10-11"
+# 2026-10-14 는 weatherContext(네 번째 근거 축)가 들어오며 "날씨만으로 과거 매출과의
+# 인과를 주장하지 말라"는 새 규칙이 추가됐다 — `날씨_인과_주장_없음`을 새로 잰다. 기존
+# 항목은 손대지 않았다.
+TARGET_SOLUTION_VERSION = "2026-10-14"
 TARGET_INSIGHT_VERSION = "2026-10-08"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
@@ -74,6 +77,11 @@ _FABRICATED_AMOUNT = re.compile(
 _VAGUE_ACTION = re.compile(
     r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[을를]?\s*"
     r"(?:강화|개선|변경|확대|진행|실행|집중)"
+)
+# weatherContext 는 오늘 예보 스냅샷이라 과거 매출과의 인과를 뒷받침할 지표가 없다
+# (conditionPatterns 미도입, 2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
+_WEATHER_CAUSAL = re.compile(
+    r"(?:비|눈|날씨|기온|강수)[가이]?\s*(?:와서|내려서|오는\s*바람에)?\s*(?:때문에|탓에|영향으로|영향을\s*받아)"
 )
 
 _DOW_KO = {
@@ -286,6 +294,8 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["카드_지표_중복없음"] = all(
         not (groups[i] & groups[j]) for i in range(len(groups)) for j in range(i + 1, len(groups))
     )
+
+    result["날씨_인과_주장_없음"] = not any(_WEATHER_CAUSAL.search(t) for t in visible)
 
     result["cards"] = cards
     return result

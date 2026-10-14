@@ -22,6 +22,13 @@ _CHANGE_WEIGHT = 3.0  # 증감률은 절대값이 작아서(0.12) 다른 점수�
 _CATEGORY_CHANGE_WEIGHT = 2.0
 _PREDICTION_WEIGHT = 2.0
 
+# 2026-10-14: 처음엔 1.0(다른 축의 상한과 동일)으로 뒀더니 표준 fixture 기준 날씨가 거의
+# 항상 1 순위를 차지해 기존 세 축 중 하나를 밀어냈다 — "다른 축이 할 말 없을 때만 보충"
+# 이라는 의도와 반대로 동작했다(실측: hourly 0.674·category 0.62·total 0.36인 fixture에서
+# 날씨가 1 순위, total_focus 탈락). 0.3 으로 낮춰 "그 날의 다른 세 축이 전부 약할 때만"
+# 날씨가 들어오게 한다 — 이 값도 다른 가중치처럼 잠정값이다.
+_WEATHER_SUPPLEMENT_SCORE = 0.3
+
 # 프롬프트에 보여줄 행 수 — 잠정값. dayType 별 상·하위 몇 행, 비중 상위 몇 종.
 # 시간대는 24 시간 × 2 dayType = 48 행이 올 수 있고 카테고리도 20 종까지 가능한데,
 # 한 카드가 쓰는 건 두세 행이고 나머지는 틀릴 숫자를 공급한다 — 지표를 많이 주면
@@ -95,6 +102,17 @@ def _prediction_score(predicted: int | None, net_sales: int) -> float:
     return min(abs(predicted - net_sales) / net_sales * _PREDICTION_WEIGHT, 1.0)
 
 
+def _weather_score(weather: dict | None) -> float:
+    """BE 가 이미 isNotable 로 참/거짓을 판정해 보낸다 — AI 가 원시값(POP·기온)으로
+
+    세부 점수를 또 매길 근거가 없다. notable 이면 고정값(_WEATHER_SUPPLEMENT_SCORE),
+    아니면 후보에서 뺀다.
+    """
+    if not weather or not weather.get("isNotable"):
+        return -1.0
+    return _WEATHER_SUPPLEMENT_SCORE
+
+
 def assign(metrics: dict) -> list[dict]:
     """카드별 근거 지표를 돌려준다. 앞에서부터 rankNo 1·2·3 에 대응한다.
 
@@ -104,13 +122,20 @@ def assign(metrics: dict) -> list[dict]:
     지표가 3 종이 안 되면 그만큼만 돌려준다. 없는 근거로 카드를 만들게 하느니 장수를
     줄이는 편이 낫다 — 서비스가 카드 2 장도 그대로 내보내는 것과 같은 판단이다.
 
-    지금은 축이 셋뿐이라 사실상 순서만 정해진다. V2 에서 순이익·날씨·상권이 들어와 축이
-    여섯이 되면 그때부터 "오늘 할 말이 있는 것만 고른다"가 실제로 작동한다.
+    2026-10-14: 날씨(weatherContext)가 네 번째 축으로 들어왔다. `isNotable` 이 BE 판정이라
+    점수를 더 매길 근거가 없어 고정값(`_WEATHER_SUPPLEMENT_SCORE`, 0.3)을 쓴다 — 다른 세
+    축이 전부 그보다 약할 때만 날씨가 카드를 차지한다("보충" 설계). 다른 축 중 하나라도
+    뚜렷하면 날씨는 밀린다.
+
+    축이 넷이 되면서 "오늘 할 말이 있는 것만 고른다"가 처음으로 실제 선택(= 네 후보 중
+    하나 탈락)으로 작동하기 시작한다. 상권(districtBenchmark)은 인사이트로 가서 솔루션
+    축에는 포함하지 않는다(2026-10-13 결정).
     """
     summary = metrics.get("salesSummary") or {}
     hourly = metrics.get("hourlyProfile") or []
     category = metrics.get("categoryBreakdown") or []
     predicted = metrics.get("predictedSalesToday")
+    weather = metrics.get("weatherContext")
 
     total_focus: dict = {"salesSummary": summary} if summary else {}
     if predicted is not None and total_focus:
@@ -129,6 +154,9 @@ def assign(metrics: dict) -> list[dict]:
             _category_score(category) if category else -1.0,
         ),
         (total_focus, total_score if total_focus else -1.0),
+        # 맨 뒤에 둔다 — 동점(1.0)이면 안정 정렬이라 앞선 세 축이 우선한다. 날씨는 "다른
+        # 축이 오늘 할 말이 없을 때만" 보충하는 자리다.
+        ({"weatherContext": weather}, _weather_score(weather)),
     ]
     usable = [(focus, score) for focus, score in candidates if score >= 0.0]
     usable.sort(key=lambda pair: pair[1], reverse=True)
