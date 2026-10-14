@@ -154,6 +154,46 @@ def test_카테고리는_비중_상위만_넣는다():
     assert rows[0]["name"] == "카테고리0", "비중이 가장 큰 쪽이 먼저여야 한다"
 
 
+_FLAT_METRICS = {
+    "salesSummary": {"netSales": 1000000, "vsPrevPeriod": 0.01},
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 10, "amount": 50000},
+        {"dayType": "WEEKDAY", "hour": 11, "amount": 52000},
+    ],
+    "categoryBreakdown": [{"name": "커피", "share": 0.2, "vsPrevPeriod": 0.01}],
+}
+
+
+def test_다른_축이_전부_약하면_날씨가_1순위가_된다():
+    """고정점수(0.3)가 "보충" 으로 동작하는지 확인한다 — 다른 세 축이 다 약해야 날씨가 든다."""
+    weather = {"basisDateTime": "2026-10-07 11:00", "skyText": "비", "isNotable": True}
+    focus = assign({**_FLAT_METRICS, "weatherContext": weather})
+
+    assert "weatherContext" in focus[0]
+
+
+def test_다른_축이_뚜렷하면_날씨가_밀린다():
+    """표준 METRICS(시간대 격차 0.674)는 0.3 보다 훨씬 커서 날씨가 세 장 안에 못 든다."""
+    weather = {"basisDateTime": "2026-10-07 11:00", "skyText": "비", "isNotable": True}
+    focus = assign({**METRICS, "weatherContext": weather})
+
+    assert not any("weatherContext" in card for card in focus)
+
+
+def test_날씨가_notable이_아니면_배정되지_않는다():
+    weather = {"basisDateTime": "2026-10-07 11:00", "skyText": "맑음", "isNotable": False}
+    focus = assign({**METRICS, "weatherContext": weather})
+
+    assert not any("weatherContext" in card for card in focus)
+    assert len(focus) == 3
+
+
+def test_날씨_필드가_없으면_배정되지_않는다():
+    focus = assign(METRICS)
+
+    assert not any("weatherContext" in card for card in focus)
+
+
 def test_선별이_계열별_최고_최저를_보존한다():
     """선별 후에도 "가장 높은/낮은 시간대" 문장이 맞아야 한다.
 
