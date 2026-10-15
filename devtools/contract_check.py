@@ -84,8 +84,8 @@ _INSIGHT_METRICS = {
         "basisQuarter": "2026Q3",
         "districtAvgMonthlySalesPerCafe": 9413000,
         "cafeStoreCount": 133,
-        "peakSalesHourBand": "15-18",
-        "peakFootTrafficHourBand": "12-14",
+        "peakSalesHourBand": "14-17",
+        "peakFootTrafficHourBand": "11-14",
     },
 }
 
