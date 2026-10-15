@@ -47,6 +47,23 @@ def test_솔루션_프롬프트의_JSON_예시가_깨지지_않는다():
     assert '"rankNo":1' in prompt, "format() 이 중괄호를 먹으면 예시가 사라진다"
 
 
+def test_집계_기간이_있으면_프롬프트에_명시된다():
+    """salesSummary.netSales 는 하루가 아니라 분석 기간 합계다(BE 확인, 2026-10-15).
+
+    period 를 주면 모델이 targetDate 를 대신 끌어다 쓰는 대신 이 값을 쓰게 한다.
+    """
+    prompt = solution.build(
+        assign(METRICS), "2026-08-31", "MON", is_weekend=False, period="2026-01-01~2026-03-31"
+    )
+    assert "집계 기간은 2026-01-01~2026-03-31입니다" in prompt
+
+
+def test_집계_기간이_없으면_프롬프트에_기간_언급이_없다():
+    """BE 가 아직 period 를 안 보내는 요청에서는 기간을 멋대로 꾸며 말하면 안 된다."""
+    prompt = solution.build(assign(METRICS), "2026-08-31", "MON", is_weekend=False)
+    assert "집계 기간은" not in prompt
+
+
 def test_인사이트_프롬프트는_행동_제안을_금지한다():
     assert "제안은 하지 말고" in insight.SYSTEM
     assert "관찰되는 사실만" in insight.SYSTEM
@@ -114,7 +131,7 @@ def test_인사이트_프롬프트는_문장마다_근거를_하나씩_붙인다
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-10-14"
+    assert solution.VERSION == "2026-10-15"
     assert insight.VERSION == "2026-10-08"
 
 
