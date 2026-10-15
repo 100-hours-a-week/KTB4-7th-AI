@@ -42,6 +42,11 @@ class WeatherContext(Contract):
 
     maxPop 단위는 BE 확인 대기 중이다 — 일단 소수(0.0~1.0)로 가정한다(AGENTS.md "비율은
     소수" 원칙). BE가 정수(%)로 확정하면 이 필드 타입만 바꾸면 된다.
+
+    precipitationMm 은 2026-10-15(#162)부터 선택값이다. 기상청 PCP가 "1.0mm 미만" 같은
+    범주값으로 올 때가 있어 영업시간 합계를 정확한 수로 못 낼 수 있다 — 그 경우 BE가
+    null을 보낸다. maxPop·rainHours·skyText·isNotable은 POP·SKY 기반이라 PCP와 무관하게
+    항상 값이 있으므로 그대로 필수로 둔다.
     """
 
     basisDateTime: str
@@ -50,7 +55,7 @@ class WeatherContext(Contract):
     maxTempC: int
     maxPop: float
     rainHours: list[int]
-    precipitationMm: float
+    precipitationMm: float | None = None
     isNotable: bool
 
 

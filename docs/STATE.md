@@ -1,52 +1,42 @@
 # 작업 상태
 
 마지막 갱신: 2026-10-15
-브랜치: `feat/147-menu-recognition` (Issue #147, 제나). `dev`는 #158까지 머지 완료(순이익
-인사이트 #151, 날씨 반영 #155 포함 — 전부 이미 머지돼 있어 이 브랜치와는 두 번 충돌만
-해소하면 된다). 아래 "2026-10-11" 이전 절들은 그 전 작업(#143 등)의 기록이고 이미
-머지됐다 — 지금 작업과는 별개다.
+브랜치: `feat/162-precipitation-nullable` (Issue #162, 제나). `dev`는 #160까지 머지
+완료(메뉴판 인식 #156, LLM_MODEL 오설정 장애 문서 #159 포함). 아래 "2026-10-11" 이전
+절들은 그 전 작업(#143 등)의 기록이고 이미 머지됐다 — 지금 작업과는 별개다. 상권
+(#157, `feat/157-district-benchmark-insight`, PR #161)은 다른 워크트리에서 별도 진행
+중이라 이 브랜치와는 무관하다.
 
-## 지금 어디 (2026-10-15, 메뉴판 사진 인식)
+## 지금 어디 (2026-10-15, precipitationMm 선택값 전환)
 
-`POST /internal/v2/ai/menu-recognition` — 네이버 클로바 OCR + 기존 텍스트 LLM으로 메뉴판
-사진에서 메뉴명·가격·카테고리 후보를 뽑는다. 스키마·OCR 클라이언트·매칭 서비스에 이어
-라우터(`app/api/menu.py`)와 배치 오케스트레이션(`recognize_menu`)까지 끝냈다 — 이제
-실제로 호출 가능한 엔드포인트다. PR #156 열려 있고 CI 통과, `dev`와 두 차례 충돌
-해소(main.py 라우터 등록 중복, 이 파일) 완료. Issue #147은 PR #156이 머지돼야 닫힌다 —
-머지는 사용자 승인 후 진행(아직 승인 안 됨).
+`WeatherContext.precipitationMm`을 `float`(필수) → `float | None = None`(선택)으로
+바꿨다(`app/schemas/common.py`). 기상청 PCP가 "1.0mm 미만" 같은 범주값으로 올 때가 있어
+영업시간 합계를 정확히 못 내는 경우가 있는데, 그때 BE가 `null`을 보낼 수 있게 한다.
+`maxPop`(강수확률)·`rainHours`·`skyText`·`isNotable`은 POP/SKY 기반이라 PCP와 무관하게
+항상 값이 있으므로 그대로 필수로 뒀다 — 날씨 지표 전체를 같이 생략하지 않는다.
+
+코드 변경은 스키마 타입 한 줄뿐이다. `req.metrics.model_dump(exclude_none=True)`가
+중첩 모델까지 재귀적으로 `None`을 지우는 걸 직접 테스트로 확인했다 — `precipitationMm`이
+`null`이면 LLM이 보는 JSON에 그 키 자체가 없다(`null`로 보이는 게 아니라 부재). 그래서
+`solution_focus._weather_score`(isNotable만 봄)도 `prompts/solution.py`(precipitationMm을
+지목하는 지시 없음)도 손댈 필요가 없었다 — VERSION도 안 올렸다.
 
 ### 마지막으로 통과한 것
-- `uv run pytest` — 307 passed (`tests/test_menu.py` 6개 포함: 정상 200, 필수 필드 누락
-  422, 전부 실패 422+failReason, 부분 실패 200+failedImages, 카테고리 판별 실패 시 null,
-  텍스트 없음 422).
-- `uv run ruff check . && uv run ruff format --check .` — 통과.
-- curl 로 `/openapi.json`에 경로 노출 확인, `-d '{}'` → 422 + `data:null` 확인(둘 다 로컬
-  uvicorn 실호출). **정상 200 경로는 실제 클로바·LLM 호출로는 검증하지 않았다** — 요금
-  발생이라 pytest의 monkeypatch 검증으로 대체했다(devtools/menu_recognition_eval.py로
-  사진 3장 기준 재현율 93%/가격 정확도 91% 실측은 이미 PR #156에서 함).
+- `uv run pytest` — 311 passed
+- `uv run ruff check --fix . && uv run ruff format .` — 통과(수정 없음)
+- `uv run python -c "..."` — `WeatherContext(precipitationMm=None, ...)` 생성 후
+  `Metrics.model_dump(exclude_none=True)` 결과에 `precipitationMm` 키가 없는 것을
+  직접 확인(로컬 실행, 커밋 안 되는 1회성 스크립트).
 
 ### 다음 한 걸음
-- 사용자 승인 받으면 PR #156 머지 → Issue #147 닫기. BE에 GitHub 리뷰를 요청할지,
-  평소처럼 노션/슬랙 공유만 하고 머지할지는 아직 사용자 결정 대기.
-- `docs/superpowers/specs/2026-10-12-menu-recognition-design.md`의 "BE에 확인할 것"
-  항목(LOW_IMAGE_QUALITY vs MENU_TEXT_NOT_FOUND 판정 기준, BE→AI 타임아웃 값) 답변 대기.
+- 사용자 승인 받으면 커밋 → PR(`Closes #162`, base `dev`).
 
 ### 미해결 결정
-- **LOW_IMAGE_QUALITY vs MENU_TEXT_NOT_FOUND 판정 기준이 계약에 값으로 없다.** 지금은
-  `app/services/menu.py::_classify_content_failure`가 "토큰이 전혀 없으면
-  MENU_TEXT_NOT_FOUND, 평균 신뢰도 0.3 미만이면 LOW_IMAGE_QUALITY"로 임시 처리한다 —
-  실측 데이터 없이 고른 값이라 BE 확인 필요.
-- **`category: null` 처리를 반영했다(2026-10-14).** 노션 ST-04에 "판별 불가하면
-  null"이라고 적혀 있어서 기존 "실패하면 OTHER" 동작을 null로 바꿨다 — BE가 `category:
-  null`을 실제로 받을 준비가 됐는지(화면 처리) 확인 필요.
+- (없음 — 변경 범위가 좁아 BE 확인이 필요한 항목 없음)
 
 ### 함정
-- 이 브랜치는 `dev`가 몇 커밋 앞서 있을 때마다 `docs/STATE.md`(다른 작업자도 이 파일
-  상단을 갱신함)와 `app/main.py`(라우터 등록 줄)가 거의 매번 충돌한다. `dev`를 자주
-  merge해서 격차를 줄이거나, 머지 직전에 한 번에 처리한다.
 - `docs/api정의서.md`·`docs/ERD정의서.md` 로컬 사본은 `dev`의 #153(노션 직접 조회로
-  전환)에서 이미 삭제됐다 — 이 브랜치도 `dev` 머지로 같이 삭제됐다. 계약 확인은
-  `notion-contract` 스킬로 노션 원본을 본다.
+  전환)에서 이미 삭제됐다. 계약 확인은 `notion-contract` 스킬로 노션 원본을 본다.
 
 ## 지금 어디
 
@@ -1321,7 +1311,9 @@ BE가 "새로고침 시 솔루션 재생성" 트리거를 추가하는 작업을
 
 ### 이번 주 (2026-10-14~)
 
-- 🔴 **PR #155 BE 리뷰 대기** — 날씨. 피드백 오면 반영.
+- ✅ **PR #155 머지 완료(2026-10-14T08:22Z 확인)** — 이 절의 "대기"는 실제보다 늦게 갱신된
+  기록이었다. 후속으로 `precipitationMm`을 선택값으로 바꾸는 #162가 별도로 나갔다(아래
+  "지금 어디" 최신 절 참고).
 - 🔴 **상권(#157) 구현** — `dev` 기준 새 worktree 생성 → `DistrictBenchmark` 스키마
   (`app/schemas/common.py`) → 실패 테스트(`tests/test_insight_focus.py`) → `insight_focus.py`에
   `_district_score`(cafeStoreCount 표본 가드 + 매장-행정동평균 격차 점수) → `insight.py` 프롬프트
