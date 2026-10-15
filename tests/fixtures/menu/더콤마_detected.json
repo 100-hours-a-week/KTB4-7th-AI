@@ -1,0 +1,410 @@
+[
+  {
+    "sourceImageId": 1,
+    "name": "아메리카노",
+    "category": "COFFEE",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "오렌지주스",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "에스프레소",
+    "category": "COFFEE",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "아이스티",
+    "category": "TEA",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "콜드브루",
+    "category": "COFFEE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "아망추",
+    "category": "OTHER",
+    "price": 8500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "콜드브루라떼",
+    "category": "COFFEE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "얼그레이밀크티",
+    "category": "TEA",
+    "price": 8000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "바닐라라떼",
+    "category": "COFFEE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "오곡라떼",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "스트로베리라떼",
+    "category": "BEVERAGE",
+    "price": 8000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "자몽차",
+    "category": "TEA",
+    "price": 8000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "헤이즐넛라떼",
+    "category": "COFFEE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "녹차라떼",
+    "category": "TEA",
+    "price": 8000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "연유라떼",
+    "category": "COFFEE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "초코라떼",
+    "category": "BEVERAGE",
+    "price": 8000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "몬샷추",
+    "category": "OTHER",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "허니듀멜론라떼",
+    "category": "BEVERAGE",
+    "price": 8500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "바닐라아이스크림",
+    "category": "OTHER",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "바닐라콜드슈페너",
+    "category": "COFFEE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "쑥크림라떼",
+    "category": "COFFEE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "콤마숙성라떼",
+    "category": "COFFEE",
+    "price": 8000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "토피넛라떼",
+    "category": "COFFEE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "코카콜라",
+    "category": "BEVERAGE",
+    "price": 5000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "밀크쉐이크",
+    "category": "BEVERAGE",
+    "price": 5500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "아포가토",
+    "category": "COFFEE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "바닐라크림라떼",
+    "category": "COFFEE",
+    "price": 8500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "분다버그 레몬 라임",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "쿠키앤크림라떼",
+    "category": "COFFEE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "분다버그 핑크",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "분다버그 레몬에이드",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "애플망고에이드",
+    "category": "BEVERAGE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "비터스",
+    "category": "BEVERAGE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "쿨라임에이드",
+    "category": "BEVERAGE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "얼그레이",
+    "category": "TEA",
+    "price": 6500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "페퍼민트",
+    "category": "TEA",
+    "price": 6500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "그린티",
+    "category": "TEA",
+    "price": 6500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "캐모마일",
+    "category": "TEA",
+    "price": 6500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "카페라떼",
+    "category": "COFFEE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "레몬차",
+    "category": "TEA",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "MONT SHOT CHU",
+    "category": "OTHER",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "딸기스무디",
+    "category": "BEVERAGE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "블루베리스무디",
+    "category": "BEVERAGE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "TOFFEE NUT LATTE",
+    "category": "COFFEE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "코카콜라 제로",
+    "category": "BEVERAGE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "플레인 요거트 스무디",
+    "category": "BEVERAGE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "딸기 요거트 스무디",
+    "category": "BEVERAGE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "블루베리 요거트 스무디",
+    "category": "BEVERAGE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "자몽에이드",
+    "category": "BEVERAGE",
+    "price": 9000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "망고 요거트 스무디",
+    "category": "BEVERAGE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "APPLE MANGO ADE",
+    "category": "BEVERAGE",
+    "price": 7500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  }
+]

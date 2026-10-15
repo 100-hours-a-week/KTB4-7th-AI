@@ -1,0 +1,146 @@
+[
+  {
+    "sourceImageId": 1,
+    "name": "자양동크림라떼 Jayang-dong Cream Latte (only iced)",
+    "category": "COFFEE",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "필터 커피 Filter Coffee",
+    "category": "COFFEE",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "Signature",
+    "category": "OTHER",
+    "price": 8000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "베리 브라운 Berry Brown",
+    "category": "OTHER",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "아메리카노 Americano /",
+    "category": "COFFEE",
+    "price": 4300,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "카페라떼 Cafe Latte /",
+    "category": "COFFEE",
+    "price": 5100,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "리얼바닐라라떼 Real Vanilla Latte /",
+    "category": "COFFEE",
+    "price": 5500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "카페모카 Cafe Mocha",
+    "category": "COFFEE",
+    "price": 5700,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "콜드브루 Cold Brew (only iced) /",
+    "category": "COFFEE",
+    "price": 5000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "뚝섬콜드라떼 Ttukseom Cold Latte (only iced)",
+    "category": "COFFEE",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "쇼콜라떼 Chocolate",
+    "category": "BEVERAGE",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "얼그레이 밀크티 Earlgray Milktea",
+    "category": "TEA",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "코랄머스캣 루이보스티 Coralmuscat Rooibos tea",
+    "category": "TEA",
+    "price": 5500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "페퍼민트티 Peppermint /",
+    "category": "TEA",
+    "price": 5500,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "코랄티 썸머에이드 Coral tea Summer Ade",
+    "category": "BEVERAGE",
+    "price": 6000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "햄치즈크로스트 Ham&Cheese Croast",
+    "category": "BAKERY",
+    "price": 5000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "당근케이크 Carrot Cake /",
+    "category": "CAKE",
+    "price": 7000,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  },
+  {
+    "sourceImageId": 1,
+    "name": "바스크치즈케이크 Basque Cheese Cake /",
+    "category": "CAKE",
+    "price": 6300,
+    "confidence": 0.6,
+    "priceReviewRequired": true
+  }
+]

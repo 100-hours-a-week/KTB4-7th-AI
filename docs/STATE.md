@@ -1,9 +1,52 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-14
-브랜치: `feat/154-weather-context-solution` (Issue #154, PR #155 리뷰 대기 — 날씨 반영 완료,
-아래 "2026-10-14" 절). 상권(Issue #157)은 설계만 확정, 브랜치 없음 — 같은 절 참고.
-`dev` 는 PR #151(순이익 인사이트)까지 머지 완료.
+마지막 갱신: 2026-10-15
+브랜치: `feat/147-menu-recognition` (Issue #147, 제나). `dev`는 #158까지 머지 완료(순이익
+인사이트 #151, 날씨 반영 #155 포함 — 전부 이미 머지돼 있어 이 브랜치와는 두 번 충돌만
+해소하면 된다). 아래 "2026-10-11" 이전 절들은 그 전 작업(#143 등)의 기록이고 이미
+머지됐다 — 지금 작업과는 별개다.
+
+## 지금 어디 (2026-10-15, 메뉴판 사진 인식)
+
+`POST /internal/v2/ai/menu-recognition` — 네이버 클로바 OCR + 기존 텍스트 LLM으로 메뉴판
+사진에서 메뉴명·가격·카테고리 후보를 뽑는다. 스키마·OCR 클라이언트·매칭 서비스에 이어
+라우터(`app/api/menu.py`)와 배치 오케스트레이션(`recognize_menu`)까지 끝냈다 — 이제
+실제로 호출 가능한 엔드포인트다. PR #156 열려 있고 CI 통과, `dev`와 두 차례 충돌
+해소(main.py 라우터 등록 중복, 이 파일) 완료. Issue #147은 PR #156이 머지돼야 닫힌다 —
+머지는 사용자 승인 후 진행(아직 승인 안 됨).
+
+### 마지막으로 통과한 것
+- `uv run pytest` — 307 passed (`tests/test_menu.py` 6개 포함: 정상 200, 필수 필드 누락
+  422, 전부 실패 422+failReason, 부분 실패 200+failedImages, 카테고리 판별 실패 시 null,
+  텍스트 없음 422).
+- `uv run ruff check . && uv run ruff format --check .` — 통과.
+- curl 로 `/openapi.json`에 경로 노출 확인, `-d '{}'` → 422 + `data:null` 확인(둘 다 로컬
+  uvicorn 실호출). **정상 200 경로는 실제 클로바·LLM 호출로는 검증하지 않았다** — 요금
+  발생이라 pytest의 monkeypatch 검증으로 대체했다(devtools/menu_recognition_eval.py로
+  사진 3장 기준 재현율 93%/가격 정확도 91% 실측은 이미 PR #156에서 함).
+
+### 다음 한 걸음
+- 사용자 승인 받으면 PR #156 머지 → Issue #147 닫기. BE에 GitHub 리뷰를 요청할지,
+  평소처럼 노션/슬랙 공유만 하고 머지할지는 아직 사용자 결정 대기.
+- `docs/superpowers/specs/2026-10-12-menu-recognition-design.md`의 "BE에 확인할 것"
+  항목(LOW_IMAGE_QUALITY vs MENU_TEXT_NOT_FOUND 판정 기준, BE→AI 타임아웃 값) 답변 대기.
+
+### 미해결 결정
+- **LOW_IMAGE_QUALITY vs MENU_TEXT_NOT_FOUND 판정 기준이 계약에 값으로 없다.** 지금은
+  `app/services/menu.py::_classify_content_failure`가 "토큰이 전혀 없으면
+  MENU_TEXT_NOT_FOUND, 평균 신뢰도 0.3 미만이면 LOW_IMAGE_QUALITY"로 임시 처리한다 —
+  실측 데이터 없이 고른 값이라 BE 확인 필요.
+- **`category: null` 처리를 반영했다(2026-10-14).** 노션 ST-04에 "판별 불가하면
+  null"이라고 적혀 있어서 기존 "실패하면 OTHER" 동작을 null로 바꿨다 — BE가 `category:
+  null`을 실제로 받을 준비가 됐는지(화면 처리) 확인 필요.
+
+### 함정
+- 이 브랜치는 `dev`가 몇 커밋 앞서 있을 때마다 `docs/STATE.md`(다른 작업자도 이 파일
+  상단을 갱신함)와 `app/main.py`(라우터 등록 줄)가 거의 매번 충돌한다. `dev`를 자주
+  merge해서 격차를 줄이거나, 머지 직전에 한 번에 처리한다.
+- `docs/api정의서.md`·`docs/ERD정의서.md` 로컬 사본은 `dev`의 #153(노션 직접 조회로
+  전환)에서 이미 삭제됐다 — 이 브랜치도 `dev` 머지로 같이 삭제됐다. 계약 확인은
+  `notion-contract` 스킬로 노션 원본을 본다.
 
 ## 지금 어디
 
