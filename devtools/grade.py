@@ -45,8 +45,11 @@ def strip_fence(raw: str) -> str:
 # 항목은 손대지 않았다.
 # 2026-10-15 는 DUPLICATE_FIGURE/VAGUE_ACTION에 더해 "현재 기간"처럼 날짜 없이 기간을
 # 가리키는 말을 금지하는 규칙이 추가됐다(점주 신고) — `기간_날짜_명시`를 새로 잰다.
+# 2026-10-15 는 districtBenchmark(여섯째 근거 축, #157)가 들어오며 "행정동 평균일 뿐
+# 매장 개별 실적이 아니고, 상권 상태로 매출 인과를 주장하지 말라"는 규칙이 추가됐다 —
+# `상권_인과_주장_없음`을 새로 잰다. 기존 항목은 손대지 않았다.
 TARGET_SOLUTION_VERSION = "2026-10-16"
-TARGET_INSIGHT_VERSION = "2026-10-08"
+TARGET_INSIGHT_VERSION = "2026-10-15"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
@@ -93,6 +96,11 @@ _VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
 # (conditionPatterns 미도입, 2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
 _WEATHER_CAUSAL = re.compile(
     r"(?:비|눈|날씨|기온|강수)[가이]?\s*(?:와서|내려서|오는\s*바람에)?\s*(?:때문에|탓에|영향으로|영향을\s*받아)"
+)
+# districtBenchmark 는 행정동 평균 추정치일 뿐 매장 개별 실적이 아니다(2026-10-15, #157).
+# "상권이 좋아서/나빠서 매출이 ~했다" 식 인과 주장을 잡는다.
+_DISTRICT_CAUSAL = re.compile(
+    r"(?:상권|행정동|주변\s*(?:카페|업소))[이가]?\s*(?:좋아서|나빠서|활발해서|침체돼서|때문에|탓에|영향으로|영향을\s*받아)"
 )
 
 _DOW_KO = {
@@ -403,6 +411,8 @@ def grade_insight(raw: str, metrics: dict) -> dict:
 
     # ratio 의 분모는 menuSales 다 — "전체의 OO%"·"총 매출의 OO%" 는 틀린 문장이다
     result["ratio_분모_정확"] = not re.search(r"(전체|총\s*매출)의\s*\d", body)
+
+    result["상권_인과_주장_없음"] = not _DISTRICT_CAUSAL.search(body)
 
     result["insights"] = insights
     return result

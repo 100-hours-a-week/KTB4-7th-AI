@@ -3,6 +3,41 @@
 마지막 갱신: 2026-10-16
 브랜치: `feat/164-solution-vague-period` (Issue #164, 제나)
 
+## 2026-10-15 — 상권(districtBenchmark) 인사이트 반영 (Issue #157, PR #161)
+
+`POST /internal/v1/ai/sales-insights`에 상권(districtBenchmark) 반영 완료. `DistrictBenchmark`
+스키마(`app/schemas/common.py`), 서비스(`app/services/insight_focus.py::_district_score` —
+표본 가드 `cafeStoreCount>=3` + 매장-행정동평균 격차 점수, 여섯째 축), 프롬프트 규칙
+(`app/prompts/insight.py`, "행정동 평균·매장 개별 실적 아님" + 인과 주장 금지, `VERSION`
+"2026-10-08"→"2026-10-15"), devtools(`contract_check.py` 픽스처, `grade.py`
+`_DISTRICT_CAUSAL`+`상권_인과_주장_없음`, `TARGET_INSIGHT_VERSION` 동기화) 전부 반영했다.
+PR #161 오픈, 헥터 리뷰 반영 완료(`8a342c4`) — 상세는 PR 코멘트 참고.
+
+### 미해결 결정
+- **노션 API 정의서가 아직 districtBenchmark를 인사이트 쪽 확정 계약으로 반영 안
+  했다(2026-10-15, 2026-10-16 두 번 다른 세션이 각각 실시간 `notion-fetch`로 재확인해도
+  동일).** 노션 원문은 `districtBenchmark`를 `/internal/v2/ai/solutions/generate`(솔루션,
+  V2) 절에 "🚧 확장 자리만 예약, 확정 계약 간주 안 함"으로만 적어두고, 필드명
+  (`basisQuarter`/`districtAvgMonthlySalesPerCafe`/`cafeStoreCount`/`peakSalesHourBand`/
+  `peakFootTrafficHourBand`)은 문서 전체에 한 번도 등장하지 않는다. Issue #157 본문은
+  "BE와 2026-10-14 협의 확정"이라고 돼 있어 둘이 어긋난다. 사용자 확인(2026-10-16):
+  "노션은 아직 구현 안 된 걸로 보면 된다, BE랑 별도로 협의해서 진행할 것이라 AI 쪽에서는
+  더 손 안 대도 된다."
+- ③ 부분 월(14일치 등)이면 격차가 부풀려지고 문장이 틀리는 문제 — 코드로 가릴 재료가
+  없어 BE에 집계 일수 또는 "완결된 월인가"를 별도 요청해야 한다. 아직 요청 안 나감.
+- PR #150/#149(헥터, 폐기 설계) 처리 — 헥터 복귀 후 논의 예정, 아직 안 함.
+
+### 함정
+- 같은 이슈(#157)로 브랜치가 두 개 생길 뻔했다 — 이전 세션이 만들어둔 워크트리가 있는데
+  메인 워크트리에서 모르고 새 브랜치(`feat/157-district-benchmark`)를 또 만들었다. 세션
+  시작 시 `git worktree list`로 기존 워크트리를 먼저 확인한다.
+- `docs/api정의서.md`·`docs/ERD정의서.md` 로컬 사본은 `dev`의 #153(노션 직접 조회로
+  전환)에서 이미 삭제됐다. 계약 확인은 `notion-contract` 스킬로 노션 원본을 본다 — 단
+  `notion-fetch`로 전체 페이지를 당기면 토큰 초과로 파일에 저장되니 `grep`/파이썬
+  슬라이싱으로 필요한 절만 읽는다.
+- PR #161이 `dev`와 `app/clients/llm.py`에서 충돌(2026-10-16) — #167(공급자 영구 오류를
+  재시도에서 뺌)이 비슷한 위치를 건드려서다. `dev`로 리베이스해 해소.
+
 ## 지금 어디
 
 점주 신고(솔루션 카드가 "현재 기간 순매출이 124,946,029원이며"처럼 기준 없이 기간을
@@ -428,6 +463,11 @@ SSH 로컬 포트포워딩으로 충분하다: `ssh -f -N -L 18000:localhost:800
 사용자 승인 받으면 커밋 → PR(`Closes #164`, base `dev`). 커밋 전에 브랜치에 같이 묻어
 있는 무관한 untracked 파일(`KTB4-AI.code-workspace`, `devtools/concurrency_bench.py`,
 `docs/` 밑 샘플 엑셀·이미지·PDF)이 스테이징에 끼지 않게 확인할 것 — 이번 작업과 무관하다.
+
+- 🟡 **PR #161(상권 인사이트) 리뷰 반영 완료, `dev` 리베이스로 머지 대기.** 노션 계약
+  불일치는 BE와 별도 협의 예정이라 AI 쪽에서 더 손 안 댐(위 "2026-10-15 — 상권..." 절
+  참고). ③ 부분 월 문제는 BE에 집계 일수 요청이 아직 안 나갔다.
+- 🟡 **PR #150/#149 방향 결정** — 헥터 복귀 후. 안 쓰면 #157 쪽으로 머지.
 
 ## 미해결 결정
 

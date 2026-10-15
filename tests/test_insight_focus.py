@@ -128,3 +128,42 @@ def test_비중_지표는_상위만_넣는다():
     rows = next(item["menuRankings"] for item in focus if "menuRankings" in item)
     assert len(rows) == 5
     assert rows[0]["menuName"] == "메뉴0"
+
+
+DISTRICT = {
+    "basisQuarter": "2026Q3",
+    "districtAvgMonthlySalesPerCafe": 9413000,
+    "cafeStoreCount": 133,
+    "peakSalesHourBand": "15-18",
+    "peakFootTrafficHourBand": "12-14",
+}
+
+
+def test_매장_매출이_행정동_평균과_격차가_크면_포함된다():
+    """매장(7,920,000) 대 행정동 평균(3,000,000) 격차(1.64→1.0)가 categorySales(0.417)를 이긴다."""
+    district = {**DISTRICT, "districtAvgMonthlySalesPerCafe": 3000000}
+    focus = assign({**METRICS, "districtBenchmark": district}, max_count=1)
+
+    assert "districtBenchmark" in focus[0]
+
+
+def test_매장_매출이_행정동_평균과_격차가_작으면_다른_축에_밀린다():
+    """격차(0.01)가 categorySales(0.417)보다 훨씬 작으면 1위를 못 가져간다."""
+    district = {**DISTRICT, "districtAvgMonthlySalesPerCafe": 8000000}
+    focus = assign({**METRICS, "districtBenchmark": district}, max_count=1)
+
+    assert "districtBenchmark" not in focus[0]
+
+
+def test_표본이_너무_적은_상권은_배정되지_않는다():
+    """cafeStoreCount 가 1~2 곳이면 평균이 의미가 없어 격차가 커도 뺀다(#157)."""
+    district = {**DISTRICT, "districtAvgMonthlySalesPerCafe": 3000000, "cafeStoreCount": 2}
+    focus = assign({**METRICS, "districtBenchmark": district}, max_count=4)
+
+    assert not any("districtBenchmark" in item for item in focus)
+
+
+def test_상권_필드가_없으면_배정되지_않는다():
+    focus = assign(METRICS, max_count=4)
+
+    assert not any("districtBenchmark" in item for item in focus)

@@ -12,11 +12,20 @@
 
 **점수 기준은 잠정값이다.** "요일 격차가 크면 할 말이 많다" 는 판단은 기획 영역이라
 풀스택·기획과 맞춰야 한다. 상수를 한곳에 모아 뒀으니 합의되면 숫자만 바꾸면 된다.
+
+2026-10-15: districtBenchmark(상권, #157)가 여섯째 축으로 들어왔다. 날씨(solution_focus
+의 _weather_score)와 달리 BE 가 참/거짓을 미리 판정해주지 않아, 매장 매출과 행정동 평균의
+격차를 직접 계산한다 — 다른 축의 "격차가 크면 할 말이 많다" 판단과 같다. 표본이 1~2 곳인
+상권은 평균 자체가 의미가 없어 별도 가드(_MIN_CAFE_STORE_COUNT)로 뺀다.
 """
 
 # 잠정 가중치 — 증감률은 절대값이 작아서(0.042) 격차 점수와 자릿수를 맞춘다.
 _CHANGE_WEIGHT = 3.0
 _SHARE_CHANGE_WEIGHT = 2.0
+
+# 표본이 1~2 곳인 상권은 평균 자체가 의미가 없다(#157). BE 가 자기 필터링 기준과
+# 크로스체크할 수 있게 상수로 분리해 둔다 — 잠정값이다.
+_MIN_CAFE_STORE_COUNT = 3
 
 # 프롬프트에 보여줄 행 수 — 잠정값. 상·하위 몇 행, 비중 상위 몇 종.
 # hourlySales 는 24 시간 × 2 dayType, salesTrend 는 한 달치가 올 수 있다. 한 문장이
@@ -81,6 +90,22 @@ def _share_score(points: list[dict]) -> float:
     return min(max(top_share, top_change), 1.0)
 
 
+def _district_score(district: dict | None, store_sales: int) -> float:
+    """표본이 너무 적은 상권(1~2 곳)은 평균이 의미가 없어 후보에서 뺀다(#157).
+
+    매장 매출과 행정동 평균의 격차가 클수록 할 말이 많다 — 다른 축의 "격차가 크면
+    점수가 높다" 판단(_spread)과 같다.
+    """
+    if not district:
+        return -1.0
+    if (district.get("cafeStoreCount") or 0) < _MIN_CAFE_STORE_COUNT:
+        return -1.0
+    avg = district.get("districtAvgMonthlySalesPerCafe") or 0
+    if avg <= 0:
+        return -1.0
+    return min(abs(store_sales - avg) / avg, 1.0)
+
+
 def assign(metrics: dict, max_count: int) -> list[dict]:
     """문장 순서대로의 근거 지표를 돌려준다. 최대 max_count 개.
 
@@ -100,6 +125,10 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     for key in ("categorySales", "menuRankings"):
         points = metrics.get(key) or []
         candidates.append(({key: _share_rows(points)}, _share_score(points) if points else -1.0))
+
+    district = metrics.get("districtBenchmark")
+    store_sales = summary.get("totalSales") or 0
+    candidates.append(({"districtBenchmark": district}, _district_score(district, store_sales)))
 
     usable = [(focus, score) for focus, score in candidates if score >= 0.0]
     usable.sort(key=lambda pair: pair[1], reverse=True)
