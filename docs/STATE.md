@@ -1284,6 +1284,9 @@ PR #150에서 별개 버그도 발견됨: 크레딧 부족이 `retryable:true`�
 
 운영 `LLM_MODEL`이 존재하지 않는 모델 ID(`claude-sonnet-5-0`)로 설정돼 솔루션 생성이 전부
 `PROVIDER_ERROR`(404)로 실패했다. `claude-sonnet-4-5`로 롤백·재배포로 복구했다.
+`claude-sonnet-5-0`는 실재하지 않는 ID다 — **실제로 "Sonnet 5"로 올리려면 `-0` 접미사
+없는 `claude-sonnet-5`가 맞다**(아래 "다음 한 걸음" 8번 항목도 동일하게 `claude-sonnet-5`를
+가리킴). 지금은 급한 복구만 했고 교체 여부는 그 항목에서 별도로 판단한다.
 
 롤백 후에도 기존 매장 솔루션은 바로 재생성되지 않았는데, 다음 00:00 BE
 `SalesSolutionDailyScheduler` 배치(위 "2026-09-30 — SOL 일일 솔루션 스케줄러" 절 참고)가
