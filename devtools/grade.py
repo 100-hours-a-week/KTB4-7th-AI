@@ -43,7 +43,9 @@ def strip_fence(raw: str) -> str:
 # 2026-10-14 는 weatherContext(네 번째 근거 축)가 들어오며 "날씨만으로 과거 매출과의
 # 인과를 주장하지 말라"는 새 규칙이 추가됐다 — `날씨_인과_주장_없음`을 새로 잰다. 기존
 # 항목은 손대지 않았다.
-TARGET_SOLUTION_VERSION = "2026-10-14"
+# 2026-10-15 는 DUPLICATE_FIGURE/VAGUE_ACTION에 더해 "현재 기간"처럼 날짜 없이 기간을
+# 가리키는 말을 금지하는 규칙이 추가됐다(점주 신고) — `기간_날짜_명시`를 새로 잰다.
+TARGET_SOLUTION_VERSION = "2026-10-15"
 TARGET_INSIGHT_VERSION = "2026-10-08"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
@@ -78,6 +80,8 @@ _VAGUE_ACTION = re.compile(
     r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[을를]?\s*"
     r"(?:강화|개선|변경|확대|진행|실행|집중)"
 )
+# 날짜 없이 기간을 가리키는 말. app/services/solution.py::_VAGUE_PERIOD 와 같은 패턴.
+_VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
 # weatherContext 는 오늘 예보 스냅샷이라 과거 매출과의 인과를 뒷받침할 지표가 없다
 # (conditionPatterns 미도입, 2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
 _WEATHER_CAUSAL = re.compile(
@@ -296,6 +300,8 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     )
 
     result["날씨_인과_주장_없음"] = not any(_WEATHER_CAUSAL.search(t) for t in visible)
+
+    result["기간_날짜_명시"] = not any(_VAGUE_PERIOD.search(t) for t in visible + evidences)
 
     result["cards"] = cards
     return result

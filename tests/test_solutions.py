@@ -28,7 +28,7 @@ LLM_SUCCESS = json.dumps(
         "solutionCards": [
             {
                 "rankNo": 1,
-                "title": "평일 14~17시 프로모션 진행",
+                "title": "평일 14~17시 프로모션 안내",
                 "summaryText": "오후 비피크 시간대 방문을 유도하세요.",
                 "detailText": "오후 비피크 시간대 방문 유도를 위해...",
                 "evidence": "평일 14시 매출이 주말 대비 크게 낮습니다.",
@@ -43,7 +43,7 @@ LLM_SUCCESS_NO_EVIDENCE = json.dumps(
         "solutionCards": [
             {
                 "rankNo": 1,
-                "title": "평일 14~17시 프로모션 진행",
+                "title": "평일 14~17시 프로모션 안내",
                 "summaryText": "오후 비피크 시간대 방문을 유도하세요.",
                 "detailText": "오후 비피크 시간대 방문 유도를 위해...",
             }
@@ -322,7 +322,7 @@ def test_기호가_섞인_정상_문장은_재시도하지_않는다():
             "solutionCards": [
                 {
                     "rankNo": 1,
-                    "title": "평일 14~17시 'A/B' 프로모션 진행",
+                    "title": "평일 14~17시 'A/B' 메뉴 테스트",
                     "summaryText": "객단가 8,581원 · 주문 923건 … 전기 대비 8.85% 증가했습니다.",
                     "detailText": "기온 25℃ 이상 → 아이스 비중이 높습니다.\n"
                     "“시그니처” 메뉴를 전면에 배치하고 ‘1+1’ 행사를 겁니다.",
@@ -333,5 +333,5 @@ def test_기호가_섞인_정상_문장은_재시도하지_않는다():
         ensure_ascii=False,
     )
 
-    cards, _ = _parse(raw)
+    cards, _ = _parse(raw, {})
     assert cards is not None

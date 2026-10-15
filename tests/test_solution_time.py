@@ -65,7 +65,7 @@ def _raw(detail: str) -> str:
 
 def test_파싱_단계에서_네_필드_모두_치환된다():
     detail = "오후 2시에 안내하세요.\n오후 3시에 점검하세요.\n방문을 늘릴 수 있습니다."
-    cards, _ = _parse(_raw(detail))
+    cards, _ = _parse(_raw(detail), {})
 
     assert cards is not None
     card = cards[0]
@@ -89,7 +89,7 @@ def test_치환하면_채점기의_시각_24시간제를_통과한다():
 
     assert grade_solution(raw, metrics)["시각_24시간제"] is False, "치환 전에는 걸려야 한다"
 
-    cards, _ = _parse(raw)
+    cards, _ = _parse(raw, metrics)
     fixed = json.dumps({"solutionCards": [c.model_dump() for c in cards]}, ensure_ascii=False)
     assert grade_solution(fixed, metrics)["시각_24시간제"] is True
 

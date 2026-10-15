@@ -1,5 +1,19 @@
 """솔루션 카드 3장을 LLM 1회 호출로 생성한다.
 
+2026-10-15: 배포본에서 "현재 기간 순매출이 124,946,029원이며"처럼 기준 없이 기간을
+가리키는 문장이 나왔다(점주 신고). 처음엔 targetDate(요청에 있는 "오늘 날짜") 를 그대로
+쓰게 하면 된다고 보고 그렇게 고쳤는데, BE 확인 결과 **salesSummary.netSales 는 하루치가
+아니라 분석 기간(해당 salesAnalysisId 가 집계한 기간) 합계**였다 — targetDate 를 박아
+넣으면 기간 합계를 "오늘 하루 매출"처럼 더 구체적으로 틀리게 말하는 꼴이라 되돌린다.
+집계 기간의 시작·끝을 어떤 필드로 받을지는 BE 와 아직 합의 전이다. **BE 최종 확정
+전까지 AI 쪽에서 쓸 이름을 먼저 정해 반영했다** — `metrics.salesSummary.period`
+(`"2026-01-01~2026-03-31"` 같은 자유 문자열, 선택값). BE 가 이 이름으로 확정하지
+않으면 다시 바꿔야 한다 — 가볍게 바꿀 수 있도록 선택값으로 열어 뒀다(아직 안 보내도
+422 아님). period 가 있으면 `build()`가 "집계 기간은 ...입니다" 한 줄을 프롬프트에
+넣고, 없으면(BE 반영 전 과거 요청) 여전히 **기간을 특정하는 말 자체를 쓰지 않는다** —
+"현재/이번/해당/지금 기간" 같은 빈말을 막는다(`app/services/solution.py::_VAGUE_PERIOD`).
+"이전/전 기간"(vsPrevPeriod 비교 대상)은 계약상 정의돼 있어 그대로 둔다.
+
 2026-09-16: docs/api정의서.md·docs/ERD정의서.md 확정 반영.
 - 요청에서 context(dayOfWeek/isWeekend/dataBasisPeriod)가 빠졌다. 서비스가 targetDate 로부터
   요일·주말 여부를 코드로 계산해 넘긴다 — 달력 계산이라 환각 위험이 없다(매출 수치 계산과는 다르다).
@@ -76,7 +90,7 @@ tests/test_prompts.py 가 순서를 지킨다.
 
 import json
 
-VERSION = "2026-10-14"
+VERSION = "2026-10-15"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -84,7 +98,10 @@ SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 비율은 소수가 아니라 백분율로 바꿔 쓰고(0.0885 → 8.85%), 음수 부호와 "감소"를 함께 쓰지 마세요.
 시간은 지표에 있는 24시간제 그대로 "14시"처럼 쓰고, "오후 2시" 같은 12시간제로 바꾸지
 마세요. 한 카드 안에서 같은 시간을 가리킬 때 표기를 통일하세요.
-증감률(vsPrevPeriod)이 없는 항목은 이전 기간과 비교하지 마세요. 현재 기간의 사실만 쓰세요.
+증감률(vsPrevPeriod)이 없는 항목은 이전 기간과 비교하지 마세요. 순매출 등 집계 지표가
+가리키는 기간은 아래에 "집계 기간"으로 주어지면 그 값을 그대로 쓰고, 주어지지 않았으면
+"현재 기간"·"이번 기간"처럼 뭉뚱그려 말하지 말고 기간 자체를 언급하지 마세요 — 모르면서
+아는 것처럼 들리는 말을 쓰면 안 됩니다.
 weatherContext는 오늘 예보일 뿐입니다. "비가 와서/때문에 매출이 줄었다"처럼 날씨가 과거
 매출에 영향을 줬다고 주장하지 마세요 — 그런 상관관계를 뒷받침할 지표가 없습니다. 오늘
 예보가 어떻다는 사실과, 그에 따라 정성적으로 무엇을 준비하면 좋을지만 쓰세요.
@@ -130,35 +147,59 @@ evidence 는 화면에는 보이지 않고 챗봇 컨텍스트·저장용으로�
 해법이 아니라 관찰된 사실만 담으세요.
 
 오늘은 {target_date}({day_of_week})이고 {weekend}입니다.
-
+{period_line}
 {focus_blocks}
 
 {{"solutionCards":[{{"rankNo":1,"title":"...","summaryText":"...","detailText":"...","evidence":"..."}}]}}"""
 
 
-def build(focus: list[dict], target_date: str, day_of_week: str, is_weekend: bool) -> str:
-    """focus 는 카드 순서대로의 근거 지표다 — app/services/solution_focus.py::assign 참고."""
+def build(
+    focus: list[dict],
+    target_date: str,
+    day_of_week: str,
+    is_weekend: bool,
+    period: str | None = None,
+) -> str:
+    """focus 는 카드 순서대로의 근거 지표다 — app/services/solution_focus.py::assign 참고.
+
+    period 는 salesSummary.netSales 등 집계 지표의 집계 기간이다(`SalesSummary.period`,
+    2026-10-15 추가 — BE 와 필드명 확정 전까지 AI 쪽에서 임시로 쓰는 이름). None 이면
+    BE 가 아직 안 보내는 것이므로 기간을 언급하지 말라고 SYSTEM 이 따로 지시한다.
+    """
     blocks = "\n\n".join(
         f"[카드 {index} 근거]\n{json.dumps(item, ensure_ascii=False)}"
         for index, item in enumerate(focus, start=1)
     )
+    period_line = f"집계 기간은 {period}입니다.\n" if period else ""
     return _USER.format(
         focus_blocks=blocks,
         card_count=len(focus),
         target_date=target_date,
         day_of_week=day_of_week,
         weekend="주말" if is_weekend else "평일",
+        period_line=period_line,
     )
 
 
 # app/services/solution.py::_violations 가 돌려주는 위반 코드 → 사람이 읽는 규칙 문장.
-# 재시도 피드백에만 쓴다. 넷 다 이미 SYSTEM·_USER 에 있는 규칙이라 새 규칙을 추가하는
-# 게 아니라 "방금 그걸 어겼다"를 강조하는 것이다.
+# 재시도 피드백에만 쓴다. 전부 이미 SYSTEM·_USER 에 있는 규칙이라 새 규칙을 추가하는
+# 게 아니라 "방금 그걸 어겼다"를 강조하는 것이다. DUPLICATE_FIGURE/VAGUE_ACTION 은
+# 2026-10-15 에 추가했다 — 실측(n=60, Qwen3-32B)에서 지켜지지 않는 비율이 너무 높아
+# 재시도 게이트 없이 그대로 나가고 있었다(수치_필드간_중복없음 90%, 공허한_조언_없음 53%).
+# VAGUE_PERIOD 도 2026-10-15 에 추가했다 — 점주 신고("현재 기간 순매출이 ...원이며",
+# 기준이 어디에도 없음)로 발견했다. BE 확인 결과 salesSummary.netSales 는 하루가 아니라
+# 분석 기간 합계라 targetDate 로 대체할 수도 없다 — 집계 기간 필드가 정해지기 전까지는
+# 기간 언급 자체를 피하게 한다.
 _RETRY_RULE_TEXT = {
     "FOREIGN_CHAR": "한글·영문이 아닌 문자(동형이의 문자 포함)를 쓰지 마세요.",
     "ROUNDED_AMOUNT": "금액을 만·억 단위로 어림하지 말고 지표에 있는 값을 그대로 쓰세요.",
     "COMPUTED_RATIO": '배율(예: "7배", "3분의 1")을 직접 계산해서 쓰지 마세요.',
     "AMPM_LEFT": "시간은 지표에 있는 24시간제 그대로 쓰세요.",
+    "DUPLICATE_FIGURE": "summaryText에 쓴 지표 수치를 title·detailText에서 다시 쓰지 마세요.",
+    "VAGUE_ACTION": (
+        '"마케팅을 강화하세요" 같은 뭉뚱그린 말 대신, 오늘 무엇을 다르게 할지 구체적으로 쓰세요.'
+    ),
+    "VAGUE_PERIOD": '"현재 기간"처럼 기간을 지칭하는 말을 쓰지 말고, 수치 사실만 쓰세요.',
 }
 
 

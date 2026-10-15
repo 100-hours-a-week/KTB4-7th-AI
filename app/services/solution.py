@@ -67,6 +67,30 @@ _COMPUTED_RATIO = re.compile(
     r"|\d+\s*분의\s*\d+"
 )
 
+# 화면에 보일 금액·비율만 본다. "21시"·"직원 1명" 같은 실행 지시용 작은 수는 애초에 안 걸린다.
+# devtools/grade.py::_DISPLAY_NUM 과 같은 패턴.
+_DISPLAY_NUM = re.compile(r"[\d,]{4,}\s*원|\d+\.?\d*\s*%")
+
+# 누구나 할 수 있는 말("마케팅을 강화하세요") — 프롬프트에 이미 금지 규칙이 있다(_USER
+# 116~118줄). 실측(n=60, Qwen3-32B)에서 거의 절반(43%)이 이걸 어겼는데 지금까지 재시도
+# 대상이 아니었다 — 전항목 통과율을 깎아먹는 압도적 1위 원인이라 추가한다(2026-10-15).
+# devtools/grade.py::_VAGUE_ACTION 과 같은 패턴이어야 하고, tests/test_solution_rules.py 가
+# 둘이 어긋나면 실패한다.
+_VAGUE_ACTION = re.compile(
+    r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[을를]?\s*"
+    r"(?:강화|개선|변경|확대|진행|실행|집중)"
+)
+
+# 점주 신고(2026-10-15): "현재 기간 순매출이 124,946,029원이며"처럼 기준 없이 기간을
+# 가리키는 문장이 나왔다. targetDate 를 그 자리에 박아 넣으면 되지 않을까 했는데, BE 확인
+# 결과 salesSummary.netSales 는 하루 매출이 아니라 분석 기간(salesAnalysisId 가 집계한
+# 기간) 합계였다 — targetDate 로 대체하면 기간 합계를 "오늘 하루 매출"처럼 더 구체적으로
+# 틀리게 말하게 된다. 집계 기간의 시작·끝을 어떤 필드로 받을지 BE 와 합의 전이라, 그
+# 필드가 오기 전까지는 "현재/이번/해당/지금 기간" 같은 빈말 자체를 막는다. "이전/전 기간"
+# (vsPrevPeriod 비교 대상)은 계약상 정의돼 있어 걸리지 않게 둔다. devtools/grade.py 의
+# 같은 이름 패턴과 일치해야 하고, tests/test_solution_rules.py 가 둘이 어긋나면 실패한다.
+_VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
+
 
 def _hour24(word: str, hour: int) -> int | None:
     """못 바꾸면 None — 손대지 않는 편이 틀리게 바꾸는 것보다 낫다."""
@@ -109,7 +133,42 @@ def _day_facts(target_date: str) -> tuple[str, bool]:
     return code, code in ("SAT", "SUN")
 
 
-def _parse(raw: str) -> tuple[list[SolutionCard] | None, set[str]]:
+def _metric_numbers(metrics: dict) -> set[str]:
+    """지표에 실제로 있는 값들. 비율은 백분율로도 인정한다(0.417 → 41.7).
+
+    devtools/grade.py::_metric_numbers 와 같은 로직이어야 한다 — 어긋나면 측정과 실제
+    동작이 갈린다.
+    """
+    out: set[str] = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, bool) or value is None:
+            return
+        elif isinstance(value, int):
+            out.add(str(value))
+        elif isinstance(value, float):
+            out.add(f"{value:g}")
+            out.add(f"{abs(value) * 100:g}")
+            out.add(f"{round(abs(value) * 100):g}")
+
+    walk(metrics)
+    return out
+
+
+def _metric_figures(text: str, metrics: dict) -> set[str]:
+    """그 문장이 인용한 지표 수치. devtools/grade.py::_metric_figures 와 같은 로직."""
+    allowed = _metric_numbers(metrics)
+    used = {m.group().replace(",", "").rstrip("원% \t") for m in _DISPLAY_NUM.finditer(text)}
+    return {n for n in used if n in allowed}
+
+
+def _parse(raw: str, metrics: dict) -> tuple[list[SolutionCard] | None, set[str]]:
     """계약·ERD 를 만족하는 카드만 돌려준다. 한 장도 안 남으면 None 이라 재시도한다.
 
     카드별 길이·범위 제약(rankNo ≥ 1, title 200자)은 스키마가 본다. 여기서는 스키마가
@@ -143,7 +202,7 @@ def _parse(raw: str) -> tuple[list[SolutionCard] | None, set[str]]:
     reasons: set[str] = set()
     kept: list[SolutionCard] = []
     for card in cards:
-        violations = _violations(card)
+        violations = _violations(card, metrics)
         if violations:
             reasons.update(violations)
         else:
@@ -168,10 +227,10 @@ def _normalize(card: dict) -> dict:
     }
 
 
-def _violations(card: SolutionCard) -> list[str]:
+def _violations(card: SolutionCard, metrics: dict) -> list[str]:
     """재시도로 보낼 이유. 비어 있으면 통과다. _normalize 를 거친 카드를 받는다.
 
-    넷 다 프롬프트에 규칙이 있는데 지켜지지 않는 것들이고, 치환으로는 못 고친다.
+    여섯 다 프롬프트에 규칙이 있는데 지켜지지 않는 것들이고, 치환으로는 못 고친다.
     시각은 대부분 _normalize 가 치환하지만("오후 2시" → "14시") 뜻이 정해지지 않는
     것들이 남는다("낮 7시") — 틀리게 바꾸느니 재시도가 낫다.
     """
@@ -185,6 +244,31 @@ def _violations(card: SolutionCard) -> list[str]:
         reasons.append("COMPUTED_RATIO")
     if any(_AMPM_LEFT.search(text) for text in texts):
         reasons.append("AMPM_LEFT")
+    if any(_VAGUE_PERIOD.search(text) for text in texts):
+        reasons.append("VAGUE_PERIOD")
+
+    # summaryText 가 쓴 지표 수치를 title·detailText 가 다시 쓰면 안 된다(_USER 105~109줄).
+    # evidence 는 화면에 안 보여서 예외다(2026-10-02 FE 확정). devtools/grade.py::_fields_disjoint
+    # 와 같은 로직.
+    figure_groups = [
+        _metric_figures(card.title, metrics),
+        _metric_figures(card.summaryText, metrics),
+        _metric_figures(card.detailText, metrics),
+    ]
+    if any(
+        figure_groups[i] & figure_groups[j]
+        for i in range(len(figure_groups))
+        for j in range(i + 1, len(figure_groups))
+    ):
+        reasons.append("DUPLICATE_FIGURE")
+
+    # 누구나 할 수 있는 말("마케팅을 강화하세요") — 기대효과 문장(detailText 마지막 줄)은
+    # 정성적 표현이 허용이라 보지 않는다(_USER 122~126줄). devtools/grade.py::_VAGUE_ACTION
+    # 과 같은 범위(title + detailText 앞 두 줄).
+    action_lines = [card.title, *card.detailText.split("\n")[:2]]
+    if any(_VAGUE_ACTION.search(line) for line in action_lines):
+        reasons.append("VAGUE_ACTION")
+
     return reasons
 
 
@@ -201,7 +285,8 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
     # 카드마다 쓸 근거 지표를 코드가 배정한다 — 모델이 고르게 두면 같은 지표로 두 장을
     # 만든다(실측 10 번 중 4 번). app/services/solution_focus.py 참고.
     focus = assign_focus(metrics)
-    base_prompt = solution_prompt.build(focus, req.targetDate, day_of_week, is_weekend)
+    period = req.metrics.salesSummary.period
+    base_prompt = solution_prompt.build(focus, req.targetDate, day_of_week, is_weekend, period)
 
     # 3장을 선호하되, 모자란 응답이라고 버리지는 않는다. 카드 2장이 나가는 것보다
     # 500 이 나가는 쪽이 점주에게 더 나쁘다 — 그날 솔루션이 아예 없어진다.
@@ -212,7 +297,7 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
         # 2026-10-11: 2회차부터는 1회차가 어긴 규칙을 프롬프트에 덧붙인다. 전에는
         # 1·2회차가 완전히 같은 프롬프트라 같은 종류의 위반이 반복될 수 있었다.
         prompt = base_prompt + (solution_prompt.retry_feedback(reasons) if attempt else "")
-        parsed, reasons = _parse(await llm.complete(solution_prompt.SYSTEM, prompt))
+        parsed, reasons = _parse(await llm.complete(solution_prompt.SYSTEM, prompt), metrics)
         # 더 많이 남은 쪽을 쥔다. `parsed or cards` 로 두면 2 장을 받아둔 뒤 재시도가
         # 1 장을 주면 더 나쁜 쪽으로 덮어쓴다.
         if parsed and (cards is None or len(parsed) > len(cards)):
