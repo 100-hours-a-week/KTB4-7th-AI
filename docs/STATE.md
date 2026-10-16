@@ -1,7 +1,34 @@
 # 작업 상태
 
 마지막 갱신: 2026-10-16
-브랜치: `feat/164-solution-vague-period` (Issue #164, 제나)
+브랜치: `feat/170-chat-tools` (Issue #170, 제나). 여러 워크트리가 병행 진행 중 —
+`feat/164-solution-vague-period`(#164)는 PR 전 상태로 별개.
+
+## 2026-10-16 — 챗봇 조회 툴 3종 추가: 순이익·날씨·상권 (Issue #170)
+
+챗봇이 순이익·날씨·상권 질문에 실시간으로 답할 수 있도록 조회 툴 3종을 추가했다. 기존
+`weatherContext`(솔루션 생성 입력 필드, 머지 완료)·`districtBenchmark`(인사이트 생성 입력
+필드, PR #161)와는 별개 기능이다 — 그쪽은 "생성 시점에 필드로 주입", 이건 "챗봇이 대화
+중 실시간 조회"다(`app/services/chat/graph.py` LangGraph 에이전트 툴콜 구조 사용). 두
+파이프라인이 애초에 다르다 — 생성 쪽은 `llm.complete()` 1회성 호출이라 에이전트 루프
+자체가 없어 툴콜이 불가능하고, 챗봇만 가능하다.
+
+- **`get_profit`** — 계약 이미 확정(`GET /internal/v2/sales/profit-analyses`, AI→BE 챗봇
+  툴 6종 목록에 원래 있었음). `TOOL_PATHS`의 기존 주석 처리된 경로가 v1으로 잘못 적혀
+  있던 버그도 고쳤다(v2가 맞음).
+- **`get_weather`**, **`get_district_benchmark`** — BE 계약 없음. AI 쪽 제안 경로로 등록하고
+  `devtools/stub_backend.py`로만 개발·검증한다. 응답 필드는 각각 이미 확정된
+  `WeatherContext`(`app/schemas/common.py`)·`districtBenchmark`(PR #161의
+  `DistrictBenchmark`)와 동일하게 맞춰 BE가 같은 데이터 소스를 재사용하기 쉽게 했다.
+  **배포 전 BE와 경로·필드 확정 필요.**
+- 세 툴 모두 기존 4종과 같은 evidence 매핑(`_EVIDENCE_METRIC_NAMES`/`_build_evidence`,
+  `app/services/chat/graph.py`)을 추가해 답변 수치가 서버 산출값과 일치하는지 검증되게
+  했다 — 계획에는 없었는데 기존 패턴과의 일관성을 위해 구현 중 추가했다.
+- `uv run pytest` 383 passed(최신 `dev`=PR #161 머지 반영 기준 재확인), ruff 통과.
+
+### 다음 한 걸음
+- 사용자 승인 받으면 PR(`Closes #170`, base `dev`).
+- 날씨·상권은 BE에 제안 경로·필드를 전달하고 확정되는 대로 `TOOL_PATHS`·스텁을 맞춘다.
 
 ## 2026-10-15 — 상권(districtBenchmark) 인사이트 반영 (Issue #157, PR #161)
 
