@@ -10,15 +10,18 @@ from app.core.errors import ApiError
 #
 # get_weather/get_district_benchmark는 BE 계약이 아직 없다(2026-10-16, Issue #170) — 여기
 # 경로는 AI 쪽 제안이고, BE 확정 전까지 devtools/stub_backend.py 로만 개발·테스트한다.
-# 실 배포 전 반드시 BE와 경로·필드를 맞춘다.
+# 실 배포 전 반드시 BE와 경로·필드를 맞춘다. v2인 이유는 get_profit과 같다 — 팀 릴리스
+# 버전 체계(v1 MVP / v2 순이익·날씨·상권 / v3 리뷰)에서 날씨·상권도 순이익과 같은 V2
+# 묶음이다(docs/STATE.md "v2 의 나머지 — 날씨·공휴일·상권"). 기존 v1 엔드포인트를 확장하는
+# 게 아니라 완전히 새로운 조회라 v1을 쓸 이유가 없다.
 TOOL_PATHS = {
     "get_sales_summary": "/internal/v1/sales/summary",
     "get_category_breakdown": "/internal/v1/sales/categories",
     "get_hourly_profile": "/internal/v1/sales/hourly-profiles",
     "get_forecast": "/internal/v1/sales/forecasts",
     "get_profit": "/internal/v2/sales/profit-analyses",
-    "get_weather": "/internal/v1/sales/weather",
-    "get_district_benchmark": "/internal/v1/sales/district-benchmark",
+    "get_weather": "/internal/v2/sales/weather",
+    "get_district_benchmark": "/internal/v2/sales/district-benchmark",
     # "get_review_summary": "/internal/v1/review-summaries",
 }
 
