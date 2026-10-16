@@ -12,6 +12,7 @@ from app.core.errors import ApiError
 from app.prompts import solution as solution_prompt
 from app.schemas.solution import SolutionCard, SolutionData, SolutionRequest, SolutionResponse
 from app.services.solution_focus import assign as assign_focus
+from app.services.solution_focus import derive as derive_metrics
 
 MAX_RETRY = 1
 MAX_CARDS = 3
@@ -133,6 +134,53 @@ def _day_facts(target_date: str) -> tuple[str, bool]:
     return code, code in ("SAT", "SUN")
 
 
+# 배율은 "지표에 있으면 인용, 없으면 날조" 다. derive() 가 넣어 주는 hourlyPeakRatio 만
+# 인정한다 — _metric_numbers 전체를 쓰면 hour 값(14·18)이 섞여 "14배" 가 통과한다.
+_RATIO_KEYS = ("hourlyPeakRatio",)
+_KO_NUMERALS = {
+    "두": "2",
+    "세": "3",
+    "네": "4",
+    "다섯": "5",
+    "여섯": "6",
+    "일곱": "7",
+    "여덟": "8",
+    "아홉": "9",
+    "열": "10",
+}
+
+
+def _allowed_ratios(metrics: dict) -> set[str]:
+    out: set[str] = set()
+    for key in _RATIO_KEYS:
+        for item in metrics.get(key) or []:
+            value = item.get("ratio") if isinstance(item, dict) else item
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                out.add(f"{float(value):g}")
+    return out
+
+
+def _ratio_value(text: str) -> str | None:
+    """배율 표현에서 숫자를 꺼낸다. "3분의 1" 처럼 못 꺼내면 None — 늘 날조로 본다."""
+    head = text.split("배")[0].strip()
+    if head in _KO_NUMERALS:
+        return _KO_NUMERALS[head]
+    try:
+        return f"{float(head):g}"
+    except ValueError:
+        return None
+
+
+def _ungrounded_ratios(texts, metrics: dict) -> bool:
+    allowed = _allowed_ratios(metrics)
+    for text in texts:
+        for match in _COMPUTED_RATIO.finditer(text):
+            value = _ratio_value(match.group())
+            if value is None or value not in allowed:
+                return True
+    return False
+
+
 def _metric_numbers(metrics: dict) -> set[str]:
     """지표에 실제로 있는 값들. 비율은 백분율로도 인정한다(0.417 → 41.7).
 
@@ -240,7 +288,7 @@ def _violations(card: SolutionCard, metrics: dict) -> list[str]:
         reasons.append("FOREIGN_CHAR")
     if any(_ROUNDED_AMOUNT.search(text) for text in texts):
         reasons.append("ROUNDED_AMOUNT")
-    if any(_COMPUTED_RATIO.search(text) for text in texts):
+    if _ungrounded_ratios(texts, metrics):
         reasons.append("COMPUTED_RATIO")
     if any(_AMPM_LEFT.search(text) for text in texts):
         reasons.append("AMPM_LEFT")
@@ -282,6 +330,9 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
     day_of_week, is_weekend = _day_facts(req.targetDate)
     # exclude_none: 값이 없는 지표(이전 기간 비교가 없는 첫 업로드 등)는 프롬프트에서 뺀다.
     metrics = req.metrics.model_dump(exclude_none=True)
+    # 코드가 먼저 계산해 둔다. 모델이 직접 계산하지 않아도 되고, _violations 도 같은
+    # 값을 봐야 "지표에 있는 배율" 을 날조로 거부하지 않는다.
+    metrics = derive_metrics(metrics)
     # 카드마다 쓸 근거 지표를 코드가 배정한다 — 모델이 고르게 두면 같은 지표로 두 장을
     # 만든다(실측 10 번 중 4 번). app/services/solution_focus.py 참고.
     focus = assign_focus(metrics)

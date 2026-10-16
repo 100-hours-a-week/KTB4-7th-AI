@@ -72,6 +72,40 @@ def _hourly_rows(points: list[dict]) -> list[dict]:
     return picked
 
 
+def peak_ratios(points: list[dict]) -> list[dict]:
+    """dayType 별 최고/최저 배수. 코드가 계산해 지표로 넘긴다.
+
+    왜. 30,000 대 210,000 이면 "7 배" 가 그 데이터의 핵심 사실인데, 프롬프트는 배율 계산을
+    금지한다("계산은 코드, 해석만 모델"). 그래서 모델이 그걸 말하려 할 때마다 거부되고
+    재시도가 돌았다 — 2026-10-16 실측에서 재시도 사유 1 위가 COMPUTED_RATIO 였고 3 건 모두
+    hourlyProfile 카드였다. 2026-10-11 에 retry_feedback() 으로 "방금 이 규칙을 어겼다" 를
+    알려줬는데도 2 회차에 또 쓴 사례가 있었다 — 말하지 말라고 막는 것으로는 안 풀린다.
+
+    계산을 코드가 해서 넘기면 모델은 인용만 하면 된다. 금지할 이유가 없어진다.
+
+    dayType 별로 따로 낸다. 평일 최고와 주말 최저를 섞으면 틀린 문장이 된다.
+    """
+    out = []
+    selling = _selling(points)
+    for day_type in dict.fromkeys(p.get("dayType") for p in selling):
+        amounts = [p.get("amount") or 0 for p in selling if p.get("dayType") == day_type]
+        if len(amounts) < 2 or min(amounts) <= 0:
+            continue
+        out.append({"dayType": day_type, "ratio": round(max(amounts) / min(amounts), 1)})
+    return out
+
+
+def derive(metrics: dict) -> dict:
+    """모델이 직접 계산하지 않아도 되게 코드가 미리 내는 파생 지표를 더한 사본.
+
+    호출부는 app/services/solution.py::generate 다. 채점기도 같은 값을 봐야 해서
+    devtools/bench.py 가 채점 전에 같이 부른다 — 안 그러면 "지표에 있는 배율" 을
+    채점기가 날조로 센다.
+    """
+    ratios = peak_ratios(metrics.get("hourlyProfile") or [])
+    return {**metrics, "hourlyPeakRatio": ratios} if ratios else metrics
+
+
 def _category_rows(points: list[dict]) -> list[dict]:
     """비중 상위 몇 종만 남긴다."""
     return sorted(points, key=lambda p: p.get("share") or 0.0, reverse=True)[:_TOP_SHARES]
@@ -113,6 +147,15 @@ def _weather_score(weather: dict | None) -> float:
     return _WEATHER_SUPPLEMENT_SCORE
 
 
+def _hourly_focus(metrics: dict, hourly: list[dict]) -> dict:
+    """시간대 근거. 배수가 있으면 같이 준다 — derive() 가 metrics 에 넣어 둔 값이다."""
+    focus: dict = {"hourlyProfile": _hourly_rows(hourly)}
+    ratios = metrics.get("hourlyPeakRatio")
+    if ratios:
+        focus["hourlyPeakRatio"] = ratios
+    return focus
+
+
 def assign(metrics: dict) -> list[dict]:
     """카드별 근거 지표를 돌려준다. 앞에서부터 rankNo 1·2·3 에 대응한다.
 
@@ -148,7 +191,7 @@ def assign(metrics: dict) -> list[dict]:
     # 점수는 받은 행 전부로 내고, 프롬프트에 넣는 행만 줄인다 — 격차 판단이 둔해지면
     # 어느 지표가 특이한지부터 틀린다.
     candidates = [
-        ({"hourlyProfile": _hourly_rows(hourly)}, _hourly_score(hourly) if hourly else -1.0),
+        (_hourly_focus(metrics, hourly), _hourly_score(hourly) if hourly else -1.0),
         (
             {"categoryBreakdown": _category_rows(category)},
             _category_score(category) if category else -1.0,

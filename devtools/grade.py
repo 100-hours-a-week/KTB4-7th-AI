@@ -45,7 +45,7 @@ def strip_fence(raw: str) -> str:
 # 항목은 손대지 않았다.
 # 2026-10-15 는 DUPLICATE_FIGURE/VAGUE_ACTION에 더해 "현재 기간"처럼 날짜 없이 기간을
 # 가리키는 말을 금지하는 규칙이 추가됐다(점주 신고) — `기간_날짜_명시`를 새로 잰다.
-TARGET_SOLUTION_VERSION = "2026-10-15"
+TARGET_SOLUTION_VERSION = "2026-10-16"
 TARGET_INSIGHT_VERSION = "2026-10-08"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
@@ -97,6 +97,55 @@ _DOW_KO = {
     "SATURDAY": "토요일",
     "SUNDAY": "일요일",
 }
+
+
+# 배율은 "지표에 있으면 인용, 없으면 날조" 다(2026-10-16). 서비스가
+# app/services/solution_focus.py::derive 로 hourlyPeakRatio 를 넣어 주고, 러너는 채점 전에
+# 같은 함수를 부른다 — 안 부르면 지표에 있는 배율을 날조로 센다.
+# _metric_numbers 전체를 쓰지 않는 이유: hour 값(14·18)이 섞여 "14배" 가 통과한다.
+# app/services/solution.py 의 같은 이름 함수들과 로직이 같아야 한다.
+_RATIO_KEYS = ("hourlyPeakRatio",)
+_KO_NUMERALS = {
+    "두": "2",
+    "세": "3",
+    "네": "4",
+    "다섯": "5",
+    "여섯": "6",
+    "일곱": "7",
+    "여덟": "8",
+    "아홉": "9",
+    "열": "10",
+}
+
+
+def _allowed_ratios(metrics) -> set[str]:
+    out: set[str] = set()
+    for key in _RATIO_KEYS:
+        for item in metrics.get(key) or []:
+            value = item.get("ratio") if isinstance(item, dict) else item
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                out.add(f"{float(value):g}")
+    return out
+
+
+def _ratio_value(text: str) -> str | None:
+    head = text.split("배")[0].strip()
+    if head in _KO_NUMERALS:
+        return _KO_NUMERALS[head]
+    try:
+        return f"{float(head):g}"
+    except ValueError:
+        return None
+
+
+def _ungrounded_ratios(texts, metrics) -> bool:
+    allowed = _allowed_ratios(metrics)
+    for text in texts:
+        for match in _RATIO_WORD.finditer(text):
+            value = _ratio_value(match.group())
+            if value is None or value not in allowed:
+                return True
+    return False
 
 
 def _metric_numbers(metrics) -> set[str]:
@@ -276,7 +325,7 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 
     result["금액_어림_없음"] = not any(_ROUNDED.search(t) for t in visible + evidences)
     result["시각_24시간제"] = not any(_AMPM.search(t) for t in visible)
-    result["배율_없음"] = not any(_RATIO_WORD.search(t) for t in visible)
+    result["배율_없음"] = not _ungrounded_ratios(visible, metrics)
     result["요일_환각_없음"] = not any(
         _label_hallucination(t, metrics) for t in visible + evidences
     )
