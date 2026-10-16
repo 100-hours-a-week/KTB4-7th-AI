@@ -4,15 +4,21 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fi
 from app.core.config import settings
 from app.core.errors import ApiError
 
-# docs/api정의서.md 확정 반영 (2026-09-16). v1 MVP는 4종만 활성화한다 —
-# 순이익·리뷰는 API 정의서에 있지만 원본 데이터를 만드는 백엔드 잡이 아직 v1에 없어
-# 호출해도 항상 빈 값이다(계약 대조표 §6 참고). 스텁 응답은 devtools/stub_backend.py 에 준비돼 있다.
+# docs/api정의서.md 확정 반영 (2026-09-16), 순이익 추가(2026-10-16, Issue #170).
+# 리뷰는 아직 v1 MVP 범위 밖이라 비활성 상태다 — 원본 데이터를 만드는 백엔드 잡이 없어
+# 호출해도 항상 빈 값이다(계약 대조표 §6 참고).
+#
+# get_weather/get_district_benchmark는 BE 계약이 아직 없다(2026-10-16, Issue #170) — 여기
+# 경로는 AI 쪽 제안이고, BE 확정 전까지 devtools/stub_backend.py 로만 개발·테스트한다.
+# 실 배포 전 반드시 BE와 경로·필드를 맞춘다.
 TOOL_PATHS = {
     "get_sales_summary": "/internal/v1/sales/summary",
     "get_category_breakdown": "/internal/v1/sales/categories",
     "get_hourly_profile": "/internal/v1/sales/hourly-profiles",
     "get_forecast": "/internal/v1/sales/forecasts",
-    # "get_profit": "/internal/v1/sales/profit-analyses",
+    "get_profit": "/internal/v2/sales/profit-analyses",
+    "get_weather": "/internal/v1/sales/weather",
+    "get_district_benchmark": "/internal/v1/sales/district-benchmark",
     # "get_review_summary": "/internal/v1/review-summaries",
 }
 

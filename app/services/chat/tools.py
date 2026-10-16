@@ -1,7 +1,9 @@
-"""위키 [AI] 단계4 §4.2. 챗봇이 부족한 지표를 조회할 때 쓰는 툴 6종 중 활성화된 4종.
+"""위키 [AI] 단계4 §4.2. 챗봇이 부족한 지표를 조회할 때 쓰는 툴 8종 중 활성화된 7종
+(2026-10-16, Issue #170 — 순이익·날씨·상권 추가).
 
 storeId는 요청 범위 값이라 LLM에 노출하지 않고 클로저로 고정한다.
-나머지 2종(순이익 v2, 리뷰 v3)은 app/clients/backend.py TOOL_PATHS 와 동일하게 MVP 범위 밖이다.
+리뷰(v3)만 app/clients/backend.py TOOL_PATHS 와 동일하게 MVP 범위 밖이다.
+get_weather/get_district_benchmark는 BE 계약 확정 전이라 스텁 기준으로만 동작한다.
 """
 
 from langchain_core.tools import tool
@@ -64,4 +66,38 @@ def build_tools(store_id: int) -> list:
             "get_forecast", {"storeId": store_id, "targetDate": target_date}
         )
 
-    return [get_sales_summary, get_category_breakdown, get_hourly_profile, get_forecast]
+    @tool
+    async def get_profit(
+        period: str, start_date: str | None = None, end_date: str | None = None
+    ) -> dict:
+        """기간 순이익(순매출·원가·고정비·구성비)을 조회한다.
+        period: TODAY | THIS_WEEK | THIS_MONTH | CUSTOM.
+        period=CUSTOM 이면 start_date/end_date(YYYY-MM-DD)가 필수다."""
+        return await backend.call_tool(
+            "get_profit",
+            {"storeId": store_id, "period": period, "startDate": start_date, "endDate": end_date},
+        )
+
+    @tool
+    async def get_weather(target_date: str | None = None) -> dict:
+        """매장 지역의 날씨 예보를 조회한다.
+        target_date(YYYY-MM-DD)를 생략하면 오늘 기준이다."""
+        return await backend.call_tool(
+            "get_weather", {"storeId": store_id, "targetDate": target_date}
+        )
+
+    @tool
+    async def get_district_benchmark() -> dict:
+        """매장이 속한 상권의 동종업종(카페) 평균 매출·피크 시간대를 조회한다.
+        점포 수가 3곳 미만이거나 비교 가능한 상권 데이터가 없으면 빈 값이 올 수 있다."""
+        return await backend.call_tool("get_district_benchmark", {"storeId": store_id})
+
+    return [
+        get_sales_summary,
+        get_category_breakdown,
+        get_hourly_profile,
+        get_forecast,
+        get_profit,
+        get_weather,
+        get_district_benchmark,
+    ]

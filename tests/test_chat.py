@@ -184,6 +184,87 @@ async def test_부족하면_툴을_호출한_뒤_답하고_evidence를_함께_�
     }
 
 
+async def test_순이익을_물어보면_get_profit을_부르고_evidence를_함께_보낸다(monkeypatch):
+    tool_call_msg = AIMessage(
+        content="", tool_calls=[{"name": "get_profit", "args": {"period": "TODAY"}, "id": "call_1"}]
+    )
+    final_msg = AIMessage(content="오늘 순이익은 96만원이에요.")
+    _patch_model(monkeypatch, [tool_call_msg, final_msg])
+
+    async def fake_call_tool(tool: str, params: dict) -> dict:
+        assert tool == "get_profit"
+        assert params == {
+            "storeId": 1024,
+            "period": "TODAY",
+            "startDate": None,
+            "endDate": None,
+        }
+        return {"netSales": 3200000, "netProfit": 960000}
+
+    monkeypatch.setattr(backend, "call_tool", fake_call_tool)
+
+    res = await _post(REQUEST_BODY)
+
+    events = _events(res.text)
+    assert "96만원" in "".join(e["content"] for e in events)
+    assert events[-1]["evidence"] == {
+        "metric": "profit",
+        "period": "TODAY",
+        "dayType": None,
+        "value": 960000,
+    }
+
+
+async def test_날씨를_물어보면_get_weather를_부르고_evidence를_함께_보낸다(monkeypatch):
+    tool_call_msg = AIMessage(
+        content="", tool_calls=[{"name": "get_weather", "args": {}, "id": "call_1"}]
+    )
+    final_msg = AIMessage(content="오늘 비가 올 확률은 70%예요.")
+    _patch_model(monkeypatch, [tool_call_msg, final_msg])
+
+    async def fake_call_tool(tool: str, params: dict) -> dict:
+        assert tool == "get_weather"
+        assert params == {"storeId": 1024, "targetDate": None}
+        return {"basisDateTime": "2026-10-07 11:00", "maxPop": 0.7}
+
+    monkeypatch.setattr(backend, "call_tool", fake_call_tool)
+
+    res = await _post(REQUEST_BODY)
+
+    events = _events(res.text)
+    assert events[-1]["evidence"] == {
+        "metric": "weather",
+        "period": "2026-10-07 11:00",
+        "dayType": None,
+        "value": 0.7,
+    }
+
+
+async def test_상권을_물어보면_get_district_benchmark를_부르고_evidence를_함께_보낸다(monkeypatch):
+    tool_call_msg = AIMessage(
+        content="", tool_calls=[{"name": "get_district_benchmark", "args": {}, "id": "call_1"}]
+    )
+    final_msg = AIMessage(content="우리 상권 카페 평균은 1,850만원이에요.")
+    _patch_model(monkeypatch, [tool_call_msg, final_msg])
+
+    async def fake_call_tool(tool: str, params: dict) -> dict:
+        assert tool == "get_district_benchmark"
+        assert params == {"storeId": 1024}
+        return {"basisQuarter": "2026Q2", "districtAvgMonthlySalesPerCafe": 18500000}
+
+    monkeypatch.setattr(backend, "call_tool", fake_call_tool)
+
+    res = await _post(REQUEST_BODY)
+
+    events = _events(res.text)
+    assert events[-1]["evidence"] == {
+        "metric": "district_benchmark",
+        "period": "2026Q2",
+        "dayType": None,
+        "value": 18500000,
+    }
+
+
 async def test_툴을_부르지_않으면_evidence는_null이다(monkeypatch):
     _patch_model(monkeypatch, [AIMessage(content="오늘 솔루션은 오후 매출이 낮아서 나왔어요.")])
 
