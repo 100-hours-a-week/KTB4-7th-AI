@@ -143,6 +143,8 @@ async def complete(
                 extra["reasoning_effort"] = "none"
             if timeout:
                 extra["timeout"] = timeout
+            if settings.llm_temperature is not None:
+                extra["temperature"] = settings.llm_temperature
             body = thinking_off_body()
             if body:
                 extra["extra_body"] = body
