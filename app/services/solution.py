@@ -287,10 +287,12 @@ def _parse(raw: str, metrics: dict) -> tuple[list[SolutionCard] | None, set[str]
     kept: list[SolutionCard] = []
     for card in cards:
         violations = _violations(card, metrics)
-        if violations:
-            reasons.update(violations)
-        else:
-            kept.append(card)
+        # 사유는 전부 모은다. 다른 카드 때문에 재시도가 어차피 돌면 밋밋한 사유도
+        # 프롬프트 피드백에 같이 실어 보낸다 — 호출을 더 쓰지 않고 품질만 챙긴다.
+        reasons.update(violations)
+        if any(reason in _BLOCKING_REASONS for reason in violations):
+            continue
+        kept.append(card)
     if not kept:
         return None, reasons
     # 중간이 빠지면 rankNo 가 1·3 으로 나간다. 장수가 줄어드는 경우(배정 지표가 2 종일 때)
@@ -309,6 +311,29 @@ def _normalize(card: dict) -> dict:
         key: to_24h(value) if key in _TEXT_FIELDS and isinstance(value, str) else value
         for key, value in card.items()
     }
+
+
+# 재시도로 **차단**하는 사유. 나머지(DUPLICATE_FIGURE·VAGUE_ACTION)는 검출만 하고
+# 카드를 버리지 않는다 — devtools/grade.py 는 전부 재므로 측정에서는 그대로 보인다.
+#
+# 기준은 "틀린 말이냐, 밋밋한 말이냐" 다. 틀린 말은 점주가 믿고 행동하면 손해를 본다 —
+# 없는 숫자, 어림 금액, 잘못된 시각, 기준 없는 기간. 밋밋한 말(공허한 조언, 같은 수치
+# 반복)은 보기 아쉽지만 **카드가 통째로 사라지는 것보다 낫다.**
+#
+# 2026-10-17 A40 5차 실측이 근거다. 게이트 8 개로 콘텐츠 품질은 98~100% 가 됐는데
+# `카드_개수_일치` 가 23.3% 로 떨어졌다 — 점주 10 명 중 8 명이 3 장을 못 받는다.
+# MAX_RETRY=1 이라 초과분이 지연이 아니라 카드 손실로 흡수된다. 게이트 수와
+# `카드_개수_일치` 가 거의 선형이다(4 개 91.7% → 6 개 70.0% → 65.0% → 8 개 23.3%).
+_BLOCKING_REASONS = frozenset(
+    {
+        "FOREIGN_CHAR",
+        "ROUNDED_AMOUNT",
+        "COMPUTED_RATIO",
+        "UNGROUNDED_NUMBER",
+        "AMPM_LEFT",
+        "VAGUE_PERIOD",
+    }
+)
 
 
 def _violations(card: SolutionCard, metrics: dict) -> list[str]:
