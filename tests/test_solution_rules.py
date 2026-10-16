@@ -134,7 +134,7 @@ def test_날짜가_있거나_이전_기간_비교는_통과한다(text):
     assert not _VAGUE_PERIOD.search(text)
 
 
-async def test_금액을_어림하면_재시도한다(monkeypatch):
+async def test_금액을_어림하면_그_카드를_버린다(monkeypatch):
     calls = []
 
     async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
@@ -148,11 +148,11 @@ async def test_금액을_어림하면_재시도한다(monkeypatch):
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
-    assert len(calls) == 2
+    assert len(calls) == 1, "재시도하지 않는다 — 버리고 끝낸다(2026-10-17 최소 1·최대 3장)"
     assert "3만원" not in json.dumps(res.json(), ensure_ascii=False)
 
 
-async def test_배율을_쓰면_재시도한다(monkeypatch):
+async def test_배율을_쓰면_그_카드를_버린다(monkeypatch):
     calls = []
 
     async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
@@ -166,28 +166,35 @@ async def test_배율을_쓰면_재시도한다(monkeypatch):
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
-    assert len(calls) == 2
+    assert len(calls) == 1, "재시도하지 않는다 — 버리고 끝낸다(2026-10-17 최소 1·최대 3장)"
 
 
-async def test_뭉뚱그린_조언이면_재시도한다(monkeypatch):
+async def test_뭉뚱그린_조언은_재시도하지_않고_내보낸다(monkeypatch):
+    """2026-10-17 분리. 밋밋한 말은 점주가 믿고 행동해도 손해를 보지 않는다 — 그 한 장을
+    버리고 2 장만 주는 쪽이 더 나쁘다.
+
+    A40 5차 실측에서 게이트 8 개로 `카드_개수_일치` 가 23.3% 까지 떨어졌다(게이트 4 개였던
+    1 차는 91.7%). MAX_RETRY=1 이라 초과분이 지연이 아니라 카드 손실로 나간다.
+    채점기(devtools/grade.py)는 그대로 재므로 측정에서는 계속 보인다.
+    """
     calls = []
 
     async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
         calls.append(1)
-        if len(calls) == 1:
-            return _cards((1, "마케팅을 강화하세요"), (2, "B"), (3, "C"))
-        return _cards((1, "A"), (2, "B"), (3, "C"))
+        return _cards((1, "마케팅을 강화하세요"), (2, "B"), (3, "C"))
 
     monkeypatch.setattr(llm, "complete", fake_complete)
 
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
-    assert len(calls) == 2
-    assert "마케팅을 강화" not in json.dumps(res.json(), ensure_ascii=False)
+    assert len(calls) == 1, "재시도하지 않는다"
+    cards = res.json()["data"]["solutionCards"]
+    assert len(cards) == 3, "카드를 버리지 않는다"
+    assert "마케팅을 강화" in json.dumps(cards, ensure_ascii=False)
 
 
-async def test_날짜_없는_기간표현이면_재시도한다(monkeypatch):
+async def test_날짜_없는_기간표현이면_그_카드를_버린다(monkeypatch):
     calls = []
 
     async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
@@ -203,7 +210,7 @@ async def test_날짜_없는_기간표현이면_재시도한다(monkeypatch):
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
-    assert len(calls) == 2
+    assert len(calls) == 1, "재시도하지 않는다 — 버리고 끝낸다(2026-10-17 최소 1·최대 3장)"
     assert "현재 기간" not in json.dumps(res.json(), ensure_ascii=False)
 
 
@@ -229,8 +236,10 @@ async def test_집계_기간이_요청에_있으면_프롬프트에_전달된다
     assert "집계 기간은 2026-01-01~2026-03-31입니다" in prompts[0]
 
 
-async def test_수치가_필드_사이에_중복되면_재시도한다(monkeypatch):
-    """summaryText 가 쓴 지표 수치(예상 매출 1,250,000원)를 title 이 다시 쓰면 안 된다."""
+async def test_수치가_필드_사이에_중복돼도_재시도하지_않는다(monkeypatch):
+    """2026-10-17 분리. 같은 수치를 반복하는 건 읽기 아쉬운 것이지 틀린 게 아니다 —
+    그 카드를 버리고 2 장만 주는 쪽이 점주에게 더 나쁘다. 채점기는 그대로 잰다.
+    """
     calls = []
 
     def _dup_card() -> str:
@@ -265,16 +274,15 @@ async def test_수치가_필드_사이에_중복되면_재시도한다(monkeypat
 
     async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
         calls.append(1)
-        if len(calls) == 1:
-            return _dup_card()
-        return _cards((1, "A"), (2, "B"), (3, "C"))
+        return _dup_card()
 
     monkeypatch.setattr(llm, "complete", fake_complete)
 
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
-    assert len(calls) == 2
+    assert len(calls) == 1, "재시도하지 않는다"
+    assert len(res.json()["data"]["solutionCards"]) == 3, "카드를 버리지 않는다"
 
 
 async def test_두_번_다_위반이면_500_이_아니라_남은_카드가_나간다(monkeypatch):
@@ -295,7 +303,7 @@ async def test_두_번_다_위반이면_500_이_아니라_남은_카드가_나�
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200, "500 이 나가면 그날 솔루션이 없어진다"
-    assert len(calls) == 2, "3 장을 선호하는 건 그대로다 — 재시도는 돈다"
+    assert len(calls) == 1, "위반 카드만 버리고 끝낸다 — 3 장을 채우려 다시 부르지 않는다"
     cards = res.json()["data"]["solutionCards"]
     assert len(cards) == 2
     assert "3만원" not in json.dumps(cards, ensure_ascii=False)
@@ -602,3 +610,55 @@ def test_구체적인_실행은_통과시킨다(text):
     '집중 배치'·'집중 편성' 류가 가장 흔한 정상 문장이다.
     """
     assert not _VAGUE_ACTION.search(text), text
+
+
+async def test_틀린_말은_카드를_버려서_막는다(monkeypatch):
+    """분리의 반대쪽. 없는 숫자·어림 금액·잘못된 시각은 점주가 믿고 행동하면 손해를
+    본다 — 카드를 버려서라도 막는다.
+    """
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return _cards((1, "매출이 3만원인 시간대"), (2, "B"), (3, "C"))
+        return _cards((1, "A"), (2, "B"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    assert len(calls) == 1, "재시도하지 않는다 — 버리고 끝낸다(2026-10-17 최소 1·최대 3장)"
+    assert "3만원" not in json.dumps(res.json(), ensure_ascii=False)
+
+
+async def test_전부_차단되면_재시도하고_밋밋한_사유도_피드백에_싣는다(monkeypatch):
+    """재시도는 한 장도 못 건졌을 때만 돈다(2026-10-17). 그때가 피드백이 가장 필요한
+    자리이고, 밋밋한 사유도 같이 실어 보낸다 — 호출을 더 쓰지 않고 품질만 챙긴다.
+    """
+    prompts = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+        prompts.append(user)
+        if len(prompts) == 1:
+            return _cards(
+                (1, "매출이 3만원인 시간대"),
+                (2, "매출이 5만원이고 마케팅을 강화하세요"),
+                (3, "매출이 7만원인 구간"),
+            )
+        return _cards((1, "A"), (2, "B"), (3, "C"))
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    await _post(REQUEST_BODY)
+
+    assert len(prompts) == 2, "한 장도 못 건지면 재시도한다"
+    feedback = prompts[1]
+    assert "천 단위" in feedback or "어림" in feedback, "차단 사유가 피드백에 있다"
+    assert "마케팅" in feedback or "홍보" in feedback, "밋밋한 사유도 같이 실린다"
+
+
+def test_차단_사유와_측정_전용_사유가_갈려_있다():
+    from app.services.solution import _BLOCKING_REASONS
+
+    assert "DUPLICATE_FIGURE" not in _BLOCKING_REASONS
+    assert "VAGUE_ACTION" not in _BLOCKING_REASONS
+    assert {"UNGROUNDED_NUMBER", "ROUNDED_AMOUNT", "COMPUTED_RATIO"} <= _BLOCKING_REASONS
