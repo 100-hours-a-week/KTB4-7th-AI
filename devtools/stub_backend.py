@@ -51,8 +51,8 @@ RESPONSES = {
         "netProfit": 960000,
         "composition": [{"type": "NET_PROFIT", "amount": 960000, "ratio": 0.3}],
     },
-    # 날씨·상권은 BE 계약 미확정(2026-10-16, Issue #170) — 아래 값은 AI 쪾 제안 모양이고
-    # 실제 BE 응답과 다를 수 있다. 확정되면 이 스텁도 맞춰 고친다.
+    # 날씨·상권은 경로는 BE와 협의 완료, 응답 필드는 미확정(2026-10-16, Issue #170) —
+    # 아래 값은 AI 쪾 제안 모양이고 실제 BE 응답과 다를 수 있다. 확정되면 이 스텁도 맞춰 고친다.
     "get_weather": {
         "basisDateTime": "2026-10-07 11:00",
         "skyText": "비",

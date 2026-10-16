@@ -8,12 +8,11 @@ from app.core.errors import ApiError
 # 리뷰는 아직 v1 MVP 범위 밖이라 비활성 상태다 — 원본 데이터를 만드는 백엔드 잡이 없어
 # 호출해도 항상 빈 값이다(계약 대조표 §6 참고).
 #
-# get_weather/get_district_benchmark는 BE 계약이 아직 없다(2026-10-16, Issue #170) — 여기
-# 경로는 AI 쪽 제안이고, BE 확정 전까지 devtools/stub_backend.py 로만 개발·테스트한다.
-# 실 배포 전 반드시 BE와 경로·필드를 맞춘다. v2인 이유는 get_profit과 같다 — 팀 릴리스
-# 버전 체계(v1 MVP / v2 순이익·날씨·상권 / v3 리뷰)에서 날씨·상권도 순이익과 같은 V2
-# 묶음이다(docs/STATE.md "v2 의 나머지 — 날씨·공휴일·상권"). 기존 v1 엔드포인트를 확장하는
-# 게 아니라 완전히 새로운 조회라 v1을 쓸 이유가 없다.
+# get_weather/get_district_benchmark 경로는 BE와 협의 완료(2026-10-16, Issue #170).
+# v2인 이유는 get_profit과 같다 — 팀 릴리스 버전 체계(v1 MVP / v2 순이익·날씨·상권 / v3
+# 리뷰)에서 날씨·상권도 순이익과 같은 V2 묶음이다(docs/STATE.md "v2 의 나머지 — 날씨·
+# 공휴일·상권"). 응답 필드 상세는 아직 BE 확정 전이라 devtools/stub_backend.py 는
+# AI 쪽 제안 모양(WeatherContext/DistrictBenchmark와 동일)으로 개발·테스트한다.
 TOOL_PATHS = {
     "get_sales_summary": "/internal/v1/sales/summary",
     "get_category_breakdown": "/internal/v1/sales/categories",
