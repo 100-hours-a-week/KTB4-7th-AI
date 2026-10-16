@@ -441,3 +441,80 @@ def test_채점기와_서비스가_같은_배율_접지를_쓴다():
 
         assert graded["배율_없음"] is grounded, text
         assert service_ok is grounded, text
+
+
+# ── 지표에 없는 수 · 비교 불가 축 (2026-10-16) ────────────────────────
+# 배포본 카드 셋에서 나왔다.
+#   "남은 시간 동안 253,196원을 추가로 만들어야 합니다"  ← 255,396 - 2,200 을 모델이 계산
+#   "평일 9시 매출이 다른 시간대에 비해 현저히 낮습니다"   ← 시간대 행이 하나뿐이었다
+
+_SPARSE = derive(
+    {
+        "salesSummary": {"netSales": 2200},
+        "predictedSalesToday": 255396,
+        "hourlyProfile": [{"dayType": "WEEKDAY", "hour": 9, "amount": 2200}],
+        "categoryBreakdown": [{"name": "미분류", "share": 1.0}],
+    }
+)
+
+
+def test_지표에_없는_금액을_지어내면_거부한다():
+    text = (
+        "현재까지 순매출이 2,200원인데 오늘 예상은 255,396원으로, 253,196원을 더 만들어야 합니다."
+    )
+    assert _violations(_ratio_card(text), _SPARSE) == ["UNGROUNDED_NUMBER"]
+
+
+def test_지표에_있는_금액은_그대로_통과한다():
+    text = "현재까지 순매출은 2,200원이고 오늘 예상 매출은 255,396원입니다."
+    assert not _violations(_ratio_card(text), _SPARSE)
+
+
+@pytest.mark.parametrize("text", ["14시까지 입간판을 내어 두세요", "9시에 문을 여세요"])
+def test_한두_자리_수는_실행_지시라_통과한다(text):
+    """시각·인원은 지표에 없어도 프롬프트가 허용한다 — 막으면 실행 문장을 못 쓴다."""
+    assert not _violations(_ratio_card(text), _SPARSE)
+
+
+def test_비교할_행이_없으면_시간대_축을_배정하지_않는다():
+    """0.0 을 돌려주면 "할 말은 없지만 후보" 가 되어 카드로 배정되고, 모델은 배정받은
+    지표로 뭐든 써야 하니 없는 비교를 지어낸다.
+    """
+    from app.services.solution_focus import _hourly_score, assign
+
+    one_row = [{"dayType": "WEEKDAY", "hour": 9, "amount": 2200}]
+    assert _hourly_score(one_row) == -1.0
+    assert not any("hourlyProfile" in item for item in assign(_SPARSE))
+
+
+def test_비교할_행이_있으면_그대로_배정한다():
+    two_rows = [
+        {"dayType": "WEEKDAY", "hour": 9, "amount": 2200},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ]
+    from app.services.solution_focus import _hourly_score, assign
+
+    assert _hourly_score(two_rows) > 0
+    assert any("hourlyProfile" in item for item in assign({**_SPARSE, "hourlyProfile": two_rows}))
+
+
+def test_채점기가_title_summaryText_의_수치도_본다():
+    """그동안 evidence·detailText 만 봤다. 배포본 날조가 summaryText 에 있었는데
+    측정에서는 수치_정확 100% 로 보였다.
+    """
+    import json
+
+    from devtools.grade import grade_solution
+
+    card = {
+        "rankNo": 1,
+        "title": "가",
+        "summaryText": "253,196원을 더 만들어야 합니다.",
+        "detailText": "가.\n나.\n다.",
+        "evidence": "가",
+    }
+    raw = json.dumps({"solutionCards": [card]}, ensure_ascii=False)
+    graded = grade_solution(raw, _SPARSE, expected_cards=1)
+
+    assert graded["summary_수치_정확"] is False
+    assert graded["detail_수치_정확"] is True, "detailText 에는 날조가 없다"

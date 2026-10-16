@@ -329,6 +329,10 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["요일_환각_없음"] = not any(
         _label_hallucination(t, metrics) for t in visible + evidences
     )
+    # title·summaryText 는 그동안 수치 검사 밖이었다(2026-10-16 발견). 배포본에서
+    # "남은 시간 동안 253,196원을 추가로 만들어야 합니다"가 summaryText 에 나왔는데
+    # 측정에서는 수치_정확 100% 로 보였다 — 화면에 보이는 필드가 검사에서 빠져 있었다.
+    result["summary_수치_정확"] = not any(_ungrounded(t, metrics) for t in titles + summaries)
     result["evidence_수치_정확"] = not any(_ungrounded(e, metrics) for e in evidences)
     result["detail_수치_정확"] = not any(_ungrounded(d, metrics) for d in details)
 

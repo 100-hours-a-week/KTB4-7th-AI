@@ -333,5 +333,13 @@ def test_기호가_섞인_정상_문장은_재시도하지_않는다():
         ensure_ascii=False,
     )
 
-    cards, _ = _parse(raw, {})
+    # 지표를 비워 넘기면 문장의 모든 숫자가 "지표에 없는 수" 가 돼 UNGROUNDED_NUMBER 로
+    # 걸린다(2026-10-16). 이 테스트는 기호·구두점을 보는 것이라 숫자는 접지돼 있어야 한다.
+    cards, _ = _parse(
+        raw,
+        {
+            "salesSummary": {"averageOrderValue": 8581, "orderCount": 923, "vsPrevPeriod": 0.0885},
+            "categoryBreakdown": [{"name": "커피", "amount": 1340580, "share": 0.417}],
+        },
+    )
     assert cards is not None

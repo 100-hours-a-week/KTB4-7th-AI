@@ -65,7 +65,11 @@ def _raw(detail: str) -> str:
 
 def test_파싱_단계에서_네_필드_모두_치환된다():
     detail = "오후 2시에 안내하세요.\n오후 3시에 점검하세요.\n방문을 늘릴 수 있습니다."
-    cards, _ = _parse(_raw(detail), {})
+    # 지표를 비워 넘기면 30,000 이 "지표에 없는 수" 가 된다(2026-10-16).
+    cards, _ = _parse(
+        _raw(detail),
+        {"hourlyProfile": [{"dayType": "WEEKDAY", "hour": 14, "amount": 30000}]},
+    )
 
     assert cards is not None
     card = cards[0]
