@@ -63,6 +63,9 @@ _EVIDENCE_METRIC_NAMES = {
     "get_category_breakdown": "category_breakdown",
     "get_hourly_profile": "hourly_profile",
     "get_forecast": "forecast",
+    "get_profit": "profit",
+    "get_weather": "weather",
+    "get_district_benchmark": "district_benchmark",
 }
 
 
@@ -167,6 +170,27 @@ def _build_evidence(tool_name: str, args: dict, result: dict) -> dict | None:
             "period": first.get("targetDate"),
             "dayType": None,
             "value": first.get("predictedSalesAmount"),
+        }
+    if tool_name == "get_profit":
+        return {
+            "metric": metric,
+            "period": args.get("period"),
+            "dayType": None,
+            "value": result.get("netProfit"),
+        }
+    if tool_name == "get_weather":
+        return {
+            "metric": metric,
+            "period": result.get("basisDateTime"),
+            "dayType": None,
+            "value": result.get("maxPop"),
+        }
+    if tool_name == "get_district_benchmark":
+        return {
+            "metric": metric,
+            "period": result.get("basisQuarter"),
+            "dayType": None,
+            "value": result.get("districtAvgMonthlySalesPerCafe"),
         }
     return {
         "metric": metric,

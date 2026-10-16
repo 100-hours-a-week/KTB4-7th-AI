@@ -44,8 +44,6 @@ RESPONSES = {
         ],
         "generatedAt": "2026-09-08T00:10:00+09:00",
     },
-    # 아래 2종은 TOOL_PATHS 에서 주석 처리돼 있어 지금은 라우트로 등록되지 않는다.
-    # v1 MVP 포함으로 결정되면 TOOL_PATHS 주석만 풀면 바로 살아난다.
     "get_profit": {
         "netSales": 3200000,
         "ingredientCost": 1040000,
@@ -53,6 +51,27 @@ RESPONSES = {
         "netProfit": 960000,
         "composition": [{"type": "NET_PROFIT", "amount": 960000, "ratio": 0.3}],
     },
+    # 날씨·상권은 경로는 BE와 협의 완료, 응답 필드는 미확정(2026-10-16, Issue #170) —
+    # 아래 값은 AI 쪾 제안 모양이고 실제 BE 응답과 다를 수 있다. 확정되면 이 스텁도 맞춰 고친다.
+    "get_weather": {
+        "basisDateTime": "2026-10-07 11:00",
+        "skyText": "비",
+        "minTempC": 14,
+        "maxTempC": 19,
+        "maxPop": 0.7,
+        "rainHours": [15, 16, 17],
+        "precipitationMm": 3.2,
+        "isNotable": True,
+    },
+    "get_district_benchmark": {
+        "basisQuarter": "2026Q2",
+        "districtAvgMonthlySalesPerCafe": 18500000,
+        "cafeStoreCount": 42,
+        "peakSalesHourBand": "11-14",
+        "peakFootTrafficHourBand": "14-17",
+    },
+    # 아래 1종은 TOOL_PATHS 에서 주석 처리돼 있어 지금은 라우트로 등록되지 않는다.
+    # v1 MVP 포함으로 결정되면 TOOL_PATHS 주석만 풀면 바로 살아난다.
     "get_review_summary": {
         "summary": "커피 맛과 친절한 응대에 대한 긍정 반응이 많습니다.",
         "sentiment": {"positive": 0.82, "neutral": 0.14, "negative": 0.04},
