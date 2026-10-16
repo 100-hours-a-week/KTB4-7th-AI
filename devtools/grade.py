@@ -305,7 +305,10 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     evidences = [c.get("evidence") or "" for c in cards]
     visible = titles + summaries + details  # evidence 는 화면에 안 나온다(2026-10-02 FE 확정)
 
-    result["카드_개수_일치"] = len(cards) == expected_cards
+    # 2026-10-17 제품 결정: 최소 1 장·최대 3 장. 억지로 채우지 않는다 — 배정 수보다
+    # 적게 나오는 건 결함이 아니다. 다만 배정 수보다 **많으면** 근거 없는 카드가 생긴
+    # 것이므로 결함이다. 그 전에는 "배정 수와 정확히 일치" 를 쟀다(`카드_개수_일치`).
+    result["카드_개수_적정"] = 1 <= len(cards) <= expected_cards
     result["rankNo_고유"] = len(set(ranks)) == len(ranks)
     result["title_200자"] = all(len(t) <= 200 for t in titles)
     result["detail_1000자"] = all(len(d) <= 1000 for d in details)

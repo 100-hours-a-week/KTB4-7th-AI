@@ -406,9 +406,9 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
     period = req.metrics.salesSummary.period
     base_prompt = solution_prompt.build(focus, req.targetDate, day_of_week, is_weekend, period)
 
-    # 3장을 선호하되, 모자란 응답이라고 버리지는 않는다. 카드 2장이 나가는 것보다
-    # 500 이 나가는 쪽이 점주에게 더 나쁘다 — 그날 솔루션이 아예 없어진다.
-    wanted = len(focus) or MAX_CARDS
+    # 카드는 최소 1 장·최대 3 장이다(2026-10-17 제품 결정). 배정된 지표 수만큼 요청하되
+    # 모자라게 나와도 그대로 내보낸다 — 카드 2장이 나가는 것보다 500 이 나가는 쪽이
+    # 점주에게 더 나쁘고, 억지로 3 장을 채우려 다시 부르는 비용이 더 크다.
     cards = None
     reasons: set[str] = set()
     for attempt in range(MAX_RETRY + 1):
@@ -420,7 +420,12 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
         # 1 장을 주면 더 나쁜 쪽으로 덮어쓴다.
         if parsed and (cards is None or len(parsed) > len(cards)):
             cards = parsed
-        if cards and len(cards) == wanted:
+        # 한 장이라도 건지면 끝낸다. 2026-10-17 제품 결정: 솔루션은 **최소 1장·최대 3장**
+        # 이고 억지로 3 장을 채우지 않는다. 전에는 배정 수를 못 채우면 재시도했는데,
+        # 그게 재시도의 가장 큰 이유였다 — A40 5차에서 1 회 종료율이 3.3% 였다.
+        # 차단 게이트는 그대로 동작한다. 나쁜 카드는 여전히 버려지고, 다만 그 자리를
+        # 메우려고 다시 부르지 않을 뿐이다.
+        if cards:
             break
 
     if not cards:
