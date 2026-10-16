@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # 둘 수가 없다.
     llm_disable_thinking: bool = False
 
+    # 비어 있으면(None) SDK 기본값(~1.0)을 그대로 쓴다. 로컬 vLLM 레이턴시 실험용이다
+    # (2026-10-15) — DUPLICATE_FIGURE/VAGUE_ACTION/VAGUE_PERIOD 게이트 추가 뒤 재시도율이
+    # 올라 p50 34.5s까지 늘었는데, 셋 다 최종적으로는 재시도가 고쳐주고 있어 temperature를
+    # 낮춰 1차 시도부터 위반을 줄이는 쪽이 정확도가 아니라 "재시도 횟수"를 줄이는 레버다.
+    llm_temperature: float | None = None
+
     backend_base_url: str = "http://localhost:9000"
 
     sentry_dsn: str = ""
