@@ -12,13 +12,16 @@ import json
 import pytest
 
 from app.clients import llm
+from app.schemas.solution import SolutionCard
 from app.services.solution import (
     _COMPUTED_RATIO,
     _ROUNDED_AMOUNT,
     _VAGUE_ACTION,
     _VAGUE_PERIOD,
     _metric_figures,
+    _violations,
 )
+from app.services.solution_focus import derive, peak_ratios
 from devtools import grade
 
 from .test_solutions import REQUEST_BODY, _cards, _post
@@ -344,3 +347,97 @@ async def test_재시도가_더_적게_주면_앞의_결과를_유지한다(monk
 
     assert res.status_code == 200
     assert len(res.json()["data"]["solutionCards"]) == 2, "1 장으로 덮어쓰면 안 된다"
+
+
+# ── 배율 접지 (2026-10-16) ────────────────────────────────────────────
+# 배율을 통째로 금지했더니 재시도 1 위가 COMPUTED_RATIO 였다(3/3 건이 hourlyProfile 카드).
+# 30,000 대 210,000 이면 "7 배" 가 그 데이터의 핵심 사실이라 모델이 계속 그걸 쓰려 한다.
+# 막는 대신 코드가 계산해 넘기고, 지표에 없는 배율만 거부한다.
+
+_RATIO_METRICS = derive(
+    {
+        "salesSummary": {"netSales": 1183600},
+        "hourlyProfile": [
+            {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        ],
+    }
+)
+
+
+def _ratio_card(text: str) -> SolutionCard:
+    return SolutionCard(
+        rankNo=1, title="가", summaryText=text, detailText="가.\n나.\n다.", evidence="가"
+    )
+
+
+def test_지표에_있는_배수는_인용해도_된다():
+    assert _RATIO_METRICS["hourlyPeakRatio"] == [{"dayType": "WEEKDAY", "ratio": 7.0}]
+    assert not _violations(_ratio_card("평일 18시 매출이 14시의 7배입니다"), _RATIO_METRICS)
+
+
+def test_한글_숫자로_써도_인정한다():
+    """ "일곱 배" 도 _COMPUTED_RATIO 가 잡는 표현이라 접지 판정을 똑같이 받아야 한다."""
+    assert not _violations(_ratio_card("평일 18시 매출이 14시의 일곱 배입니다"), _RATIO_METRICS)
+
+
+@pytest.mark.parametrize("text", ["14시의 5배입니다", "18시의 3분의 1입니다"])
+def test_지표에_없는_배율은_그대로_거부한다(text):
+    assert _violations(_ratio_card(text), _RATIO_METRICS) == ["COMPUTED_RATIO"]
+
+
+def test_지표의_다른_숫자를_배율로_쓰면_거부한다():
+    """hour 14·18 은 지표에 있지만 배율이 아니다. _metric_numbers 전체로 접지하면
+    "14배" 가 통과한다 — 그래서 hourlyPeakRatio 만 본다.
+    """
+    assert _violations(_ratio_card("14시의 14배입니다"), _RATIO_METRICS) == ["COMPUTED_RATIO"]
+
+
+def test_배수는_dayType_별로_따로_낸다():
+    """평일 최고와 주말 최저를 섞으면 틀린 문장이 된다."""
+    ratios = peak_ratios(
+        [
+            {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+            {"dayType": "WEEKEND", "hour": 14, "amount": 92000},
+            {"dayType": "WEEKEND", "hour": 18, "amount": 110000},
+        ]
+    )
+    assert ratios == [
+        {"dayType": "WEEKDAY", "ratio": 7.0},
+        {"dayType": "WEEKEND", "ratio": 1.2},
+    ]
+
+
+def test_0원_행은_배수_계산에서_뺀다():
+    """영업시간 밖 0 원이 섞이면 배수가 무한대가 된다 — 최저 판단에서 빼는 것과 같은 이유."""
+    ratios = peak_ratios(
+        [
+            {"dayType": "WEEKDAY", "hour": 3, "amount": 0},
+            {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        ]
+    )
+    assert ratios == [{"dayType": "WEEKDAY", "ratio": 7.0}]
+
+
+def test_채점기와_서비스가_같은_배율_접지를_쓴다():
+    """둘이 어긋나면 측정과 실제 동작이 갈린다 — 금액·시각 패턴에 이미 같은 테스트가 있다."""
+    import json
+
+    from devtools.grade import grade_solution
+
+    for text, grounded in (("14시의 7배입니다", True), ("14시의 5배입니다", False)):
+        card = {
+            "rankNo": 1,
+            "title": "가",
+            "summaryText": text,
+            "detailText": "가.\n나.\n다.",
+            "evidence": "가",
+        }
+        raw = json.dumps({"solutionCards": [card]}, ensure_ascii=False)
+        graded = grade_solution(raw, _RATIO_METRICS, expected_cards=1)
+        service_ok = not _violations(_ratio_card(text), _RATIO_METRICS)
+
+        assert graded["배율_없음"] is grounded, text
+        assert service_ok is grounded, text

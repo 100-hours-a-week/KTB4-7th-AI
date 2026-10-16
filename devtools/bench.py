@@ -48,6 +48,7 @@ from app.clients import llm
 from app.core.config import settings
 from app.main import app
 from app.services.solution_focus import assign as assign_focus
+from app.services.solution_focus import derive as derive_metrics
 from devtools import grade
 
 # ── 케이스 ────────────────────────────────────────────────────────────
@@ -353,6 +354,9 @@ async def _run(client: httpx.AsyncClient, kind: str, n: int) -> list[dict]:
         # 배정된 지표가 3 종이 안 되면 서비스가 그만큼만 내보낸다(#123). 채점기에 3 을 박으면
         # 설계대로 2 장을 낸 응답을 결함으로 센다.
         if kind == "solution":
+            # 서비스가 generate() 에서 하는 것과 같은 파생을 채점에도 적용한다 — 안 하면
+            # 지표에 있는 배율(hourlyPeakRatio)을 채점기가 날조로 센다.
+            metrics = derive_metrics(metrics)
             expected = len(assign_focus(metrics)) or grade.MAX_CARDS
             case_grader = functools.partial(grade.grade_solution, expected_cards=expected)
         else:
