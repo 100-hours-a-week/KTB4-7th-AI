@@ -372,7 +372,9 @@ def _ratio_card(text: str) -> SolutionCard:
 
 
 def test_지표에_있는_배수는_인용해도_된다():
-    assert _RATIO_METRICS["hourlyPeakRatio"] == [{"dayType": "WEEKDAY", "ratio": 7.0}]
+    assert _RATIO_METRICS["hourlyPeakRatio"] == [
+        {"dayType": "WEEKDAY", "peakHour": 18, "lowHour": 14, "ratio": 7.0}
+    ]
     assert not _violations(_ratio_card("평일 18시 매출이 14시의 7배입니다"), _RATIO_METRICS)
 
 
@@ -404,8 +406,8 @@ def test_배수는_dayType_별로_따로_낸다():
         ]
     )
     assert ratios == [
-        {"dayType": "WEEKDAY", "ratio": 7.0},
-        {"dayType": "WEEKEND", "ratio": 1.2},
+        {"dayType": "WEEKDAY", "peakHour": 18, "lowHour": 14, "ratio": 7.0},
+        {"dayType": "WEEKEND", "peakHour": 18, "lowHour": 14, "ratio": 1.2},
     ]
 
 
@@ -418,7 +420,7 @@ def test_0원_행은_배수_계산에서_뺀다():
             {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
         ]
     )
-    assert ratios == [{"dayType": "WEEKDAY", "ratio": 7.0}]
+    assert ratios == [{"dayType": "WEEKDAY", "peakHour": 18, "lowHour": 14, "ratio": 7.0}]
 
 
 def test_채점기와_서비스가_같은_배율_접지를_쓴다():
@@ -518,3 +520,47 @@ def test_채점기가_title_summaryText_의_수치도_본다():
 
     assert graded["summary_수치_정확"] is False
     assert graded["detail_수치_정확"] is True, "detailText 에는 날조가 없다"
+
+
+def test_배수에_어느_두_시각인지_같이_준다():
+    """배수만 주면 모델이 아무 두 행에 갖다 붙인다 — 실측에서 "12시가 15시의 50.2배" 가
+    나왔는데 50.2 는 12시 대 9시 값이고 12시÷15시는 6.7 이다.
+
+    숫자 자체는 지표에 있어서 배율_없음 을 통과하고, 정수부가 두 자리라 _ungrounded 도
+    실행 지시로 보고 넘긴다 — 어떤 검사에도 안 걸리는 틀린 문장이 된다. 그래서 코드가
+    어느 두 시각 사이인지까지 넘겨야 한다.
+    """
+    ratios = peak_ratios(
+        [
+            {"dayType": "WEEKDAY", "hour": 9, "amount": 8200},
+            {"dayType": "WEEKDAY", "hour": 12, "amount": 412000},
+            {"dayType": "WEEKDAY", "hour": 15, "amount": 61500},
+            {"dayType": "WEEKDAY", "hour": 20, "amount": 19800},
+        ]
+    )
+
+    assert ratios == [{"dayType": "WEEKDAY", "peakHour": 12, "lowHour": 9, "ratio": 50.2}]
+
+
+def test_잘못_붙인_배수는_어떤_검사에도_안_걸린다():
+    """현재 상태를 고정해 둔다 — 코드가 두 시각을 주는 것 말고는 막을 방법이 없다.
+
+    막으려면 "N배" 가 나온 문장이 peakHour·lowHour 를 함께 말하는지 봐야 하는데,
+    "피크가 최저의 50.2배" 처럼 시각을 안 쓰는 정상 문장도 있어 오탐이 난다.
+    """
+    from devtools.grade import _ungrounded
+
+    metrics = derive(
+        {
+            "salesSummary": {"netSales": 2470300},
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 9, "amount": 8200},
+                {"dayType": "WEEKDAY", "hour": 12, "amount": 412000},
+                {"dayType": "WEEKDAY", "hour": 15, "amount": 61500},
+            ],
+        }
+    )
+    wrong = "평일 12시 매출이 412,000원으로 15시 61,500원의 50.2배입니다"
+
+    assert not _violations(_ratio_card(wrong), metrics), "서비스는 못 잡는다"
+    assert not _ungrounded(wrong, metrics), "채점기도 못 잡는다 — 50.2 는 두 자리다"

@@ -91,14 +91,31 @@ def peak_ratios(points: list[dict]) -> list[dict]:
     계산을 코드가 해서 넘기면 모델은 인용만 하면 된다. 금지할 이유가 없어진다.
 
     dayType 별로 따로 낸다. 평일 최고와 주말 최저를 섞으면 틀린 문장이 된다.
+
+    어느 두 시각 사이인지(peakHour·lowHour)를 같이 준다. 배수만 주면 모델이 아무 두 행에
+    갖다 붙인다 — 실측에서 "12시 412,000원이 15시 61,500원의 50.2배" 가 나왔는데 50.2 는
+    12시 대 9시(8,200원) 값이고 12시÷15시는 6.7 이다. 숫자 자체는 지표에 있어서 접지
+    검사를 통과하고, 정수부가 두 자리라 _ungrounded 도 실행 지시로 보고 넘긴다 —
+    **어떤 검사에도 안 걸리는 틀린 문장**이 된다.
     """
     out = []
     selling = _selling(points)
     for day_type in dict.fromkeys(p.get("dayType") for p in selling):
-        amounts = [p.get("amount") or 0 for p in selling if p.get("dayType") == day_type]
-        if len(amounts) < 2 or min(amounts) <= 0:
+        series = [p for p in selling if p.get("dayType") == day_type]
+        if len(series) < 2:
             continue
-        out.append({"dayType": day_type, "ratio": round(max(amounts) / min(amounts), 1)})
+        peak = max(series, key=lambda p: p.get("amount") or 0)
+        low = min(series, key=lambda p: p.get("amount") or 0)
+        if (low.get("amount") or 0) <= 0:
+            continue
+        out.append(
+            {
+                "dayType": day_type,
+                "peakHour": peak["hour"],
+                "lowHour": low["hour"],
+                "ratio": round(peak["amount"] / low["amount"], 1),
+            }
+        )
     return out
 
 
