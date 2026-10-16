@@ -94,6 +94,24 @@ def strip_fence(raw: str) -> str:
     return match.group(1) if match else raw
 
 
+# 공급자가 영구적으로 거절하는 상태. 재호출로 바뀌지 않는다 — 요청·키·권한·모델명·크레딧
+# 문제다. 429(쿼터)와 5xx·연결 실패는 빠져 있다 — 그쪽은 시간이 지나면 풀린다.
+#
+# provider SDK 세 종이 예외 타입이 다 달라서 타입으로 분기하지 않고 상태 코드만 본다.
+# anthropic·openai 는 APIStatusError.status_code, google-genai 는 APIError.code 다.
+# 상태 코드를 못 꺼내면(연결 실패 등) 일시 오류로 본다 — 영구로 단정하면 복구 가능한
+# 장애에서 BE 재시도를 막는다.
+_PERMANENT_PROVIDER_STATUSES = frozenset({400, 401, 403, 404, 413, 422})
+
+
+def _provider_status(exc: Exception) -> int | None:
+    for attr in ("status_code", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
 async def complete(
     system: str, user: str, max_tokens: int = 2000, timeout: float | None = None
 ) -> str:
@@ -168,6 +186,13 @@ async def complete(
     # CANCELLED)로 던진다. 문자열로 구분하는 건 취약해서 일단 PROVIDER_ERROR 로 뭉뚱그렸다 —
     # google provider의 타임아웃을 PROVIDER_TIMEOUT으로 분리하려면 errors.ClientError.code로 분기.
     except Exception as exc:
+        # 영구 오류는 재시도하면 안 된다. 2026-10-14 운영 장애가 이 경로였다 — LLM_MODEL 이
+        # 없는 모델 ID 로 설정돼 솔루션 생성이 전부 실패했는데, 502(재시도 O)로 나가서 BE 가
+        # 전부 한 번씩 더 때렸고 실패가 DB 에 고정됐다(docs/STATE.md 장애 기록, 이슈 #141).
+        # 모델명·키·권한·크레딧은 재호출로 바뀌지 않는다.
+        status = _provider_status(exc)
+        if status in _PERMANENT_PROVIDER_STATUSES:
+            raise ApiError(500, "PROVIDER_ERROR", "모델 공급자가 요청을 거절했습니다.") from exc
         raise ApiError(502, "PROVIDER_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
 
 

@@ -145,3 +145,24 @@ async def test_성공_응답에는_error_가_없다(monkeypatch):
 
     assert res.status_code == 200
     assert "error" not in res.json()
+
+
+async def test_공급자_영구_거절은_500이고_재시도하지_않는다(monkeypatch):
+    """2026-10-14 장애 재현. LLM_MODEL 오설정으로 공급자가 거절했는데 502(재시도 O)로
+    나가서 BE 가 전부 한 번씩 더 때렸고, 실패가 DB 에 고정돼 다음날 배치까지 복구되지
+    않았다. 바디의 retryable 은 상태 코드에서 파생되므로 500 이면 자동으로 false 다.
+    """
+    from app.clients import llm
+    from app.core.errors import ApiError
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        raise ApiError(500, "PROVIDER_ERROR", "모델 공급자가 요청을 거절했습니다.")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    from tests.test_insights import REQUEST_BODY
+
+    res = await _post("/internal/v1/ai/sales-insights", REQUEST_BODY)
+
+    assert res.status_code == 500
+    assert res.json()["error"] == {"code": "PROVIDER_ERROR", "retryable": False}

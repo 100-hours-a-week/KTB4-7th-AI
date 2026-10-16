@@ -249,3 +249,84 @@ async def test_LLM_BASE_URL_없이_플래그만_있으면_extra_body를_안_보�
     await llm.complete("sys", "user")
 
     assert "extra_body" not in llm._clients["openai"].chat.completions.last_kwargs
+
+
+# ── 영구 오류와 일시 오류 구분 (2026-10-16) ──────────────────────────
+# 2026-10-14 운영 장애: LLM_MODEL 이 없는 모델 ID 로 설정돼 솔루션 생성이 전부 실패했는데
+# 502(재시도 O)로 나가서 BE 가 전부 한 번씩 더 때렸고, 실패가 DB 에 고정돼 다음날 00:00
+# 배치까지 복구되지 않았다(docs/STATE.md 장애 기록, 이슈 #141).
+
+
+class _Raising:
+    """create() 가 지정한 예외를 던지는 가짜 SDK 클라이언트."""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+        self.messages = self
+
+    async def create(self, **kwargs):
+        raise self._exc
+
+
+def _provider_error(status: int | None) -> Exception:
+    exc = RuntimeError("provider said no")
+    if status is not None:
+        exc.status_code = status
+    return exc
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 413, 422])
+async def test_공급자가_영구_거절하면_500이다(monkeypatch, status):
+    """모델명·키·권한·크레딧은 재호출로 바뀌지 않는다 — 재시도하면 토큰·시간만 쓴다."""
+    monkeypatch.setattr(llm, "AsyncAnthropic", lambda **kw: _Raising(_provider_error(status)))
+
+    with pytest.raises(ApiError) as caught:
+        await llm.complete("sys", "user")
+
+    assert caught.value.status == 500, f"{status} 는 재시도해도 안 된다"
+    assert caught.value.code == "PROVIDER_ERROR"
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 529])
+async def test_일시_오류는_502로_재시도_대상이다(monkeypatch, status):
+    """쿼터·공급자 장애는 시간이 지나면 풀린다."""
+    monkeypatch.setattr(llm, "AsyncAnthropic", lambda **kw: _Raising(_provider_error(status)))
+
+    with pytest.raises(ApiError) as caught:
+        await llm.complete("sys", "user")
+
+    assert caught.value.status == 502
+
+
+async def test_상태_코드를_못_꺼내면_일시_오류로_본다(monkeypatch):
+    """연결 실패 등. 영구로 단정하면 복구 가능한 장애에서 BE 재시도를 막는다."""
+    monkeypatch.setattr(llm, "AsyncAnthropic", lambda **kw: _Raising(_provider_error(None)))
+
+    with pytest.raises(ApiError) as caught:
+        await llm.complete("sys", "user")
+
+    assert caught.value.status == 502
+
+
+async def test_google_의_code_속성도_읽는다(monkeypatch):
+    """google-genai 는 status_code 가 아니라 APIError.code 에 HTTP 상태를 담는다."""
+    exc = RuntimeError("not found")
+    exc.code = 404
+    monkeypatch.setattr(llm, "AsyncAnthropic", lambda **kw: _Raising(exc))
+
+    with pytest.raises(ApiError) as caught:
+        await llm.complete("sys", "user")
+
+    assert caught.value.status == 500
+
+
+async def test_문자열_code는_상태로_읽지_않는다(monkeypatch):
+    """SDK 마다 code 가 문자열 에러명인 경우가 있다 — 숫자가 아니면 무시한다."""
+    exc = RuntimeError("boom")
+    exc.code = "invalid_request_error"
+    monkeypatch.setattr(llm, "AsyncAnthropic", lambda **kw: _Raising(exc))
+
+    with pytest.raises(ApiError) as caught:
+        await llm.complete("sys", "user")
+
+    assert caught.value.status == 502
