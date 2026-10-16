@@ -78,8 +78,15 @@ _DISPLAY_NUM = re.compile(r"[\d,]{4,}\s*원|\d+\.?\d*\s*%")
 # devtools/grade.py::_VAGUE_ACTION 과 같은 패턴이어야 하고, tests/test_solution_rules.py 가
 # 둘이 어긋나면 실패한다.
 _VAGUE_ACTION = re.compile(
-    r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[을를]?\s*"
+    # 사이에 다른 말이 끼어도 잡는다. 붙어 있을 때만 보던 옛 패턴은 "프로모션과 추천
+    # 강화로" 를 놓쳤고, 실측 218 개 실행 문장에서 **0 개**를 잡았다(2026-10-16) —
+    # 교과서 문구만 걸려서 `공허한_조언_없음` 100% 가 아무 의미가 없었다.
+    r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[^.。\n]{0,10}?"
     r"(?:강화|개선|변경|확대|진행|실행|집중)"
+    # 대상이 구체적이어도 "강도만 올려라" 는 점주가 오늘 뭘 다르게 할지 알 수 없다.
+    # 진행·실행·집중은 여기 안 넣는다 — "인력을 집중 배치" 같은 구체적 행위가 걸린다.
+    r"|(?:추천|이벤트|관리|메뉴|매출|비중|고객층|경험)[^.。\n]{0,10}?"
+    r"(?:강화|개선|활성화|제고|증대|도모|최적화|극대화)"
 )
 
 # 점주 신고(2026-10-15): "현재 기간 순매출이 124,946,029원이며"처럼 기준 없이 기간을
@@ -209,6 +216,35 @@ def _metric_numbers(metrics: dict) -> set[str]:
     return out
 
 
+# 문장에서 뽑아낼 숫자. devtools/grade.py::_ANYNUM 과 같은 패턴.
+_ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
+
+
+def _numbers_in(text: str) -> set[str]:
+    return {m.group().replace(",", "").rstrip(".") for m in _ANYNUM.finditer(text)}
+
+
+def _ungrounded(text: str, metrics: dict) -> set[str]:
+    """지표에 없는 숫자. devtools/grade.py::_ungrounded 와 같은 로직이어야 한다.
+
+    한두 자리는 시각·인원 같은 실행 지시로 보고 통과시킨다 — 프롬프트가 허용한다.
+    """
+    allowed = _metric_numbers(metrics)
+    bad = set()
+    for number in _numbers_in(text):
+        if number in allowed:
+            continue
+        try:  # 12.0 == 12 같은 표기 차이는 허용
+            if any(abs(float(number) - float(a)) < 1e-9 for a in allowed):
+                continue
+        except ValueError:
+            pass
+        if len(number.split(".")[0]) <= 2:
+            continue
+        bad.add(number)
+    return bad
+
+
 def _metric_figures(text: str, metrics: dict) -> set[str]:
     """그 문장이 인용한 지표 수치. devtools/grade.py::_metric_figures 와 같은 로직."""
     allowed = _metric_numbers(metrics)
@@ -290,6 +326,12 @@ def _violations(card: SolutionCard, metrics: dict) -> list[str]:
         reasons.append("ROUNDED_AMOUNT")
     if _ungrounded_ratios(texts, metrics):
         reasons.append("COMPUTED_RATIO")
+    # 지표에 없는 금액을 지어내는 것 — 가장 위험한 종류다. 2026-10-16 배포본에서
+    # "남은 시간 동안 253,196원을 추가로 만들어야 합니다"가 나왔다(255,396 - 2,200 을
+    # 모델이 계산했다). 채점기에는 있었는데 서비스에는 없어서 그대로 나갔고, 채점기도
+    # title·summaryText 는 안 봐서 측정에서는 100% 로 보였다.
+    if any(_ungrounded(text, metrics) for text in texts):
+        reasons.append("UNGROUNDED_NUMBER")
     if any(_AMPM_LEFT.search(text) for text in texts):
         reasons.append("AMPM_LEFT")
     if any(_VAGUE_PERIOD.search(text) for text in texts):

@@ -372,7 +372,9 @@ def _ratio_card(text: str) -> SolutionCard:
 
 
 def test_지표에_있는_배수는_인용해도_된다():
-    assert _RATIO_METRICS["hourlyPeakRatio"] == [{"dayType": "WEEKDAY", "ratio": 7.0}]
+    assert _RATIO_METRICS["hourlyPeakRatio"] == [
+        {"dayType": "WEEKDAY", "peakHour": 18, "lowHour": 14, "ratio": 7.0}
+    ]
     assert not _violations(_ratio_card("평일 18시 매출이 14시의 7배입니다"), _RATIO_METRICS)
 
 
@@ -404,8 +406,8 @@ def test_배수는_dayType_별로_따로_낸다():
         ]
     )
     assert ratios == [
-        {"dayType": "WEEKDAY", "ratio": 7.0},
-        {"dayType": "WEEKEND", "ratio": 1.2},
+        {"dayType": "WEEKDAY", "peakHour": 18, "lowHour": 14, "ratio": 7.0},
+        {"dayType": "WEEKEND", "peakHour": 18, "lowHour": 14, "ratio": 1.2},
     ]
 
 
@@ -418,7 +420,7 @@ def test_0원_행은_배수_계산에서_뺀다():
             {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
         ]
     )
-    assert ratios == [{"dayType": "WEEKDAY", "ratio": 7.0}]
+    assert ratios == [{"dayType": "WEEKDAY", "peakHour": 18, "lowHour": 14, "ratio": 7.0}]
 
 
 def test_채점기와_서비스가_같은_배율_접지를_쓴다():
@@ -441,3 +443,162 @@ def test_채점기와_서비스가_같은_배율_접지를_쓴다():
 
         assert graded["배율_없음"] is grounded, text
         assert service_ok is grounded, text
+
+
+# ── 지표에 없는 수 · 비교 불가 축 (2026-10-16) ────────────────────────
+# 배포본 카드 셋에서 나왔다.
+#   "남은 시간 동안 253,196원을 추가로 만들어야 합니다"  ← 255,396 - 2,200 을 모델이 계산
+#   "평일 9시 매출이 다른 시간대에 비해 현저히 낮습니다"   ← 시간대 행이 하나뿐이었다
+
+_SPARSE = derive(
+    {
+        "salesSummary": {"netSales": 2200},
+        "predictedSalesToday": 255396,
+        "hourlyProfile": [{"dayType": "WEEKDAY", "hour": 9, "amount": 2200}],
+        "categoryBreakdown": [{"name": "미분류", "share": 1.0}],
+    }
+)
+
+
+def test_지표에_없는_금액을_지어내면_거부한다():
+    text = (
+        "현재까지 순매출이 2,200원인데 오늘 예상은 255,396원으로, 253,196원을 더 만들어야 합니다."
+    )
+    assert _violations(_ratio_card(text), _SPARSE) == ["UNGROUNDED_NUMBER"]
+
+
+def test_지표에_있는_금액은_그대로_통과한다():
+    text = "현재까지 순매출은 2,200원이고 오늘 예상 매출은 255,396원입니다."
+    assert not _violations(_ratio_card(text), _SPARSE)
+
+
+@pytest.mark.parametrize("text", ["14시까지 입간판을 내어 두세요", "9시에 문을 여세요"])
+def test_한두_자리_수는_실행_지시라_통과한다(text):
+    """시각·인원은 지표에 없어도 프롬프트가 허용한다 — 막으면 실행 문장을 못 쓴다."""
+    assert not _violations(_ratio_card(text), _SPARSE)
+
+
+def test_비교할_행이_없으면_시간대_축을_배정하지_않는다():
+    """0.0 을 돌려주면 "할 말은 없지만 후보" 가 되어 카드로 배정되고, 모델은 배정받은
+    지표로 뭐든 써야 하니 없는 비교를 지어낸다.
+    """
+    from app.services.solution_focus import _hourly_score, assign
+
+    one_row = [{"dayType": "WEEKDAY", "hour": 9, "amount": 2200}]
+    assert _hourly_score(one_row) == -1.0
+    assert not any("hourlyProfile" in item for item in assign(_SPARSE))
+
+
+def test_비교할_행이_있으면_그대로_배정한다():
+    two_rows = [
+        {"dayType": "WEEKDAY", "hour": 9, "amount": 2200},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ]
+    from app.services.solution_focus import _hourly_score, assign
+
+    assert _hourly_score(two_rows) > 0
+    assert any("hourlyProfile" in item for item in assign({**_SPARSE, "hourlyProfile": two_rows}))
+
+
+def test_채점기가_title_summaryText_의_수치도_본다():
+    """그동안 evidence·detailText 만 봤다. 배포본 날조가 summaryText 에 있었는데
+    측정에서는 수치_정확 100% 로 보였다.
+    """
+    import json
+
+    from devtools.grade import grade_solution
+
+    card = {
+        "rankNo": 1,
+        "title": "가",
+        "summaryText": "253,196원을 더 만들어야 합니다.",
+        "detailText": "가.\n나.\n다.",
+        "evidence": "가",
+    }
+    raw = json.dumps({"solutionCards": [card]}, ensure_ascii=False)
+    graded = grade_solution(raw, _SPARSE, expected_cards=1)
+
+    assert graded["summary_수치_정확"] is False
+    assert graded["detail_수치_정확"] is True, "detailText 에는 날조가 없다"
+
+
+def test_배수에_어느_두_시각인지_같이_준다():
+    """배수만 주면 모델이 아무 두 행에 갖다 붙인다 — 실측에서 "12시가 15시의 50.2배" 가
+    나왔는데 50.2 는 12시 대 9시 값이고 12시÷15시는 6.7 이다.
+
+    숫자 자체는 지표에 있어서 배율_없음 을 통과하고, 정수부가 두 자리라 _ungrounded 도
+    실행 지시로 보고 넘긴다 — 어떤 검사에도 안 걸리는 틀린 문장이 된다. 그래서 코드가
+    어느 두 시각 사이인지까지 넘겨야 한다.
+    """
+    ratios = peak_ratios(
+        [
+            {"dayType": "WEEKDAY", "hour": 9, "amount": 8200},
+            {"dayType": "WEEKDAY", "hour": 12, "amount": 412000},
+            {"dayType": "WEEKDAY", "hour": 15, "amount": 61500},
+            {"dayType": "WEEKDAY", "hour": 20, "amount": 19800},
+        ]
+    )
+
+    assert ratios == [{"dayType": "WEEKDAY", "peakHour": 12, "lowHour": 9, "ratio": 50.2}]
+
+
+def test_잘못_붙인_배수는_어떤_검사에도_안_걸린다():
+    """현재 상태를 고정해 둔다 — 코드가 두 시각을 주는 것 말고는 막을 방법이 없다.
+
+    막으려면 "N배" 가 나온 문장이 peakHour·lowHour 를 함께 말하는지 봐야 하는데,
+    "피크가 최저의 50.2배" 처럼 시각을 안 쓰는 정상 문장도 있어 오탐이 난다.
+    """
+    from devtools.grade import _ungrounded
+
+    metrics = derive(
+        {
+            "salesSummary": {"netSales": 2470300},
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 9, "amount": 8200},
+                {"dayType": "WEEKDAY", "hour": 12, "amount": 412000},
+                {"dayType": "WEEKDAY", "hour": 15, "amount": 61500},
+            ],
+        }
+    )
+    wrong = "평일 12시 매출이 412,000원으로 15시 61,500원의 50.2배입니다"
+
+    assert not _violations(_ratio_card(wrong), metrics), "서비스는 못 잡는다"
+    assert not _ungrounded(wrong, metrics), "채점기도 못 잡는다 — 50.2 는 두 자리다"
+
+
+# ── 공허한 조언 패턴 확대 (2026-10-16) ──────────────────────────────
+# 옛 패턴은 명사와 동사가 붙어 있을 때만 잡아서, 실측 218 개 실행 문장에서 0 개를 잡았다.
+# `공허한_조언_없음` 100% 가 "잘 지킨다" 가 아니라 "아무것도 안 본다" 였다.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "마케팅을 강화하세요",  # 옛 패턴도 잡던 교과서 문구
+        "프로모션을 진행하세요",
+        "커피 메뉴 프로모션과 추천 강화로 점유율을 회복하세요",  # 사이에 말이 끼면 못 잡았다
+        "14시 이후 평일 오후 메뉴를 강화하세요",
+        "커피 메뉴 주문 경험을 개선하세요",
+        "논커피 음료 메뉴를 전면에 배치하고 직원 추천을 강화하세요",
+    ],
+)
+def test_공허한_조언을_잡는다(text):
+    assert _VAGUE_ACTION.search(text), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "12시 전후로 인력을 집중 배치해 대기 시간을 줄이세요",  # 집중 배치는 구체적 행위다
+        "11시부터 13시까지 직원 근무 시간을 집중 편성하세요",
+        "14시까지 입간판을 내어 두세요",
+        "원두 발주를 줄이세요",
+        "인기 메뉴 재고를 오전에 충분히 준비하세요",
+        "주문과 서빙 동선을 점검하세요",
+    ],
+)
+def test_구체적인_실행은_통과시킨다(text):
+    """넓히다가 좋은 문장을 잡으면 재시도만 늘고 카드가 나빠진다 — 실측 218 개 중
+    '집중 배치'·'집중 편성' 류가 가장 흔한 정상 문장이다.
+    """
+    assert not _VAGUE_ACTION.search(text), text

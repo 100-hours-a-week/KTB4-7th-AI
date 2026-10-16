@@ -77,8 +77,15 @@ _FABRICATED_AMOUNT = re.compile(
 )
 # 누구나 할 수 있는 말. 점주가 오늘 무엇을 다르게 할지가 안 나온다.
 _VAGUE_ACTION = re.compile(
-    r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[을를]?\s*"
+    # 사이에 다른 말이 끼어도 잡는다. 붙어 있을 때만 보던 옛 패턴은 "프로모션과 추천
+    # 강화로" 를 놓쳤고, 실측 218 개 실행 문장에서 **0 개**를 잡았다(2026-10-16) —
+    # 교과서 문구만 걸려서 `공허한_조언_없음` 100% 가 아무 의미가 없었다.
+    r"(?:마케팅|홍보|프로모션|캠페인|전략|활동|노력|서비스)[^.。\n]{0,10}?"
     r"(?:강화|개선|변경|확대|진행|실행|집중)"
+    # 대상이 구체적이어도 "강도만 올려라" 는 점주가 오늘 뭘 다르게 할지 알 수 없다.
+    # 진행·실행·집중은 여기 안 넣는다 — "인력을 집중 배치" 같은 구체적 행위가 걸린다.
+    r"|(?:추천|이벤트|관리|메뉴|매출|비중|고객층|경험)[^.。\n]{0,10}?"
+    r"(?:강화|개선|활성화|제고|증대|도모|최적화|극대화)"
 )
 # 날짜 없이 기간을 가리키는 말. app/services/solution.py::_VAGUE_PERIOD 와 같은 패턴.
 _VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
@@ -329,6 +336,10 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["요일_환각_없음"] = not any(
         _label_hallucination(t, metrics) for t in visible + evidences
     )
+    # title·summaryText 는 그동안 수치 검사 밖이었다(2026-10-16 발견). 배포본에서
+    # "남은 시간 동안 253,196원을 추가로 만들어야 합니다"가 summaryText 에 나왔는데
+    # 측정에서는 수치_정확 100% 로 보였다 — 화면에 보이는 필드가 검사에서 빠져 있었다.
+    result["summary_수치_정확"] = not any(_ungrounded(t, metrics) for t in titles + summaries)
     result["evidence_수치_정확"] = not any(_ungrounded(e, metrics) for e in evidences)
     result["detail_수치_정확"] = not any(_ungrounded(d, metrics) for d in details)
 

@@ -4,7 +4,12 @@ from app.services.solution_focus import assign
 
 METRICS = {
     "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
-    "hourlyProfile": [{"dayType": "WEEKDAY", "hour": 14, "amount": 30000}],
+    # 행이 하나뿐이면 비교할 게 없어 축에서 빠진다(2026-10-16) — 이 테스트는 카드 3 장
+    # 배정을 보는 것이라 비교 가능한 모양이어야 한다.
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ],
     "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
 }
 
