@@ -79,6 +79,14 @@ _INSIGHT_METRICS = {
             "vsPrevPeriod": 0.031,
         }
     ],
+    # V2: 2026-10-14 BE 협의 확정(#157). 서울시 상권분석 Open API(행정동 단위) 기반.
+    "districtBenchmark": {
+        "basisQuarter": "2026Q3",
+        "districtAvgMonthlySalesPerCafe": 9413000,
+        "cafeStoreCount": 133,
+        "peakSalesHourBand": "14-17",
+        "peakFootTrafficHourBand": "11-14",
+    },
 }
 
 EXAMPLES: dict[str, dict] = {

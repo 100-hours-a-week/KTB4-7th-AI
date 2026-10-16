@@ -128,6 +128,20 @@ class MenuRankingPoint(Contract):
     vsPrevPeriod: float | None = None
 
 
+class DistrictBenchmark(Contract):
+    """V2: 서울시 상권분석 Open API 기반 행정동 단위 추정값. 2026-10-14 BE 협의 확정(#157).
+
+    매장 개별 실적이 아니라 행정동 커피·음료 업종 점포당 월평균 추정매출(해당 분기 기준)이다
+    — 프롬프트에서 이 구분을 명시해야 한다(app/prompts/insight.py).
+    """
+
+    basisQuarter: str
+    districtAvgMonthlySalesPerCafe: int
+    cafeStoreCount: int
+    peakSalesHourBand: str
+    peakFootTrafficHourBand: str
+
+
 class InsightMetrics(Contract):
     salesSummary: InsightSalesSummary
     # 아래 5종은 BE 집계 상황에 따라 빠질 수 있다. 필수로 두면 지표 하나가 비었다고
@@ -137,3 +151,4 @@ class InsightMetrics(Contract):
     hourlySales: list[HourlySalesPoint] = []
     categorySales: list[CategorySalesPoint] = []
     menuRankings: list[MenuRankingPoint] = []
+    districtBenchmark: DistrictBenchmark | None = None

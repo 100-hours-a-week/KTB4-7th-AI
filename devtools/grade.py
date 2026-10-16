@@ -45,8 +45,11 @@ def strip_fence(raw: str) -> str:
 # 항목은 손대지 않았다.
 # 2026-10-15 는 DUPLICATE_FIGURE/VAGUE_ACTION에 더해 "현재 기간"처럼 날짜 없이 기간을
 # 가리키는 말을 금지하는 규칙이 추가됐다(점주 신고) — `기간_날짜_명시`를 새로 잰다.
+# 2026-10-15 는 districtBenchmark(여섯째 근거 축, #157)가 들어오며 "행정동 평균일 뿐
+# 매장 개별 실적이 아니고, 상권 상태로 매출 인과를 주장하지 말라"는 규칙이 추가됐다 —
+# `상권_인과_주장_없음`을 새로 잰다. 기존 항목은 손대지 않았다.
 TARGET_SOLUTION_VERSION = "2026-10-16"
-TARGET_INSIGHT_VERSION = "2026-10-08"
+TARGET_INSIGHT_VERSION = "2026-10-15"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
@@ -93,6 +96,11 @@ _VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
 # (conditionPatterns 미도입, 2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
 _WEATHER_CAUSAL = re.compile(
     r"(?:비|눈|날씨|기온|강수)[가이]?\s*(?:와서|내려서|오는\s*바람에)?\s*(?:때문에|탓에|영향으로|영향을\s*받아)"
+)
+# districtBenchmark 는 행정동 평균 추정치일 뿐 매장 개별 실적이 아니다(2026-10-15, #157).
+# "상권이 좋아서/나빠서 매출이 ~했다" 식 인과 주장을 잡는다.
+_DISTRICT_CAUSAL = re.compile(
+    r"(?:상권|행정동|주변\s*(?:카페|업소))[이가]?\s*(?:좋아서|나빠서|활발해서|침체돼서|때문에|탓에|영향으로|영향을\s*받아)"
 )
 
 _DOW_KO = {
@@ -156,7 +164,16 @@ def _ungrounded_ratios(texts, metrics) -> bool:
 
 
 def _metric_numbers(metrics) -> set[str]:
-    """지표에 실제로 있는 값들. 금액은 그대로, 비율은 백분율로도 인정한다."""
+    """지표에 실제로 있는 값들. 금액은 그대로, 비율은 백분율로도 인정한다.
+
+    2026-10-16(PR #161 리뷰, 헥터): 문자열 값은 숫자를 통째로 버리고 있었다.
+    `basisQuarter: "2026Q3"`·`salesTrend[].date: "2026-09-12"` 같은 값의 "2026"을 모델이
+    그대로 인용해도 허용 집합에 없어 환각(`수치_정확` 실패)으로 오판했다 — 프롬프트가
+    인용을 금지하지 않는 값인데 채점기가 막고 있었다. 3자리 미만은 뽑지 않는다 — 2자리
+    이하는 `_ungrounded`가 이미 "실행 지시"로 봐주므로 필요가 없고, 그대로 다 뽑으면
+    `basisDateTime: "2026-10-07 11:00"`의 "10"이 "10% 할인" 같은 진짜 실행 지시 숫자와
+    충돌해 `_metric_figures`(필드간 중복 검사)가 오탐한다(실측: 기존 테스트가 깨짐).
+    """
     out: set[str] = set()
 
     def walk(value):
@@ -174,6 +191,10 @@ def _metric_numbers(metrics) -> set[str]:
             out.add(f"{value:g}")
             out.add(f"{abs(value) * 100:g}")  # 0.417 → 41.7
             out.add(f"{round(abs(value) * 100):g}")  # 0.12  → 12
+        elif isinstance(value, str):
+            out.update(
+                m.group() for m in _ANYNUM.finditer(value) if len(m.group().split(".")[0]) >= 3
+            )
 
     walk(metrics)
     return out
@@ -403,6 +424,8 @@ def grade_insight(raw: str, metrics: dict) -> dict:
 
     # ratio 의 분모는 menuSales 다 — "전체의 OO%"·"총 매출의 OO%" 는 틀린 문장이다
     result["ratio_분모_정확"] = not re.search(r"(전체|총\s*매출)의\s*\d", body)
+
+    result["상권_인과_주장_없음"] = not _DISTRICT_CAUSAL.search(body)
 
     result["insights"] = insights
     return result
