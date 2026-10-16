@@ -164,7 +164,16 @@ def _ungrounded_ratios(texts, metrics) -> bool:
 
 
 def _metric_numbers(metrics) -> set[str]:
-    """지표에 실제로 있는 값들. 금액은 그대로, 비율은 백분율로도 인정한다."""
+    """지표에 실제로 있는 값들. 금액은 그대로, 비율은 백분율로도 인정한다.
+
+    2026-10-16(PR #161 리뷰, 헥터): 문자열 값은 숫자를 통째로 버리고 있었다.
+    `basisQuarter: "2026Q3"`·`salesTrend[].date: "2026-09-12"` 같은 값의 "2026"을 모델이
+    그대로 인용해도 허용 집합에 없어 환각(`수치_정확` 실패)으로 오판했다 — 프롬프트가
+    인용을 금지하지 않는 값인데 채점기가 막고 있었다. 3자리 미만은 뽑지 않는다 — 2자리
+    이하는 `_ungrounded`가 이미 "실행 지시"로 봐주므로 필요가 없고, 그대로 다 뽑으면
+    `basisDateTime: "2026-10-07 11:00"`의 "10"이 "10% 할인" 같은 진짜 실행 지시 숫자와
+    충돌해 `_metric_figures`(필드간 중복 검사)가 오탐한다(실측: 기존 테스트가 깨짐).
+    """
     out: set[str] = set()
 
     def walk(value):
@@ -182,6 +191,10 @@ def _metric_numbers(metrics) -> set[str]:
             out.add(f"{value:g}")
             out.add(f"{abs(value) * 100:g}")  # 0.417 → 41.7
             out.add(f"{round(abs(value) * 100):g}")  # 0.12  → 12
+        elif isinstance(value, str):
+            out.update(
+                m.group() for m in _ANYNUM.finditer(value) if len(m.group().split(".")[0]) >= 3
+            )
 
     walk(metrics)
     return out

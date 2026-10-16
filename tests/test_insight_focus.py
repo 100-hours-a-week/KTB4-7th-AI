@@ -134,31 +134,41 @@ DISTRICT = {
     "basisQuarter": "2026Q3",
     "districtAvgMonthlySalesPerCafe": 9413000,
     "cafeStoreCount": 133,
-    "peakSalesHourBand": "15-18",
-    "peakFootTrafficHourBand": "12-14",
+    "peakSalesHourBand": "14-17",
+    "peakFootTrafficHourBand": "11-14",
+}
+
+# 다른 세 축이 전부 약한 metrics. "상권이 거의 매달 1위"가 되는 걸 막으려고 고정 보충
+# 점수(0.3)로 바꿨다(PR #161 리뷰, 헥터) — solution_focus._FLAT_METRICS 와 같은 역할이다.
+_FLAT_METRICS = {
+    "salesSummary": {
+        "totalSales": 1000000,
+        "menuSales": 950000,
+        "orderCount": 120,
+        "averageOrderValue": 7917,
+        "vsPrevPeriod": 0.01,
+    },
 }
 
 
-def test_매장_매출이_행정동_평균과_격차가_크면_포함된다():
-    """매장(7,920,000) 대 행정동 평균(3,000,000) 격차(1.64→1.0)가 categorySales(0.417)를 이긴다."""
-    district = {**DISTRICT, "districtAvgMonthlySalesPerCafe": 3000000}
-    focus = assign({**METRICS, "districtBenchmark": district}, max_count=1)
+def test_다른_축이_전부_약하면_상권이_1순위가_된다():
+    """고정 보충 점수(0.3)가 "다른 축이 전부 약할 때만 보충"으로 동작하는지 확인한다."""
+    focus = assign({**_FLAT_METRICS, "districtBenchmark": DISTRICT}, max_count=1)
 
     assert "districtBenchmark" in focus[0]
 
 
-def test_매장_매출이_행정동_평균과_격차가_작으면_다른_축에_밀린다():
-    """격차(0.01)가 categorySales(0.417)보다 훨씬 작으면 1위를 못 가져간다."""
-    district = {**DISTRICT, "districtAvgMonthlySalesPerCafe": 8000000}
-    focus = assign({**METRICS, "districtBenchmark": district}, max_count=1)
+def test_다른_축이_뚜렷하면_상권이_밀린다():
+    """표준 METRICS(categorySales 0.417)는 고정 보충 점수(0.3)보다 커서 상권이 못 든다."""
+    focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=1)
 
     assert "districtBenchmark" not in focus[0]
 
 
 def test_표본이_너무_적은_상권은_배정되지_않는다():
-    """cafeStoreCount 가 1~2 곳이면 평균이 의미가 없어 격차가 커도 뺀다(#157)."""
-    district = {**DISTRICT, "districtAvgMonthlySalesPerCafe": 3000000, "cafeStoreCount": 2}
-    focus = assign({**METRICS, "districtBenchmark": district}, max_count=4)
+    """cafeStoreCount 가 1~2 곳이면 평균이 의미가 없어 뺀다(#157)."""
+    district = {**DISTRICT, "cafeStoreCount": 2}
+    focus = assign({**_FLAT_METRICS, "districtBenchmark": district}, max_count=4)
 
     assert not any("districtBenchmark" in item for item in focus)
 
