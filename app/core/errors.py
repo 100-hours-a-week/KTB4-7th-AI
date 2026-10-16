@@ -35,7 +35,11 @@ def _body(message: str, code: str, status: int, fail_reason: str | None = None) 
     상태 코드 구분도 같은 날 BE 와 맞췄다.
 
         500  AI 생성/내부 실패        재시도 X (AI 가 이미 1회 재시도한 뒤다)
-        502  외부 LLM 공급자 오류      재시도 O
+                                      공급자가 영구 거절한 경우도 여기다 — 모델명·키·
+                                      권한·크레딧은 재호출로 바뀌지 않는다(2026-10-16,
+                                      LLM_MODEL 오설정 장애 후속). code 는 PROVIDER_ERROR
+                                      그대로라 BE 쪽 분기 추가는 필요 없다.
+        502  외부 LLM 공급자 오류      재시도 O — 일시 오류(429·5xx·연결 실패)
         503  AI 서버 일시 장애/과부하   재시도 O — **현재 이 경로는 없다**
         504  외부 LLM 타임아웃         재시도 O
 
