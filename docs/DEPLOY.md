@@ -13,6 +13,10 @@
 | `LLM_PROVIDER` | | `anthropic` (기본) | — |
 | `LLM_MODEL` | | `claude-sonnet-4-5` (기본) | — |
 | `LLM_TIMEOUT_SECONDS` | | `60` (기본) | — |
+| `LLM_FALLBACK_PROVIDER` | | (없음, 기본) | GPU 등 primary가 가용성 문제로 실패해도 폴백 없이 그대로 에러 |
+| `LLM_FALLBACK_MODEL` | | (없음, 기본) | `LLM_FALLBACK_PROVIDER`와 같이 넣어야 한다 |
+| `LLM_FALLBACK_FAILURE_THRESHOLD` | | `3` (기본) | — |
+| `LLM_FALLBACK_COOLDOWN_SECONDS` | | `30` (기본) | — |
 | `BACKEND_TIMEOUT_SECONDS` | | `2.0` (기본) | — |
 | `INSIGHT_LLM_TIMEOUT_SECONDS` | | `12` (기본) | — |
 | `INTERNAL_AI_TOKEN` | | (없음) | 토큰 검증을 하지 않는다 |
@@ -23,6 +27,20 @@
 `LLM_PROVIDER` 를 바꾸면 해당 provider 의 키가 대신 필요하다
 (`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `UPSTAGE_API_KEY`).
 **anthropic 외 provider 는 실호출로 검증된 적이 없다.**
+
+### GPU(로컬 vLLM) → Claude 자동 폴백 (2026-10-19)
+
+GPU 서빙 예산이 한정돼 상시 가동하지 않는다. `LLM_PROVIDER=openai`(vLLM)로 운영하면서
+`LLM_FALLBACK_PROVIDER=anthropic` + `LLM_FALLBACK_MODEL=claude-sonnet-4-5` 를 같이
+넣으면, GPU 호출이 연결실패·타임아웃·5xx로 실패할 때 같은 요청을 Claude로 넘겨
+처리한다(솔루션·인사이트·챗봇 전부). 모델명·키·권한 오류 같은 영구 오류는 폴백 대상이
+아니다 — 그건 GPU를 고쳐야 풀린다.
+
+연속 `LLM_FALLBACK_FAILURE_THRESHOLD`회 실패하면 `LLM_FALLBACK_COOLDOWN_SECONDS`초
+동안 GPU를 건너뛰고 바로 Claude로 보낸다(circuit breaker, `app/clients/circuit_breaker.py`).
+**인메모리 상태라 워커/인스턴스 하나 기준이다** — 여러 대로 늘리면 각자 따로 추적한다.
+`LLM_FALLBACK_PROVIDER`를 비워 두면(기본값) 이 기능 전체가 꺼지고 지금 운영 동작과
+100% 동일하다.
 
 ## 공급자 모델/정책 변경 대응
 

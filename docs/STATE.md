@@ -1,8 +1,61 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-16
-브랜치: `feat/170-chat-tools` (Issue #170, 제나). 여러 워크트리가 병행 진행 중 —
-`feat/164-solution-vague-period`(#164)는 PR 전 상태로 별개.
+마지막 갱신: 2026-10-19
+브랜치: `feat/184-llm-provider-fallback` (Issue #184, 제나). 여러 워크트리가 병행
+진행 중 — 아래 다른 날짜 절들은 각각 별개 브랜치에서 진행됐다.
+
+## 2026-10-19 — GPU(로컬 vLLM) → Claude API 자동 폴백 (Issue #184)
+
+GPU(RunPod A40 + vLLM) 서빙 예산이 36만원으로 한정돼 있어 상시 가동하지 않기로
+했다 — 신뢰성 문제가 아니라 **비용** 문제다. GPU가 꺼져 있거나 응답하지 못할 때
+솔루션·인사이트·챗봇 요청을 자동으로 Claude API로 넘겨 처리하는 구조를 추가했다.
+
+### 무엇을 넣었나
+
+- **`app/clients/circuit_breaker.py`(신규)** — CLOSED/OPEN/half-open 세 상태만
+  추적하는 작은 범용 breaker. HTTP·LLM을 전혀 모르고 `should_skip()`/
+  `record_success()`/`record_failure()` 세 메서드만 노출한다. sync·인메모리라
+  단일 이벤트 루프에서 락 없이 안전하다 — 워커를 여러 개로 늘리면 각자 따로
+  추적한다(지금 배포 규모에서는 문제 없다고 보고 넘김).
+- **`app/clients/llm.py::complete()`** — primary 호출이 가용성 문제(연결실패·
+  타임아웃·5xx)로 실패하면 `LLM_FALLBACK_PROVIDER`로 한 번 더 시도한다.
+  `exc.__cause__`로 원본 SDK 예외를 보고 판정하며, 모델명·키·권한 같은 **영구
+  오류는 폴백 대상이 아니다**(#166/#167에서 이미 만든 영구오류 분류를 그대로
+  재사용) — GPU를 고쳐야 풀리는 문제를 Claude로 가려버리지 않게 했다. 연속
+  `LLM_FALLBACK_FAILURE_THRESHOLD`회(기본 3) 실패하면 breaker가 열려
+  `LLM_FALLBACK_COOLDOWN_SECONDS`초(기본 30) 동안은 primary를 건너뛰고 바로
+  Claude로 간다 — 쿨다운이 끝나면 실제 생성 요청 대신 가벼운 vLLM `/health`로
+  먼저 찔러보는 half-open probe를 한 번 거친다.
+- **`app/services/chat/graph.py::get_model`** — `(tools)` 한 개짜리 시그니처를
+  `(tools, provider, model_name)`으로 바꿔, 호출자가 지금 쓸 identity를 정해서
+  넘기게 했다(breaker 상태는 `app/clients/llm.py`가 쥐고 있다).
+- **`app/api/chat.py::_stream`** — 챗봇은 SSE 스트리밍이라 솔루션/인사이트와
+  난이도가 다르다. **아직 토큰을 하나도 내보내기 전**에 primary가 실패하면
+  그래프를 fallback identity로 다시 만들어 처음부터 한 번만 재시도한다. 토큰을
+  이미 보낸 뒤 실패하면 전환하지 않고 기존 `error` SSE 이벤트 그대로 끝낸다 —
+  이미 내려간 내용을 되돌릴 수 없어서다.
+- `docs/DEPLOY.md`에 새 환경변수 4종(`LLM_FALLBACK_PROVIDER`/`_MODEL`/
+  `_FAILURE_THRESHOLD`/`_COOLDOWN_SECONDS`) 문서화.
+
+### 안전장치
+
+`LLM_FALLBACK_PROVIDER`를 비워 두면(기본값) `should_use_fallback()`이 breaker를
+건드리지도 않는다 — **지금 운영(anthropic 단독) 동작과 100% 동일한 경로**를 탄다.
+기존 `tests/test_llm_providers.py`·`tests/test_chat_get_model.py`·
+`tests/test_chat.py`·`tests/test_sentry.py` 전부 회귀 없이 통과(시그니처 변경
+때문에 테스트 호출부만 맞춰 고침).
+
+### 테스트
+
+`tests/test_llm_fallback.py`(신규, 14개) — breaker 상태 전환 7개, `complete()`
+가용성/영구 오류 구분 + breaker 연동 4개, 챗봇 첫 토큰 전/후 전환 3개.
+`uv run pytest` 405 passed, `ruff check`/`format` 통과.
+
+### 범위 밖(이번에 안 함)
+
+- 여러 프로세스/워커 간 breaker 상태 공유(Redis 등) — 지금 규모에서 불필요.
+- "모델 출력이 스키마를 위반하면 Claude로 재생성" — provider 가용성 문제가
+  아니라 콘텐츠 품질 문제라 기존 `MAX_RETRY`(서비스 레이어) 영역으로 남겼다.
 
 ## 2026-10-16 — 챗봇 조회 툴 3종 추가: 순이익·날씨·상권 (Issue #170)
 

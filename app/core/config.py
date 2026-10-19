@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     # 낮춰 1차 시도부터 위반을 줄이는 쪽이 정확도가 아니라 "재시도 횟수"를 줄이는 레버다.
     llm_temperature: float | None = None
 
+    # GPU(로컬 vLLM) 서빙 예산이 한정돼 상시 가동하지 않기로 했다(2026-10-19) — GPU가
+    # 꺼져 있거나 응답하지 못하면 이 provider로 자동 전환한다. 비어 있으면(기본값) 폴백
+    # 기능 전체가 꺼진다 — 지금 운영(anthropic 단독) 동작과 100% 동일하다.
+    llm_fallback_provider: str | None = None
+    llm_fallback_model: str | None = None
+    # 연속 몇 번 실패해야 circuit breaker를 열지. 열리면 쿨다운 동안 매 요청마다 GPU
+    # 타임아웃을 반복해서 기다리지 않고 바로 fallback으로 보낸다.
+    llm_fallback_failure_threshold: int = 3
+    llm_fallback_cooldown_seconds: float = 30.0
+
     backend_base_url: str = "http://localhost:9000"
 
     sentry_dsn: str = ""
@@ -113,6 +123,11 @@ def missing_required(s: "Settings") -> list[str]:
     # 않는다. 여기서 막으면 로컬 모델로는 기동 자체가 안 된다.
     if key_field and not getattr(s, key_field) and not uses_local_llm_server(s):
         missing.append(key_field.upper())
+    # 폴백 provider 는 GPU 가 꺼진 동안 실제로 호출되므로, 그때서야 키가 없다는 걸
+    # 알면 폴백이 또 실패한다 — 기동 시점에 같이 검사한다.
+    fallback_key_field = _API_KEY_FIELDS.get(s.llm_fallback_provider)
+    if s.llm_fallback_provider and fallback_key_field and not getattr(s, fallback_key_field):
+        missing.append(f"{fallback_key_field.upper()}(LLM_FALLBACK_PROVIDER 용)")
     if "localhost" in s.backend_base_url or "127.0.0.1" in s.backend_base_url:
         missing.append("BACKEND_BASE_URL(로컬 기본값 그대로다)")
     return missing

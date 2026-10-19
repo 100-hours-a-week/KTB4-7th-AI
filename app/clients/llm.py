@@ -1,22 +1,35 @@
 import re
 
 import anthropic
+import httpx
 import openai
 from anthropic import AsyncAnthropic
 from google import genai
 from google.genai import types as genai_types
 from openai import AsyncOpenAI
 
+from app.clients.circuit_breaker import CircuitBreaker
 from app.core.config import (
     GOOGLE_THINKING_MODELS,
     OPENAI_REASONING_MODELS,
     UPSTAGE_BASE_URL,
     settings,
     thinking_off_body,
+    uses_local_llm_server,
 )
 from app.core.errors import ApiError
 
 _clients: dict[str, object] = {}
+
+# GPU(로컬 vLLM) 서빙 예산이 한정돼 상시 가동하지 않는다(2026-10-19) — primary 호출이
+# 가용성 문제로 계속 실패하면 이 breaker 가 열려서, 쿨다운 동안은 매 요청마다 타임아웃을
+# 반복해서 기다리지 않고 바로 LLM_FALLBACK_PROVIDER 로 보낸다. LLM_FALLBACK_PROVIDER 가
+# 비어 있으면(기본값) should_use_fallback() 이 breaker 를 건드리지도 않아 기존 동작과
+# 100% 동일하다.
+_breaker = CircuitBreaker(
+    failure_threshold=settings.llm_fallback_failure_threshold,
+    cooldown_seconds=settings.llm_fallback_cooldown_seconds,
+)
 
 
 def _get_anthropic() -> AsyncAnthropic:
@@ -60,9 +73,11 @@ def _get_google() -> genai.Client:
     return _clients["google"]
 
 
-async def _complete_openai_compatible(client: AsyncOpenAI, system: str, user: str, **extra) -> str:
+async def _complete_openai_compatible(
+    client: AsyncOpenAI, model: str, system: str, user: str, **extra
+) -> str:
     res = await client.chat.completions.create(
-        model=settings.llm_model,
+        model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         **extra,
     )
@@ -112,20 +127,87 @@ def _provider_status(exc: Exception) -> int | None:
     return None
 
 
-async def complete(
-    system: str, user: str, max_tokens: int = 2000, timeout: float | None = None
-) -> str:
-    """단발 생성. 솔루션·인사이트용. 스트리밍이 필요한 챗봇은 별도 경로를 쓴다.
+def is_fallback_eligible(exc: ApiError) -> bool:
+    """가용성 문제(연결실패·타임아웃·5xx)면 True — 그때만 fallback provider로 넘긴다.
 
-    timeout 을 주면 이 호출만 그 값으로 덮는다(초). 기본값은 전역 LLM_TIMEOUT_SECONDS 다.
-    BE 쪽 응답 제한이 엔드포인트마다 달라서 필요하다 — 인사이트는 BE 가 30초에 끊는데
-    전역 60초에 서비스 재시도 1회면 최악 120초라, 끊긴 뒤로도 토큰만 태운다.
+    exc.__cause__ 로 원본 SDK 예외를 본다(전부 `raise ... from exc`로 체인돼 있다).
+    원인이 없으면(예: 지원 안 하는 LLM_PROVIDER 설정 오류) 가용성 문제가 아니므로 False.
+    모델 출력이 스키마를 어기는 건 이 레이어에 안 온다 — complete()가 텍스트를 이미
+    정상적으로 반환한 뒤 서비스 레이어(MAX_RETRY)가 보는 영역이라 서로 안 겹친다.
     """
-    provider = settings.llm_provider
+    cause = exc.__cause__
+    if cause is None:
+        return False
+    if isinstance(cause, (anthropic.APITimeoutError, openai.APITimeoutError, TimeoutError)):
+        return True
+    return _provider_status(cause) not in _PERMANENT_PROVIDER_STATUSES
+
+
+async def _vllm_healthy() -> bool:
+    """vLLM의 /health를 짧은 타임아웃으로 찔러본다. half-open 복구 확인용 — 자주 안 부른다.
+
+    LLM_BASE_URL은 "{host}/v1" 모양이고 vLLM은 /health를 루트에 둔다.
+    """
+    base = (settings.llm_base_url or "").removesuffix("/v1")
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            res = await client.get(f"{base}/health")
+        return res.status_code == 200
+    except Exception:
+        return False
+
+
+async def should_use_fallback() -> bool:
+    """지금 이 호출을 primary 대신 LLM_FALLBACK_PROVIDER로 보내야 하면 True.
+
+    fallback이 설정 안 됐으면(기본값) breaker를 건드리지도 않는다 — 기존 동작과
+    완전히 동일한 경로를 탄다. breaker가 막 half-open으로 넘어온 순간(쿨다운 방금
+    끝남)이고 primary가 로컬 vLLM이면, 실제 생성 요청 대신 가벼운 /health로 먼저
+    찔러본다 — 아직 죽어 있는 GPU에 비싼 타임아웃을 또 치르게 하지 않으려는 것.
+    """
+    if not settings.llm_fallback_provider:
+        return False
+    # provider가 같아도(예: anthropic의 가벼운 모델→무거운 모델) 모델까지 같으면
+    # 폴백이 의미가 없다 — 그때만 막는다.
+    if (settings.llm_fallback_provider, settings.llm_fallback_model) == (
+        settings.llm_provider,
+        settings.llm_model,
+    ):
+        return False
+    if _breaker.should_skip():
+        return True
+    if _breaker.probing and uses_local_llm_server(settings) and not await _vllm_healthy():
+        _breaker.record_failure()
+        return True
+    return False
+
+
+def record_success() -> None:
+    _breaker.record_success()
+
+
+def record_failure() -> None:
+    _breaker.record_failure()
+
+
+async def resolve_primary_or_fallback() -> tuple[str, str, bool]:
+    """지금 쓸 (provider, model, used_fallback)을 고른다.
+
+    챗봇처럼 모델 객체를 요청 시작 전에 미리 만들어야 하는 호출자가 쓴다(app/api/chat.py).
+    complete()는 같은 결정을 내부에서 직접 한다 — 단발 호출이라 모델을 미리 안 만든다.
+    """
+    if await should_use_fallback():
+        return settings.llm_fallback_provider, settings.llm_fallback_model, True
+    return settings.llm_provider, settings.llm_model, False
+
+
+async def _complete_once(
+    provider: str, model: str, system: str, user: str, max_tokens: int, timeout: float | None
+) -> str:
     try:
         if provider == "anthropic":
             res = await _get_anthropic().messages.create(
-                model=settings.llm_model,
+                model=model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
@@ -133,7 +215,7 @@ async def complete(
             )
             return res.content[0].text
         if provider == "openai":
-            is_reasoning = settings.llm_model in OPENAI_REASONING_MODELS
+            is_reasoning = model in OPENAI_REASONING_MODELS
             # reasoning 모델(o-series/GPT-5.x)은 max_tokens를 거부하고 max_completion_tokens를
             # 요구한다 (openai SDK의 max_tokens 필드 docstring: "deprecated ... not compatible
             # with o-series models"). GPT-5.6 Luna처럼 reasoning이 기본인 모델만
@@ -148,10 +230,11 @@ async def complete(
             body = thinking_off_body()
             if body:
                 extra["extra_body"] = body
-            return await _complete_openai_compatible(_get_openai(), system, user, **extra)
+            return await _complete_openai_compatible(_get_openai(), model, system, user, **extra)
         if provider == "upstage":
             return await _complete_openai_compatible(
                 _get_upstage(),
+                model,
                 system,
                 user,
                 max_tokens=max_tokens,
@@ -162,7 +245,7 @@ async def complete(
                 "system_instruction": system,
                 "max_output_tokens": max_tokens,
             }
-            if settings.llm_model in GOOGLE_THINKING_MODELS:
+            if model in GOOGLE_THINKING_MODELS:
                 # Gemini 3+는 thinking_budget이 아니라 thinking_level(low/medium/high)을 쓰고
                 # "low"가 최솟값이다 — thinking_budget=0 같은 완전 off는 없다.
                 config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level="LOW")
@@ -170,7 +253,7 @@ async def complete(
                 # google-genai 는 클라이언트가 아니라 요청 config 로 받고 단위가 ms 다.
                 config_kwargs["http_options"] = genai_types.HttpOptions(timeout=int(timeout * 1000))
             res = await _get_google().aio.models.generate_content(
-                model=settings.llm_model,
+                model=model,
                 contents=user,
                 config=genai_types.GenerateContentConfig(**config_kwargs),
             )
@@ -196,6 +279,45 @@ async def complete(
         if status in _PERMANENT_PROVIDER_STATUSES:
             raise ApiError(500, "PROVIDER_ERROR", "모델 공급자가 요청을 거절했습니다.") from exc
         raise ApiError(502, "PROVIDER_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
+
+
+async def complete(
+    system: str, user: str, max_tokens: int = 2000, timeout: float | None = None
+) -> str:
+    """단발 생성. 솔루션·인사이트용. 스트리밍이 필요한 챗봇은 별도 경로를 쓴다.
+
+    timeout 을 주면 이 호출만 그 값으로 덮는다(초). 기본값은 전역 LLM_TIMEOUT_SECONDS 다.
+    BE 쪽 응답 제한이 엔드포인트마다 달라서 필요하다 — 인사이트는 BE 가 30초에 끊는데
+    전역 60초에 서비스 재시도 1회면 최악 120초라, 끊긴 뒤로도 토큰만 태운다.
+
+    LLM_FALLBACK_PROVIDER가 설정돼 있으면, primary 호출이 가용성 문제로 실패할 때
+    같은 요청을 fallback provider로 한 번 더 시도한다(app/clients/circuit_breaker.py
+    참고) — 콘텐츠 품질 재시도(MAX_RETRY, 서비스 레이어)와는 완전히 별개 축이다.
+    """
+    use_fallback = await should_use_fallback()
+    provider = settings.llm_fallback_provider if use_fallback else settings.llm_provider
+    model = settings.llm_fallback_model if use_fallback else settings.llm_model
+
+    try:
+        result = await _complete_once(provider, model, system, user, max_tokens, timeout)
+    except ApiError as exc:
+        if use_fallback or not settings.llm_fallback_provider or not is_fallback_eligible(exc):
+            # 이미 fallback을 쓰고 있었거나(더 넘어갈 데 없음), 기능이 꺼져 있거나,
+            # 가용성 문제가 아니면(영구 오류 등) 그대로 올린다 — 기존 동작과 동일.
+            raise
+        record_failure()
+        return await _complete_once(
+            settings.llm_fallback_provider,
+            settings.llm_fallback_model,
+            system,
+            user,
+            max_tokens,
+            timeout,
+        )
+
+    if not use_fallback:
+        record_success()
+    return result
 
 
 # 프롬프트 캐싱(cache_control)은 붙이지 않는다. 2026-09-22 실측(count_tokens, sonnet-4-5):

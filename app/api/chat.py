@@ -17,6 +17,11 @@ evidence는 직전 "tools" 노드가 채운 last_evidence를 on_chain_end 이벤
 코드 3종: AI_TIMEOUT(모델 타임아웃), AI_GENERATION_ERROR(모델 호출 실패),
 AI_TOOL_ERROR(도구 조회 2회 연속 실패 — 기존엔 실패 문구를 정상 답변처럼 answerChunk로
 보냈는데, ERD chat_messages.status 의 FAILED 값과 맞추려면 error 이벤트가 더 맞다).
+
+LLM_FALLBACK_PROVIDER가 설정돼 있으면(app/clients/llm.py의 circuit breaker 참고),
+**아직 토큰을 하나도 내보내기 전**에 primary 호출이 가용성 문제로 실패하면 fallback
+provider로 그래프를 다시 만들어 처음부터 한 번만 재시도한다. 토큰을 이미 보낸 뒤 실패하면
+전환하지 않는다 — 이미 내려간 내용을 되돌릴 수 없어서 기존 error 이벤트로 끝낸다.
 """
 
 import json
@@ -26,7 +31,9 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.clients import llm
 from app.core.auth import verify_internal_token
+from app.core.config import settings
 from app.core.errors import ApiError
 from app.prompts import chat as chat_prompt
 from app.schemas.chat import ChatMessage, ChatRequest
@@ -73,47 +80,81 @@ def _error_sse(code: str, message: str) -> str:
     return f"data: {body}\n\n"
 
 
-async def _stream(compiled, initial_state: dict):
+async def _stream(
+    tools: list, initial_state: dict, provider: str, model_name: str, started_on_fallback: bool
+):
+    model = chat_graph.get_model(tools, provider, model_name)
+    compiled = chat_graph.build_graph(model, tools)
     evidence: dict | None = None
-    try:
-        async for event in compiled.astream_events(initial_state, version="v2"):
-            kind = event.get("event")
-            if kind == "on_chain_end" and event.get("name") == "tools":
-                output = event.get("data", {}).get("output") or {}
-                evidence = output.get("last_evidence")
-                continue
-            if kind == "on_chain_end" and event.get("name") == "give_up":
-                sentry_sdk.capture_exception(
-                    ApiError(500, "AI_TOOL_ERROR", "AI_TOOL_ERROR"),
-                    tags={"error_code": "AI_TOOL_ERROR"},
+    sent_any = False
+    tried_fallback = started_on_fallback
+
+    while True:
+        try:
+            async for event in compiled.astream_events(initial_state, version="v2"):
+                kind = event.get("event")
+                if kind == "on_chain_end" and event.get("name") == "tools":
+                    output = event.get("data", {}).get("output") or {}
+                    evidence = output.get("last_evidence")
+                    continue
+                if kind == "on_chain_end" and event.get("name") == "give_up":
+                    sentry_sdk.capture_exception(
+                        ApiError(500, "AI_TOOL_ERROR", "AI_TOOL_ERROR"),
+                        tags={"error_code": "AI_TOOL_ERROR"},
+                    )
+                    yield _error_sse("AI_TOOL_ERROR", chat_graph.FAILURE_PHRASE)
+                    sent_any = True
+                    continue
+                if kind != "on_chat_model_stream":
+                    continue
+                if event.get("metadata", {}).get("langgraph_node") != "agent":
+                    continue
+                text = _text_of(event["data"]["chunk"].content)
+                if text:
+                    sent_any = True
+                    yield _sse(text, evidence)
+        except ApiError as exc:
+            # 토큰을 하나도 안 보냈고, 아직 fallback으로 안 바꿔봤고, 가용성 문제면 —
+            # 처음부터(에이전트↔툴 사이클 전체를) fallback provider로 다시 돈다. 이미
+            # 뭔가 내보냈으면 내용을 되돌릴 수 없어 기존 error 이벤트로 끝낸다.
+            if (
+                not sent_any
+                and not tried_fallback
+                and settings.llm_fallback_provider
+                and llm.is_fallback_eligible(exc)
+            ):
+                llm.record_failure()
+                tried_fallback = True
+                model = chat_graph.get_model(
+                    tools, settings.llm_fallback_provider, settings.llm_fallback_model
                 )
-                yield _error_sse("AI_TOOL_ERROR", chat_graph.FAILURE_PHRASE)
+                compiled = chat_graph.build_graph(model, tools)
+                evidence = None
                 continue
-            if kind != "on_chat_model_stream":
-                continue
-            if event.get("metadata", {}).get("langgraph_node") != "agent":
-                continue
-            text = _text_of(event["data"]["chunk"].content)
-            if text:
-                yield _sse(text, evidence)
-    except ApiError as exc:
-        if exc.status >= 500:
-            sentry_sdk.capture_exception(exc, tags={"error_code": exc.code})
-        yield _error_sse(exc.code, exc.message)
-    except Exception as exc:
-        sentry_sdk.capture_exception(exc, tags={"error_code": "AI_GENERATION_ERROR"})
-        raise
+            if exc.status >= 500:
+                sentry_sdk.capture_exception(exc, tags={"error_code": exc.code})
+            yield _error_sse(exc.code, exc.message)
+            break
+        except Exception as exc:
+            sentry_sdk.capture_exception(exc, tags={"error_code": "AI_GENERATION_ERROR"})
+            raise
+        else:
+            if not started_on_fallback and not tried_fallback:
+                llm.record_success()
+            break
     yield "data: [DONE]\n\n"
 
 
 @router.post("/chat/messages")
 async def chat_messages(req: ChatRequest) -> StreamingResponse:
     tools = build_tools(req.storeId)
-    model = chat_graph.get_model(tools)
-    compiled = chat_graph.build_graph(model, tools)
+    provider, model_name, started_on_fallback = await llm.resolve_primary_or_fallback()
 
     system = chat_prompt.build_system([card.model_dump() for card in req.context], req.chatDate)
     messages = [SystemMessage(system), *_to_lc_messages(req.history), HumanMessage(req.question)]
-
     initial_state = {"messages": messages, "failures": 0, "last_evidence": None}
-    return StreamingResponse(_stream(compiled, initial_state), media_type="text/event-stream")
+
+    return StreamingResponse(
+        _stream(tools, initial_state, provider, model_name, started_on_fallback),
+        media_type="text/event-stream",
+    )
