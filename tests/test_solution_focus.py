@@ -214,3 +214,85 @@ def test_선별이_계열별_최고_최저를_보존한다():
         kept = [p["amount"] for p in rows if p["dayType"] == day]
         assert max(kept) == max(full), f"{day} 최고가 빠졌다"
         assert min(kept) == min(full), f"{day} 최저가 빠졌다"
+
+
+# ── 메뉴 단위 근거 (menuRankings, 2026-10-19) ─────────────────────────
+
+MENUS = [
+    {
+        "rank": 1,
+        "menuName": "아이스 아메리카노",
+        "menuSales": 3104200,
+        "quantity": 912,
+        "ratio": 0.261,
+        "vsPrevPeriod": -0.18,
+    },
+    {
+        "rank": 2,
+        "menuName": "카페라떼",
+        "menuSales": 1420800,
+        "quantity": 331,
+        "ratio": 0.119,
+        "vsPrevPeriod": 0.031,
+    },
+]
+
+
+def test_메뉴는_비중이_아니라_변화로_점수를_낸다():
+    """메뉴 비중은 카테고리보다 구조적으로 작다 — 커피 카테고리가 62% 여도 그 안의
+    아이스 아메리카노는 26% 다. 비중으로 재면 메뉴 축이 거의 항상 진다.
+
+    그리고 "상위 메뉴가 있다" 는 뉴스가 아니다. 늘 아메리카노가 1 위다.
+    """
+    from app.services.solution_focus import _category_score, _menu_score
+
+    # 비중은 카테고리의 절반 이하인데 변화는 더 크다
+    assert max(m["ratio"] for m in MENUS) < 0.62
+    assert _menu_score(MENUS) > 0
+    # 변화가 없으면 할 말도 없다
+    flat = [{**m, "vsPrevPeriod": None} for m in MENUS]
+    assert _menu_score(flat) == 0.0
+    assert _category_score([{"name": "커피", "share": 0.62}]) == 0.62
+
+
+def test_메뉴가_크게_움직인_날에만_카드가_된다():
+    base = {
+        "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
+        "hourlyProfile": [
+            {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        ],
+        "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
+    }
+    quiet = assign({**base, "menuRankings": MENUS})
+    loud = assign({**base, "menuRankings": [{**MENUS[0], "vsPrevPeriod": -0.42}, MENUS[1]]})
+
+    assert not any("menuRankings" in item for item in quiet)
+    assert any("menuRankings" in item for item in loud)
+
+
+def test_메뉴가_없으면_축에서_빠진다():
+    """BE 가 아직 안 보낸다 — 없는 채로도 지금처럼 동작해야 한다."""
+    focus = assign(METRICS)
+
+    assert not any("menuRankings" in item for item in focus)
+    assert len(focus) == 3
+
+
+def test_메뉴는_비중_상위_몇_종만_넣는다():
+    many = [
+        {
+            "rank": i + 1,
+            "menuName": f"메뉴{i}",
+            "menuSales": 500000 - i * 10000,
+            "quantity": 100 - i,
+            "ratio": round(0.3 - i * 0.01, 4),
+            "vsPrevPeriod": -0.42 if i == 0 else 0.01,
+        }
+        for i in range(20)
+    ]
+    focus = assign({**METRICS, "menuRankings": many})
+    rows = next(item["menuRankings"] for item in focus if "menuRankings" in item)
+
+    assert len(rows) == 5
+    assert rows[0]["menuName"] == "메뉴0", "비중이 큰 쪽이 먼저여야 한다"

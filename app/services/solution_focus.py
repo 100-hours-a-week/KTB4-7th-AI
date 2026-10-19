@@ -130,9 +130,26 @@ def derive(metrics: dict) -> dict:
     return {**metrics, "hourlyPeakRatio": ratios} if ratios else metrics
 
 
-def _category_rows(points: list[dict]) -> list[dict]:
+def _category_rows(points: list[dict], share_key: str = "share") -> list[dict]:
     """비중 상위 몇 종만 남긴다."""
-    return sorted(points, key=lambda p: p.get("share") or 0.0, reverse=True)[:_TOP_SHARES]
+    return sorted(points, key=lambda p: p.get(share_key) or 0.0, reverse=True)[:_TOP_SHARES]
+
+
+def _menu_score(points: list[dict]) -> float:
+    """메뉴는 **변화**로 본다. 비중으로 보면 안 된다.
+
+    메뉴 비중은 카테고리보다 구조적으로 작다 — 커피 카테고리가 62% 여도 그 안의
+    아이스 아메리카노는 26% 다. 같은 잣대로 재면 메뉴 축이 거의 항상 진다.
+
+    그리고 "상위 메뉴가 있다" 는 뉴스가 아니다. 늘 아메리카노가 1 위다. 할 말이
+    생기는 건 **많이 움직였을 때**다.
+
+    **잠정값이다. 아직 실측이 없다** — BE 가 menuRankings 를 보내기 시작하면 다시 본다.
+    """
+    changes = [abs(p["vsPrevPeriod"]) for p in points if p.get("vsPrevPeriod") is not None]
+    if not changes:
+        return 0.0
+    return min(max(changes) * _CATEGORY_CHANGE_WEIGHT, 1.0)
 
 
 def _category_score(points: list[dict]) -> float:
@@ -203,6 +220,7 @@ def assign(metrics: dict) -> list[dict]:
     category = metrics.get("categoryBreakdown") or []
     predicted = metrics.get("predictedSalesToday")
     weather = metrics.get("weatherContext")
+    menus = metrics.get("menuRankings") or []
 
     total_focus: dict = {"salesSummary": summary} if summary else {}
     if predicted is not None and total_focus:
@@ -224,6 +242,12 @@ def assign(metrics: dict) -> list[dict]:
         # 맨 뒤에 둔다 — 동점(1.0)이면 안정 정렬이라 앞선 세 축이 우선한다. 날씨는 "다른
         # 축이 오늘 할 말이 없을 때만" 보충하는 자리다.
         ({"weatherContext": weather}, _weather_score(weather)),
+        # 메뉴는 카테고리보다 한 단계 구체적이다 — "커피 62%" 로는 행동이 안 나오지만
+        # "아이스 아메리카노 912잔" 이면 발주를 말할 수 있다(2026-10-18).
+        (
+            {"menuRankings": _category_rows(menus, "ratio")},
+            _menu_score(menus) if menus else -1.0,
+        ),
     ]
     usable = [(focus, score) for focus, score in candidates if score >= 0.0]
     usable.sort(key=lambda pair: pair[1], reverse=True)

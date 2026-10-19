@@ -72,6 +72,14 @@ class Metrics(Contract):
     categoryBreakdown: list[CategoryPoint]
     predictedSalesToday: int | None = None
     reviewSummary: dict | None = None
+    # 인사이트(InsightMetrics)에 이미 보내고 있는 것과 **같은 모양**이다. BE 가 새로
+    # 집계할 필요 없이 그대로 넘기면 된다(2026-10-18 풀스택 협의). 솔루션은 그동안
+    # 카테고리 단위("커피 62%")까지만 알아서 "커피 메뉴를 강화하세요" 같은 말이
+    # 나왔다 — 무슨 메뉴인지를 몰랐다.
+    #
+    # MenuRankingPoint 가 아래(인사이트 절)에 정의돼 있어 문자열로 참조하고 모듈 끝에서
+    # 해석한다. 클래스를 위로 옮기면 "인사이트 전용 지표" 절의 구성이 흐트러진다.
+    menuRankings: list["MenuRankingPoint"] = []
     weatherContext: WeatherContext | None = None
 
 
@@ -152,3 +160,7 @@ class InsightMetrics(Contract):
     categorySales: list[CategorySalesPoint] = []
     menuRankings: list[MenuRankingPoint] = []
     districtBenchmark: DistrictBenchmark | None = None
+
+
+# Metrics.menuRankings 가 아래에 정의된 MenuRankingPoint 를 문자열로 참조한다.
+Metrics.model_rebuild()
