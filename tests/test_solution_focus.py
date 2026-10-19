@@ -279,7 +279,11 @@ def test_메뉴가_없으면_축에서_빠진다():
     assert len(focus) == 3
 
 
-def test_메뉴는_비중_상위_몇_종만_넣는다():
+def test_메뉴는_변화폭_상위만_넣는다():
+    """점수와 같은 기준으로 골라야 한다. 비중으로 고르면 점수를 만든 메뉴가 빠진다 —
+    "유자차가 52% 급락" 이 점수를 1.0 으로 만들어 카드가 올라갔는데, 보여주는 5 종은
+    비중 상위라 유자차가 없고 모델은 ±1% 짜리 메뉴만 받는다.
+    """
     many = [
         {
             "rank": i + 1,
@@ -287,7 +291,8 @@ def test_메뉴는_비중_상위_몇_종만_넣는다():
             "menuSales": 500000 - i * 10000,
             "quantity": 100 - i,
             "ratio": round(0.3 - i * 0.01, 4),
-            "vsPrevPeriod": -0.42 if i == 0 else 0.01,
+            # 비중은 i 가 커질수록 작은데, 변화는 꼴찌가 가장 크다
+            "vsPrevPeriod": -0.42 if i == 19 else 0.01,
         }
         for i in range(20)
     ]
@@ -295,4 +300,23 @@ def test_메뉴는_비중_상위_몇_종만_넣는다():
     rows = next(item["menuRankings"] for item in focus if "menuRankings" in item)
 
     assert len(rows) == 5
-    assert rows[0]["menuName"] == "메뉴0", "비중이 큰 쪽이 먼저여야 한다"
+    assert rows[0]["menuName"] == "메뉴19", "점수를 만든 메뉴가 맨 앞에 와야 한다"
+
+
+def test_증감이_없는_메뉴는_뒤로_민다():
+    """비교할 게 없으면 할 말도 없다 — 시간대 축이 행 2 개 미만이면 빠지는 것과 같다."""
+    mixed = [
+        {"rank": 1, "menuName": "비교없음", "menuSales": 500000, "quantity": 100, "ratio": 0.3},
+        {
+            "rank": 2,
+            "menuName": "급락",
+            "menuSales": 100000,
+            "quantity": 20,
+            "ratio": 0.06,
+            "vsPrevPeriod": -0.4,
+        },
+    ]
+    focus = assign({**METRICS, "menuRankings": mixed})
+    rows = next(item["menuRankings"] for item in focus if "menuRankings" in item)
+
+    assert rows[0]["menuName"] == "급락"

@@ -130,9 +130,25 @@ def derive(metrics: dict) -> dict:
     return {**metrics, "hourlyPeakRatio": ratios} if ratios else metrics
 
 
-def _category_rows(points: list[dict], share_key: str = "share") -> list[dict]:
+def _menu_rows(points: list[dict]) -> list[dict]:
+    """변화폭 상위 몇 종. 점수와 같은 기준으로 골라야 한다.
+
+    비중으로 고르면 점수와 어긋난다 — "유자차가 52% 급락" 이 점수를 1.0 으로 만들어
+    카드가 올라갔는데, 보여주는 5 종은 비중 상위라 유자차가 빠진다. 모델은 ±1~3% 짜리
+    메뉴만 받고 "할 말이 있다" 는 카드를 써야 한다.
+
+    증감이 없는 메뉴(vsPrevPeriod 가 null)는 뒤로 민다 — 비교할 게 없으면 할 말도 없다.
+    """
+    return sorted(
+        points,
+        key=lambda p: abs(p.get("vsPrevPeriod") or 0.0),
+        reverse=True,
+    )[:_TOP_SHARES]
+
+
+def _category_rows(points: list[dict]) -> list[dict]:
     """비중 상위 몇 종만 남긴다."""
-    return sorted(points, key=lambda p: p.get(share_key) or 0.0, reverse=True)[:_TOP_SHARES]
+    return sorted(points, key=lambda p: p.get("share") or 0.0, reverse=True)[:_TOP_SHARES]
 
 
 def _menu_score(points: list[dict]) -> float:
@@ -245,7 +261,7 @@ def assign(metrics: dict) -> list[dict]:
         # 메뉴는 카테고리보다 한 단계 구체적이다 — "커피 62%" 로는 행동이 안 나오지만
         # "아이스 아메리카노 912잔" 이면 발주를 말할 수 있다(2026-10-18).
         (
-            {"menuRankings": _category_rows(menus, "ratio")},
+            {"menuRankings": _menu_rows(menus)},
             _menu_score(menus) if menus else -1.0,
         ),
     ]
