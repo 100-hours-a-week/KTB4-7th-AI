@@ -66,6 +66,25 @@ class WeatherContext(Contract):
     isNotable: bool
 
 
+class DayHours(Contract):
+    opensAt: str  # "08:00"
+    closesAt: str  # "22:00"
+
+
+class BusinessHours(Contract):
+    """정규 영업시간 (2026-10-19 풀스택 확정, 이미 같은 형식으로 보내고 있음).
+
+    hourlyProfile 이 dayType(WEEKDAY/WEEKEND) 단위 집계라 영업시간도 같은 단위다.
+    요일별로 다르면 BE 가 각 그룹에서 가장 흔한 시간을 대표값으로 보낸다 — 평일 중
+    하루만 크게 다른 매장은 그날 "마감 2시간 전" 류 표현이 어긋날 수 있다(알고 있는 한계).
+    """
+
+    # 계약이 대문자 키라 그대로 쓴다.
+    WEEKDAY: DayHours | None = None
+    WEEKEND: DayHours | None = None
+    closedDaysOfWeek: list[str] = []
+
+
 class Metrics(Contract):
     salesSummary: SalesSummary
     hourlyProfile: list[HourlyPoint]
@@ -80,6 +99,7 @@ class Metrics(Contract):
     # MenuRankingPoint 가 아래(인사이트 절)에 정의돼 있어 문자열로 참조하고 모듈 끝에서
     # 해석한다. 클래스를 위로 옮기면 "인사이트 전용 지표" 절의 구성이 흐트러진다.
     menuRankings: list["MenuRankingPoint"] = []
+    businessHours: BusinessHours | None = None
     weatherContext: WeatherContext | None = None
 
 

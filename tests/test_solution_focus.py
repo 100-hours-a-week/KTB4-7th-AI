@@ -320,3 +320,67 @@ def test_증감이_없는_메뉴는_뒤로_민다():
     rows = next(item["menuRankings"] for item in focus if "menuRankings" in item)
 
     assert rows[0]["menuName"] == "급락"
+
+
+# ── 영업시간 (businessHours, 2026-10-20) ──────────────────────────────
+
+HOURS = {"WEEKDAY": {"opensAt": "08:00", "closesAt": "22:00"}}
+
+
+def test_영업시간_밖_매출은_비교에서_뺀다():
+    """0 원 가드만으로는 "닫은 시간" 과 "열었는데 안 팔린 시간" 을 구분하지 못한다.
+
+    마감 뒤에 매출이 찍히는 경우가 실제로 있다(정산·배달 지연 등). 그러면 그 시각이
+    최저로 뽑혀 "18시가 23시의 52.5배" 처럼 영업 안 하는 시간과 비교한 문장이 나온다.
+    """
+    from app.services.solution_focus import _hourly_score, peak_ratios
+
+    rows = [
+        {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        {"dayType": "WEEKDAY", "hour": 23, "amount": 4000},  # 마감 뒤
+    ]
+
+    assert peak_ratios(rows)[0]["lowHour"] == 23
+    assert peak_ratios(rows, HOURS)[0]["lowHour"] == 8
+    assert _hourly_score(rows, HOURS) < _hourly_score(rows)
+
+
+def test_영업시간이_없으면_지금처럼_동작한다():
+    """BE 가 아직 안 보내는 매장도 있다."""
+    from app.services.solution_focus import _hourly_rows
+
+    rows = [
+        {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 23, "amount": 4000},
+    ]
+
+    assert _hourly_rows(rows, None) == _hourly_rows(rows)
+
+
+def test_영업시간을_모델에게도_넘긴다():
+    """ "마감 2시간 전" 같은 실행 시점을 쓰려면 모델이 영업시간을 알아야 한다."""
+    metrics = {
+        **METRICS,
+        "hourlyProfile": [
+            {"dayType": "WEEKDAY", "hour": 9, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        ],
+        "businessHours": HOURS,
+    }
+    hourly = next(item for item in assign(metrics) if "hourlyProfile" in item)
+
+    assert hourly["businessHours"] == HOURS
+
+
+def test_정의되지_않은_dayType은_거르지_않는다():
+    """BE 가 WEEKEND 영업시간을 생략할 수 있다 — 그 계열은 그대로 둔다."""
+    from app.services.solution_focus import _hourly_rows
+
+    rows = [
+        {"dayType": "WEEKDAY", "hour": 23, "amount": 4000},
+        {"dayType": "WEEKEND", "hour": 23, "amount": 9000},
+    ]
+    kept = _hourly_rows(rows, HOURS)
+
+    assert [r["dayType"] for r in kept] == ["WEEKEND"]
