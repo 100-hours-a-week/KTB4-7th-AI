@@ -125,13 +125,26 @@ class _RaisingOpenAI:
 
 class _FakeAnthropicSuccess:
     calls = 0
+    last_kwargs: dict | None = None
 
     def __init__(self, **kwargs):
         self.messages = self
 
     async def create(self, **kwargs):
         _FakeAnthropicSuccess.calls += 1
+        _FakeAnthropicSuccess.last_kwargs = kwargs
         return type("R", (), {"content": [type("C", (), {"text": "fallback-ok"})()]})()
+
+
+class _SucceedingOpenAI:
+    def __init__(self, **kw):
+        self.chat = type("Chat", (), {"completions": self})()
+        self.last_kwargs: dict | None = None
+
+    async def create(self, **kwargs):
+        self.last_kwargs = kwargs
+        message = type("M", (), {"content": "primary-ok"})()
+        return type("R", (), {"choices": [type("C", (), {"message": message})()]})()
 
 
 def _provider_error(status: int | None) -> Exception:
@@ -149,7 +162,10 @@ def _reset(monkeypatch):
     monkeypatch.setattr(settings, "llm_model", "qwen-primary")
     monkeypatch.setattr(settings, "llm_fallback_provider", None)
     monkeypatch.setattr(settings, "llm_fallback_model", None)
+    monkeypatch.setattr(settings, "llm_timeout_seconds", 60.0)
+    monkeypatch.setattr(settings, "llm_fallback_primary_timeout_seconds", 30.0)
     _FakeAnthropicSuccess.calls = 0
+    _FakeAnthropicSuccess.last_kwargs = None
 
 
 async def test_폴백_미설정이면_가용성_오류도_그대로_올린다(monkeypatch):
@@ -172,6 +188,45 @@ async def test_가용성_오류면_fallback_provider로_재시도한다(monkeypa
 
     assert result == "fallback-ok"
     assert _FakeAnthropicSuccess.calls == 1
+
+
+async def test_fallback_설정시_primary_타임아웃에_상한이_걸린다(monkeypatch):
+    """헥터 PR #185 리뷰: GPU가 멈춘 경우 primary+fallback이 전체 타임아웃을 두 번
+    다 쓰면 최악 두 배가 된다 — primary 시도만 짧게 캡을 씌운다."""
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    fake = _SucceedingOpenAI()
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: fake)
+
+    result = await llm.complete("sys", "user")
+
+    assert result == "primary-ok"
+    assert fake.last_kwargs["timeout"] == 30.0, "전역 60초가 아니라 캡(30초)이 걸려야 한다"
+
+
+async def test_이미_짧은_timeout은_상한보다_작으면_그대로_둔다(monkeypatch):
+    """인사이트처럼 호출자가 이미 12초 같은 짧은 값을 요청했으면 늘리지 않는다."""
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    fake = _SucceedingOpenAI()
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: fake)
+
+    await llm.complete("sys", "user", timeout=12.0)
+
+    assert fake.last_kwargs["timeout"] == 12.0
+
+
+async def test_fallback_시도는_타임아웃_상한을_안_받는다(monkeypatch):
+    """Claude는 hang 걱정이 없어서 원래 timeout(캡보다 커도) 그대로 쓴다."""
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: _RaisingOpenAI(_provider_error(None)))
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    await llm.complete("sys", "user", timeout=45.0)
+
+    # fallback은 primary용 캡(30초) 영향을 안 받아야 한다.
+    assert _FakeAnthropicSuccess.last_kwargs["timeout"] == 45.0
 
 
 async def test_영구_오류면_fallback을_쓰지_않는다(monkeypatch):

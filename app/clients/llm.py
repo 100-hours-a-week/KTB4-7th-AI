@@ -285,6 +285,21 @@ async def _complete_once(
         raise ApiError(502, "PROVIDER_ERROR", "모델 공급자 호출에 실패했습니다.") from exc
 
 
+def _primary_timeout(timeout: float | None) -> float | None:
+    """primary 시도에만 쓸 타임아웃 — fallback이 설정돼 있으면 상한을 씌운다.
+
+    GPU가 "꺼진"(연결거부) 게 아니라 "멈춘"(응답 없음) 경우, primary가 전체 타임아웃을
+    다 기다린 뒤 fallback이 또 전체 타임아웃을 쓰면 최악 두 배가 된다(헥터 PR #185
+    리뷰). 호출자가 이미 더 짧은 값을 요청했으면(인사이트의 12초) 그대로 둔다 — 상한은
+    늘리지 않고 줄이기만 한다.
+    """
+    if not settings.llm_fallback_provider:
+        return timeout
+    cap = settings.llm_fallback_primary_timeout_seconds
+    effective = timeout if timeout is not None else settings.llm_timeout_seconds
+    return min(effective, cap)
+
+
 async def complete(
     system: str, user: str, max_tokens: int = 2000, timeout: float | None = None
 ) -> str:
@@ -296,14 +311,17 @@ async def complete(
 
     LLM_FALLBACK_PROVIDER가 설정돼 있으면, primary 호출이 가용성 문제로 실패할 때
     같은 요청을 fallback provider로 한 번 더 시도한다(app/clients/circuit_breaker.py
-    참고) — 콘텐츠 품질 재시도(MAX_RETRY, 서비스 레이어)와는 완전히 별개 축이다.
+    참고) — 콘텐츠 품질 재시도(MAX_RETRY, 서비스 레이어)와는 완전히 별개 축이다. primary
+    시도 자체의 타임아웃은 `_primary_timeout()`으로 짧게 잡는다 — fallback(Claude)
+    시도는 원래 timeout 그대로 쓴다.
     """
     use_fallback = await should_use_fallback()
     provider = settings.llm_fallback_provider if use_fallback else settings.llm_provider
     model = settings.llm_fallback_model if use_fallback else settings.llm_model
+    attempt_timeout = timeout if use_fallback else _primary_timeout(timeout)
 
     try:
-        result = await _complete_once(provider, model, system, user, max_tokens, timeout)
+        result = await _complete_once(provider, model, system, user, max_tokens, attempt_timeout)
     except ApiError as exc:
         if use_fallback or not settings.llm_fallback_provider or not is_fallback_eligible(exc):
             # 이미 fallback을 쓰고 있었거나(더 넘어갈 데 없음), 기능이 꺼져 있거나,

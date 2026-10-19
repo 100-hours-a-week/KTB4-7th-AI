@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # 타임아웃을 반복해서 기다리지 않고 바로 fallback으로 보낸다.
     llm_fallback_failure_threshold: int = 3
     llm_fallback_cooldown_seconds: float = 30.0
+    # GPU가 "꺼진"(연결거부) 게 아니라 "멈춘"(응답 없음) 경우, primary가 전체 타임아웃을
+    # 다 기다린 뒤 fallback이 또 전체 타임아웃을 쓰면 최악 두 배가 된다(헥터 PR #185
+    # 리뷰, 2026-10-19). primary 시도에만 이 값으로 상한을 씌운다 — 호출자가 이미 더
+    # 짧은 값을 요청했으면(인사이트의 12초) 그대로 둔다. fallback(Claude) 시도는 상한을
+    # 안 받는다 — hang 걱정이 없다. 6차 재측정(p95 24.5s)을 보고 30초로 정함.
+    llm_fallback_primary_timeout_seconds: float = 30.0
 
     backend_base_url: str = "http://localhost:9000"
 

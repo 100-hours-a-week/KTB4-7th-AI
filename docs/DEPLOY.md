@@ -17,6 +17,7 @@
 | `LLM_FALLBACK_MODEL` | | (없음, 기본) | `LLM_FALLBACK_PROVIDER`와 같이 넣어야 한다 |
 | `LLM_FALLBACK_FAILURE_THRESHOLD` | | `3` (기본) | — |
 | `LLM_FALLBACK_COOLDOWN_SECONDS` | | `30` (기본) | — |
+| `LLM_FALLBACK_PRIMARY_TIMEOUT_SECONDS` | | `30` (기본) | — (`LLM_FALLBACK_PROVIDER` 설정 시에만 의미 있음) |
 | `BACKEND_TIMEOUT_SECONDS` | | `2.0` (기본) | — |
 | `INSIGHT_LLM_TIMEOUT_SECONDS` | | `12` (기본) | — |
 | `INTERNAL_AI_TOKEN` | | (없음) | 토큰 검증을 하지 않는다 |
@@ -41,6 +42,15 @@ GPU 서빙 예산이 한정돼 상시 가동하지 않는다. `LLM_PROVIDER=open
 **인메모리 상태라 워커/인스턴스 하나 기준이다** — 여러 대로 늘리면 각자 따로 추적한다.
 `LLM_FALLBACK_PROVIDER`를 비워 두면(기본값) 이 기능 전체가 꺼지고 지금 운영 동작과
 100% 동일하다.
+
+GPU가 "꺼진"(연결거부) 게 아니라 "멈춘"(응답 없음) 경우, primary가 전체 타임아웃을
+다 기다린 뒤 fallback이 또 전체 타임아웃을 쓰면 요청 하나가 최악 두 배(예: 솔루션
+60s+60s=120s)가 된다. 이를 막으려고 primary 시도에만
+`LLM_FALLBACK_PRIMARY_TIMEOUT_SECONDS`(기본 30초)로 상한을 씌운다 — 호출자가 이미
+더 짧은 값을 요청했으면(인사이트의 12초) 그대로 둔다. fallback(Claude) 시도는 이
+상한을 안 받는다. 30초는 RunPod A40 6차 재측정(p95 24.5s, 2026-10-19,
+`docs/STATE.md`) 기준으로 정했다 — **이후 재측정에서 단일 시도 꼬리 레이턴시가 이
+값에 가까워지면 올려야 한다.**
 
 **폴백을 켤 때는 Claude 쪽 잔액도 같이 모니터링해야 한다.** GPU가 fallback 대상이
 없는 유일한 경로가 되므로, GPU가 죽었을 때 Claude 크레딧도 바닥이면(실제로 지난주에
