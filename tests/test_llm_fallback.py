@@ -89,6 +89,20 @@ def test_probe_실패하면_즉시_다시_연다():
     assert breaker.should_skip() is True
 
 
+def test_probe가_진행중이면_동시_요청은_건너뛴다():
+    """헥터 PR #185 리뷰: should_skip()이 probing을 쓰기만 하고 안 읽어서,
+    쿨다운이 끝난 순간 동시 요청이 전부 probe를 탈 수 있었다 — 회귀 테스트."""
+    breaker, clock = _breaker(threshold=1, cooldown=30.0)
+    breaker.record_failure()
+    clock.now += 31.0
+
+    first = breaker.should_skip()
+    concurrent = [breaker.should_skip() for _ in range(5)]
+
+    assert first is False, "첫 요청은 probe 기회를 받아야 한다"
+    assert concurrent == [True] * 5, "probe 결과가 나오기 전 동시 요청은 전부 건너뛰어야 한다"
+
+
 # ── llm.complete() 통합 ────────────────────────────────────────────────
 
 

@@ -45,6 +45,10 @@ class CircuitBreaker:
         내부적으로 probing 상태로 바꿔 둔다 — 그 결과는 `record_success`/`record_failure`가
         받아서 breaker를 닫거나 쿨다운을 다시 연다.
         """
+        if self._probing:
+            # 이미 다른 요청이 이 half-open 기회를 쓰고 있다 — 그 결과(record_success/
+            # record_failure)가 나오기 전까지는 동시 요청을 전부 fallback으로 보낸다.
+            return True
         if self._open_until is None:
             return False
         if self._clock() < self._open_until:
