@@ -146,12 +146,16 @@ def is_fallback_eligible(exc: ApiError) -> bool:
 async def _vllm_healthy() -> bool:
     """vLLM의 /health를 짧은 타임아웃으로 찔러본다. half-open 복구 확인용 — 자주 안 부른다.
 
-    LLM_BASE_URL은 "{host}/v1" 모양이고 vLLM은 /health를 루트에 둔다.
+    LLM_BASE_URL은 "{host}/v1" 모양이고 vLLM은 /health를 루트에 둔다. OPENAI_API_KEY가
+    설정돼 있으면 같이 보낸다 — vLLM에 --api-key를 걸면 /health도 인증을 요구할 수
+    있는데, 토큰 없이 찔러서 매번 401이 나면 breaker가 GPU가 멀쩡해도 영원히 안 닫힌다.
     """
     base = (settings.llm_base_url or "").removesuffix("/v1")
+    token = settings.openai_api_key
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            res = await client.get(f"{base}/health")
+            res = await client.get(f"{base}/health", headers=headers)
         return res.status_code == 200
     except Exception:
         return False

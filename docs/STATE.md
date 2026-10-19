@@ -57,6 +57,16 @@ GPU(RunPod A40 + vLLM) 서빙 예산이 36만원으로 한정돼 있어 상시 �
 - "모델 출력이 스키마를 위반하면 Claude로 재생성" — provider 가용성 문제가
   아니라 콘텐츠 품질 문제라 기존 `MAX_RETRY`(서비스 레이어) 영역으로 남겼다.
 
+### 추가 수정 — vLLM에 `--api-key`가 걸릴 예정이라 half-open probe도 인증해야 했다
+
+운영 체크리스트 리뷰 중 발견: RunPod vLLM 엔드포인트에 `--api-key`를 걸 계획인데,
+`_vllm_healthy()`(half-open 복구 확인용 `/health` 호출)가 토큰 없이 찔러보고
+있었다. vLLM이 `/health`까지 인증 대상으로 두면 이 probe가 영원히 401을 받아
+**GPU가 멀쩡해도 breaker가 다시는 안 닫히는** 상태가 될 뻔했다 — Pod가 지금
+내려가 있어 vLLM이 실제로 `/health`를 인증 대상으로 두는지는 확인 못 했지만,
+토큰을 같이 보내는 쪽이 어느 경우든 안전해서 바로 고쳤다(`settings.openai_api_key`
+를 `Authorization: Bearer` 로 같이 보냄).
+
 ## 2026-10-16 — 챗봇 조회 툴 3종 추가: 순이익·날씨·상권 (Issue #170)
 
 챗봇이 순이익·날씨·상권 질문에 실시간으로 답할 수 있도록 조회 툴 3종을 추가했다. 기존
