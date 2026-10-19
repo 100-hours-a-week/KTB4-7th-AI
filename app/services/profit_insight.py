@@ -69,7 +69,10 @@ async def generate(req: ProfitInsightRequest) -> ProfitInsightResponse:
             max_tokens=MAX_TOKENS,
             timeout=settings.insight_llm_timeout_seconds,
         )
-        insights = _parse(raw, req.maxInsightCount)
+        # metrics=None → 금액 어림·수치 접지 검사를 건너뛴다. 매출 인사이트에는 2026-10-20
+        # 에 넣었는데(A40 실측에서 금액_어림 77.5%·수치_정확 65.0% 가 그대로 나갔다),
+        # 순이익 쪽은 지표 모양이 달라 접지 기준을 못 정했고 측정도 없다.
+        insights = _parse(raw, req.maxInsightCount, None)
         if insights:
             break
 
