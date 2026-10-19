@@ -37,6 +37,36 @@ _ROWS_PER_SERIES = 2
 _TOP_SHARES = 5
 
 
+def _open_hours(points: list[dict], hours: dict | None) -> list[dict]:
+    """영업시간 밖 행을 뺀다. 영업시간이 없으면 그대로 둔다.
+
+    BE 가 24 시간치를 보내면 문 닫은 시간이 섞여 "가장 낮은 시간대" 가 0 시로 뽑히고
+    "0시에 뭘 하세요" 가 나온다. 그동안은 0 원 행을 빼는 것으로 대신했는데(2026-10-08),
+    그건 "닫은 시간" 과 "열었는데 안 팔린 시간" 을 구분하지 못하는 임시 방편이었다.
+    영업시간을 받으면 정확히 가를 수 있다(2026-10-19 풀스택 확정).
+
+    0 원 행 가드는 그대로 둔다 — 영업 중인데 0 원인 시간은 할 말이 있는 사실이지만,
+    그걸 최저로 쓰면 격차 점수가 1.0 으로 포화돼 시간대 축이 늘 1 순위가 된다.
+    같이 풀려면 점수식을 손봐야 해서 이번 범위 밖이다.
+    """
+    if not hours:
+        return points
+    out = []
+    for point in points:
+        window = hours.get(point.get("dayType") or "")
+        if not window:
+            out.append(point)
+            continue
+        hour = point.get("hour")
+        if hour is None:
+            continue
+        opens = int(str(window.get("opensAt", "00:00")).split(":")[0])
+        closes = int(str(window.get("closesAt", "24:00")).split(":")[0]) or 24
+        if opens <= hour < closes:
+            out.append(point)
+    return out
+
+
 def _selling(points: list[dict]) -> list[dict]:
     """매출이 0 인 행을 뺀다 — 영업시간 밖일 수 있다.
 
@@ -48,7 +78,7 @@ def _selling(points: list[dict]) -> list[dict]:
     return [p for p in points if (p.get("amount") or 0) > 0]
 
 
-def _hourly_score(points: list[dict]) -> float:
+def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
     """시간대 격차. 가장 낮은 때가 가장 높은 때보다 많이 낮을수록 할 말이 많다.
 
     비교할 행이 2 개가 안 되면 -1.0 으로 후보에서 아예 뺀다. 0.0 을 돌려주면 "할 말은
@@ -57,16 +87,16 @@ def _hourly_score(points: list[dict]) -> float:
     시간대에 비해 현저히 낮습니다"가 나왔다. 비교가 이 축의 존재 이유라, 비교할 게
     없으면 축 자체가 성립하지 않는다.
     """
-    amounts = [p.get("amount") or 0 for p in _selling(points)]
+    amounts = [p.get("amount") or 0 for p in _selling(_open_hours(points, hours))]
     if len(amounts) < 2 or max(amounts) <= 0:
         return -1.0
     return 1.0 - (min(amounts) / max(amounts))
 
 
-def _hourly_rows(points: list[dict]) -> list[dict]:
+def _hourly_rows(points: list[dict], hours: dict | None = None) -> list[dict]:
     """dayType 별로 가장 높은·낮은 몇 행만 남긴다. 평일과 주말은 다른 계열이라 섞지 않는다."""
     picked: list[dict] = []
-    selling = _selling(points)
+    selling = _selling(_open_hours(points, hours))
     for day_type in dict.fromkeys(p.get("dayType") for p in selling):
         series = sorted(
             (p for p in selling if p.get("dayType") == day_type),
@@ -79,7 +109,7 @@ def _hourly_rows(points: list[dict]) -> list[dict]:
     return picked
 
 
-def peak_ratios(points: list[dict]) -> list[dict]:
+def peak_ratios(points: list[dict], hours: dict | None = None) -> list[dict]:
     """dayType 별 최고/최저 배수. 코드가 계산해 지표로 넘긴다.
 
     왜. 30,000 대 210,000 이면 "7 배" 가 그 데이터의 핵심 사실인데, 프롬프트는 배율 계산을
@@ -99,7 +129,7 @@ def peak_ratios(points: list[dict]) -> list[dict]:
     **어떤 검사에도 안 걸리는 틀린 문장**이 된다.
     """
     out = []
-    selling = _selling(points)
+    selling = _selling(_open_hours(points, hours))
     for day_type in dict.fromkeys(p.get("dayType") for p in selling):
         series = [p for p in selling if p.get("dayType") == day_type]
         if len(series) < 2:
@@ -206,7 +236,10 @@ def _weather_score(weather: dict | None) -> float:
 
 def _hourly_focus(metrics: dict, hourly: list[dict]) -> dict:
     """시간대 근거. 배수가 있으면 같이 준다 — derive() 가 metrics 에 넣어 둔 값이다."""
-    focus: dict = {"hourlyProfile": _hourly_rows(hourly)}
+    hours = metrics.get("businessHours")
+    focus: dict = {"hourlyProfile": _hourly_rows(hourly, hours)}
+    if hours:
+        focus["businessHours"] = hours
     ratios = metrics.get("hourlyPeakRatio")
     if ratios:
         focus["hourlyPeakRatio"] = ratios
@@ -249,7 +282,10 @@ def assign(metrics: dict) -> list[dict]:
     # 점수는 받은 행 전부로 내고, 프롬프트에 넣는 행만 줄인다 — 격차 판단이 둔해지면
     # 어느 지표가 특이한지부터 틀린다.
     candidates = [
-        (_hourly_focus(metrics, hourly), _hourly_score(hourly) if hourly else -1.0),
+        (
+            _hourly_focus(metrics, hourly),
+            _hourly_score(hourly, metrics.get("businessHours")) if hourly else -1.0,
+        ),
         (
             {"categoryBreakdown": _category_rows(category)},
             _category_score(category) if category else -1.0,
