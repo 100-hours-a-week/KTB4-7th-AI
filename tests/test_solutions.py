@@ -186,8 +186,12 @@ async def test_title이_200자를_넘으면_재시도한다(monkeypatch):
     assert len(calls) == 2
 
 
-async def test_카드가_3장보다_적으면_재시도하되_버리지는_않는다(monkeypatch):
-    """500 으로 그날 솔루션을 통째로 잃는 것보다 2장이라도 내보내는 편이 낫다."""
+async def test_카드가_3장보다_적어도_그대로_내보낸다(monkeypatch):
+    """2026-10-17 제품 결정: 최소 1 장·최대 3 장이고 억지로 채우지 않는다.
+
+    전에는 배정 수를 못 채우면 재시도했는데 그게 재시도의 가장 큰 이유였다 —
+    A40 5차에서 1 회 종료율이 3.3% 였다.
+    """
     calls = []
 
     async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
@@ -200,7 +204,7 @@ async def test_카드가_3장보다_적으면_재시도하되_버리지는_않�
 
     assert res.status_code == 200
     assert len(res.json()["data"]["solutionCards"]) == 2
-    assert len(calls) == 2, "3장이 아니면 한 번 더 시도해야 한다"
+    assert len(calls) == 1, "억지로 채우려 다시 부르지 않는다"
 
 
 async def test_카드가_0장이면_500이다(monkeypatch):
@@ -234,7 +238,7 @@ async def test_vsPrevPeriod_가_null_이어도_422가_아니다(monkeypatch):
     assert res.status_code == 200
 
 
-async def test_동형이의_문자가_섞이면_재시도한다(monkeypatch):
+async def test_동형이의_문자가_섞이면_그_카드를_버린다(monkeypatch):
     """배포본(memme.kr/solution/4/10)에서 "POP" 이 "POП"(키릴 П, U+041F)로 생성됐다.
 
     타입상 멀쩡한 문자열이라 스키마는 통과하고, 화면 폰트에서는 구분이 거의 안 돼
@@ -253,14 +257,17 @@ async def test_동형이의_문자가_섞이면_재시도한다(monkeypatch):
     res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
-    assert len(calls) == 2, "동형이의 문자가 섞이면 한 번 더 시도해야 한다"
+    assert len(calls) == 1, "버리고 끝낸다 — 그 자리를 메우려 다시 부르지 않는다"
     assert "П" not in json.dumps(res.json(), ensure_ascii=False)
 
 
-async def test_배율_위반으로_재시도하면_2회차_프롬프트에_위반_이유가_들어간다(monkeypatch):
+async def test_전부_배율_위반이면_2회차_프롬프트에_위반_이유가_들어간다(monkeypatch):
     """2026-10-11: 2회차가 1회차와 완전히 같은 프롬프트라 같은 종류의 위반이 반복될 수
     있었다(devtools/bench.py 실측, n=15, 재시도 3건 전부 COMPUTED_RATIO). 2회차 프롬프트에
     1회차 위반 사유를 덧붙인다.
+
+    2026-10-17 부터 재시도는 **한 장도 못 건졌을 때만** 돈다(최소 1 장·최대 3 장 정책).
+    그래서 세 장이 모두 위반인 응답으로 바꿨다 — 피드백 경로 자체는 그대로다.
     """
     prompts = []
 
@@ -277,15 +284,15 @@ async def test_배율_위반으로_재시도하면_2회차_프롬프트에_위�
                     },
                     {
                         "rankNo": 2,
-                        "title": "B",
-                        "summaryText": "요약",
+                        "title": "점심 집중도를 보세요",
+                        "summaryText": "평일 12시 매출이 20시의 7배입니다.",
                         "detailText": "상세",
                         "evidence": "근거",
                     },
                     {
                         "rankNo": 3,
-                        "title": "C",
-                        "summaryText": "요약",
+                        "title": "저녁 매출 비중을 보세요",
+                        "summaryText": "평일 18시 매출이 14시의 4배입니다.",
                         "detailText": "상세",
                         "evidence": "근거",
                     },

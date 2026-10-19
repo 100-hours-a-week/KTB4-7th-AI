@@ -326,5 +326,5 @@ def test_카드_개수는_배정된_장수로_채점한다():
         ensure_ascii=False,
     )
 
-    assert grade_solution(two, metrics, expected_cards=2)["카드_개수_일치"] is True
-    assert grade_solution(two, metrics)["카드_개수_일치"] is False, "기본값은 3 이다"
+    assert grade_solution(two, metrics, expected_cards=2)["카드_개수_적정"] is True
+    assert grade_solution(two, metrics)["카드_개수_적정"] is True, "2 장은 1~3 안이라 정상이다"
