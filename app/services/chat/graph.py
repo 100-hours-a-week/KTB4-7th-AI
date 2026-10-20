@@ -74,18 +74,20 @@ class ChatState(MessagesState):
     last_evidence: dict | None
 
 
-def get_model(tools: list) -> BaseChatModel:
-    provider = settings.llm_provider
+def get_model(tools: list, provider: str, model_name: str) -> BaseChatModel:
+    """provider/model_name을 파라미터로 받는다 — 호출자(app/api/chat.py)가
+    `llm.resolve_primary_or_fallback()` 결과를 넘겨서, GPU가 가용하지 않을 때 Claude로
+    바꿔 끼울 수 있게 한다(app/clients/llm.py의 circuit breaker 참고)."""
     if provider == "anthropic":
         model = ChatAnthropic(
-            model=settings.llm_model,
+            model=model_name,
             api_key=settings.anthropic_api_key,
             timeout=settings.llm_timeout_seconds,
             max_retries=0,
         )
     elif provider == "openai":
         kwargs = {
-            "model": settings.llm_model,
+            "model": model_name,
             "api_key": settings.openai_api_key,
             "timeout": settings.llm_timeout_seconds,
             "max_retries": 0,
@@ -94,7 +96,7 @@ def get_model(tools: list) -> BaseChatModel:
             # OpenAI 호환 서버(vLLM 등). 인증을 안 걸어도 SDK 가 키 자리를 요구한다.
             kwargs["base_url"] = settings.llm_base_url
             kwargs["api_key"] = settings.openai_api_key or "EMPTY"
-        if settings.llm_model in OPENAI_REASONING_MODELS:
+        if model_name in OPENAI_REASONING_MODELS:
             # GPT-5.6 Luna처럼 reasoning이 기본인 모델만 non-reasoning으로 고정한다 —
             # reasoning이 없는 openai 모델(LLM_MODEL)에는 이 파라미터 자체를 보내지 않는다.
             kwargs["reasoning_effort"] = "none"
@@ -104,7 +106,7 @@ def get_model(tools: list) -> BaseChatModel:
         model = ChatOpenAI(**kwargs)
     elif provider == "upstage":
         model = ChatOpenAI(
-            model=settings.llm_model,
+            model=model_name,
             api_key=settings.upstage_api_key,
             base_url=UPSTAGE_BASE_URL,
             timeout=settings.llm_timeout_seconds,
@@ -112,12 +114,12 @@ def get_model(tools: list) -> BaseChatModel:
         )
     elif provider == "google":
         kwargs = {
-            "model": settings.llm_model,
+            "model": model_name,
             "google_api_key": settings.google_api_key,
             "timeout": settings.llm_timeout_seconds,
             "max_retries": 0,
         }
-        if settings.llm_model in GOOGLE_THINKING_MODELS:
+        if model_name in GOOGLE_THINKING_MODELS:
             # Gemini 3+는 thinking_level="low"가 최솟값이다 — thinking_budget=0 같은
             # 완전 off는 없다 (app/core/config.py의 GOOGLE_THINKING_MODELS 주석 참고).
             kwargs["thinking_level"] = "low"

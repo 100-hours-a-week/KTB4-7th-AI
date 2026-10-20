@@ -86,7 +86,7 @@ class FakeModel(BaseChatModel):
 
 def _patch_model(monkeypatch, responses: list[AIMessage]) -> FakeModel:
     fake = FakeModel(responses=responses)
-    monkeypatch.setattr(chat_graph, "get_model", lambda tools: fake)
+    monkeypatch.setattr(chat_graph, "get_model", lambda tools, provider, model_name: fake)
     return fake
 
 

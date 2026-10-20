@@ -13,6 +13,12 @@
 | `LLM_PROVIDER` | | `anthropic` (기본) | — |
 | `LLM_MODEL` | | `claude-sonnet-4-5` (기본) | — |
 | `LLM_TIMEOUT_SECONDS` | | `60` (기본) | — |
+| `LLM_DISABLE_THINKING` | | `false` (기본) | vLLM(Qwen3 계열)이 thinking 모드로 응답해 `<think>` 블록이 섞이고 JSON 파싱이 깨짐(`LLM_PROVIDER=openai`+`LLM_BASE_URL` 설정 시에만 의미 있음) |
+| `LLM_FALLBACK_PROVIDER` | | (없음, 기본) | GPU 등 primary가 가용성 문제로 실패해도 폴백 없이 그대로 에러 |
+| `LLM_FALLBACK_MODEL` | | (없음, 기본) | `LLM_FALLBACK_PROVIDER`와 같이 넣어야 한다 |
+| `LLM_FALLBACK_FAILURE_THRESHOLD` | | `3` (기본) | — |
+| `LLM_FALLBACK_COOLDOWN_SECONDS` | | `30` (기본) | — |
+| `LLM_FALLBACK_PRIMARY_TIMEOUT_SECONDS` | | `30` (기본) | — (`LLM_FALLBACK_PROVIDER` 설정 시에만 의미 있음) |
 | `BACKEND_TIMEOUT_SECONDS` | | `2.0` (기본) | — |
 | `INSIGHT_LLM_TIMEOUT_SECONDS` | | `12` (기본) | — |
 | `INTERNAL_AI_TOKEN` | | (없음) | 토큰 검증을 하지 않는다 |
@@ -23,6 +29,41 @@
 `LLM_PROVIDER` 를 바꾸면 해당 provider 의 키가 대신 필요하다
 (`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `UPSTAGE_API_KEY`).
 **anthropic 외 provider 는 실호출로 검증된 적이 없다.**
+
+### GPU(로컬 vLLM) → Claude 자동 폴백 (2026-10-19)
+
+RunPod Pod에서 vLLM을 기동하는 커맨드는 `infra/vllm/serve.sh`에 고정해뒀다 — Pod를
+새로 만들 때마다 `VLLM_USE_FLASHINFER_SAMPLER=0`·`--api-key` 같은 설정이 빠져
+측정값·운영 동작이 달라지는 문제(3차, `docs/STATE.md`)를 막기 위해서다. `VLLM_API_KEY`는
+스크립트에 안 넣고 Pod 환경변수로만 주입한다 — 같은 값을 AI 서버 쪽
+`OPENAI_API_KEY`에도 넣어야 한다(아래).
+
+GPU 서빙 예산이 한정돼 상시 가동하지 않는다. `LLM_PROVIDER=openai`(vLLM)로 운영하면서
+`LLM_FALLBACK_PROVIDER=anthropic` + `LLM_FALLBACK_MODEL=claude-sonnet-4-5` 를 같이
+넣으면, GPU 호출이 연결실패·타임아웃·5xx로 실패할 때 같은 요청을 Claude로 넘겨
+처리한다(솔루션·인사이트·챗봇 전부). 모델명·키·권한 오류 같은 영구 오류는 폴백 대상이
+아니다 — 그건 GPU를 고쳐야 풀린다.
+
+연속 `LLM_FALLBACK_FAILURE_THRESHOLD`회 실패하면 `LLM_FALLBACK_COOLDOWN_SECONDS`초
+동안 GPU를 건너뛰고 바로 Claude로 보낸다(circuit breaker, `app/clients/circuit_breaker.py`).
+**인메모리 상태라 워커/인스턴스 하나 기준이다** — 여러 대로 늘리면 각자 따로 추적한다.
+`LLM_FALLBACK_PROVIDER`를 비워 두면(기본값) 이 기능 전체가 꺼지고 지금 운영 동작과
+100% 동일하다.
+
+GPU가 "꺼진"(연결거부) 게 아니라 "멈춘"(응답 없음) 경우, primary가 전체 타임아웃을
+다 기다린 뒤 fallback이 또 전체 타임아웃을 쓰면 요청 하나가 최악 두 배(예: 솔루션
+60s+60s=120s)가 된다. 이를 막으려고 primary 시도에만
+`LLM_FALLBACK_PRIMARY_TIMEOUT_SECONDS`(기본 30초)로 상한을 씌운다 — 호출자가 이미
+더 짧은 값을 요청했으면(인사이트의 12초) 그대로 둔다. fallback(Claude) 시도는 이
+상한을 안 받는다. 30초는 RunPod A40 6차 재측정(p95 24.5s, 2026-10-19,
+`docs/STATE.md`) 기준으로 정했다 — **이후 재측정에서 단일 시도 꼬리 레이턴시가 이
+값에 가까워지면 올려야 한다.**
+
+**폴백을 켤 때는 Claude 쪽 잔액도 같이 모니터링해야 한다.** GPU가 fallback 대상이
+없는 유일한 경로가 되므로, GPU가 죽었을 때 Claude 크레딧도 바닥이면(실제로 지난주에
+한 번 있었다) 서비스가 통째로 멈춘다. 크레딧 소진은 400(invalid_request)류로 와서
+`is_fallback_eligible()`이 영구 오류로 올바르게 분류해 폴백을 시도하지 않는다 — 즉
+"폴백이 안 됐다"는 신호 자체는 정상 동작이고, 잔액을 직접 봐야 미리 알 수 있다.
 
 ## 공급자 모델/정책 변경 대응
 

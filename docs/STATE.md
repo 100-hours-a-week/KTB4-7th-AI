@@ -1,8 +1,94 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-16
-브랜치: `feat/170-chat-tools` (Issue #170, 제나). 여러 워크트리가 병행 진행 중 —
-`feat/164-solution-vague-period`(#164)는 PR 전 상태로 별개.
+마지막 갱신: 2026-10-19
+브랜치: `feat/184-llm-provider-fallback` (Issue #184, 제나). 여러 워크트리가 병행
+진행 중 — 아래 다른 날짜 절들은 각각 별개 브랜치에서 진행됐다.
+
+## 2026-10-19 — GPU(로컬 vLLM) → Claude API 자동 폴백 (Issue #184)
+
+GPU(RunPod A40 + vLLM) 서빙 예산이 36만원으로 한정돼 있어 상시 가동하지 않기로
+했다 — 신뢰성 문제가 아니라 **비용** 문제다. GPU가 꺼져 있거나 응답하지 못할 때
+솔루션·인사이트·챗봇 요청을 자동으로 Claude API로 넘겨 처리하는 구조를 추가했다.
+
+### 무엇을 넣었나
+
+- **`app/clients/circuit_breaker.py`(신규)** — CLOSED/OPEN/half-open 세 상태만
+  추적하는 작은 범용 breaker. HTTP·LLM을 전혀 모르고 `should_skip()`/
+  `record_success()`/`record_failure()` 세 메서드만 노출한다. sync·인메모리라
+  단일 이벤트 루프에서 락 없이 안전하다 — 워커를 여러 개로 늘리면 각자 따로
+  추적한다(지금 배포 규모에서는 문제 없다고 보고 넘김).
+- **`app/clients/llm.py::complete()`** — primary 호출이 가용성 문제(연결실패·
+  타임아웃·5xx)로 실패하면 `LLM_FALLBACK_PROVIDER`로 한 번 더 시도한다.
+  `exc.__cause__`로 원본 SDK 예외를 보고 판정하며, 모델명·키·권한 같은 **영구
+  오류는 폴백 대상이 아니다**(#166/#167에서 이미 만든 영구오류 분류를 그대로
+  재사용) — GPU를 고쳐야 풀리는 문제를 Claude로 가려버리지 않게 했다. 연속
+  `LLM_FALLBACK_FAILURE_THRESHOLD`회(기본 3) 실패하면 breaker가 열려
+  `LLM_FALLBACK_COOLDOWN_SECONDS`초(기본 30) 동안은 primary를 건너뛰고 바로
+  Claude로 간다 — 쿨다운이 끝나면 실제 생성 요청 대신 가벼운 vLLM `/health`로
+  먼저 찔러보는 half-open probe를 한 번 거친다.
+- **`app/services/chat/graph.py::get_model`** — `(tools)` 한 개짜리 시그니처를
+  `(tools, provider, model_name)`으로 바꿔, 호출자가 지금 쓸 identity를 정해서
+  넘기게 했다(breaker 상태는 `app/clients/llm.py`가 쥐고 있다).
+- **`app/api/chat.py::_stream`** — 챗봇은 SSE 스트리밍이라 솔루션/인사이트와
+  난이도가 다르다. **아직 토큰을 하나도 내보내기 전**에 primary가 실패하면
+  그래프를 fallback identity로 다시 만들어 처음부터 한 번만 재시도한다. 토큰을
+  이미 보낸 뒤 실패하면 전환하지 않고 기존 `error` SSE 이벤트 그대로 끝낸다 —
+  이미 내려간 내용을 되돌릴 수 없어서다.
+- `docs/DEPLOY.md`에 새 환경변수 4종(`LLM_FALLBACK_PROVIDER`/`_MODEL`/
+  `_FAILURE_THRESHOLD`/`_COOLDOWN_SECONDS`) 문서화.
+
+### 안전장치
+
+`LLM_FALLBACK_PROVIDER`를 비워 두면(기본값) `should_use_fallback()`이 breaker를
+건드리지도 않는다 — **지금 운영(anthropic 단독) 동작과 100% 동일한 경로**를 탄다.
+기존 `tests/test_llm_providers.py`·`tests/test_chat_get_model.py`·
+`tests/test_chat.py`·`tests/test_sentry.py` 전부 회귀 없이 통과(시그니처 변경
+때문에 테스트 호출부만 맞춰 고침).
+
+### 테스트
+
+`tests/test_llm_fallback.py`(신규, 14개) — breaker 상태 전환 7개, `complete()`
+가용성/영구 오류 구분 + breaker 연동 4개, 챗봇 첫 토큰 전/후 전환 3개.
+`uv run pytest` 405 passed, `ruff check`/`format` 통과.
+
+### 범위 밖(이번에 안 함)
+
+- 여러 프로세스/워커 간 breaker 상태 공유(Redis 등) — 지금 규모에서 불필요.
+- "모델 출력이 스키마를 위반하면 Claude로 재생성" — provider 가용성 문제가
+  아니라 콘텐츠 품질 문제라 기존 `MAX_RETRY`(서비스 레이어) 영역으로 남겼다.
+
+### 추가 수정 — vLLM에 `--api-key`가 걸릴 예정이라 half-open probe도 인증해야 했다
+
+운영 체크리스트 리뷰 중 발견: RunPod vLLM 엔드포인트에 `--api-key`를 걸 계획인데,
+`_vllm_healthy()`(half-open 복구 확인용 `/health` 호출)가 토큰 없이 찔러보고
+있었다. vLLM이 `/health`까지 인증 대상으로 두면 이 probe가 영원히 401을 받아
+**GPU가 멀쩡해도 breaker가 다시는 안 닫히는** 상태가 될 뻔했다 — Pod가 지금
+내려가 있어 vLLM이 실제로 `/health`를 인증 대상으로 두는지는 확인 못 했지만,
+토큰을 같이 보내는 쪽이 어느 경우든 안전해서 바로 고쳤다(`settings.openai_api_key`
+를 `Authorization: Bearer` 로 같이 보냄).
+
+### 헥터 PR #185 리뷰 반영
+
+- **half-open 동시성 레이스 — 고침.** `should_skip()`이 `_probing` 플래그를
+  쓰기만 하고 안 읽어서, 쿨다운이 끝난 순간 동시 요청이 전부 half-open probe를
+  탈 수 있었다. `should_skip()` 맨 앞에 `if self._probing: return True` 한 줄
+  추가 + 회귀 테스트(`test_probe가_진행중이면_동시_요청은_건너뛴다`).
+- **Claude 잔액 모니터링 — 문서화.** GPU가 죽었을 때 Claude 크레딧도 바닥이면
+  서비스가 통째로 멈춘다(지난주 실제로 한 번 있었음). 크레딧 소진은 영구 오류로
+  분류돼 폴백을 시도하지 않는 게 의도된 동작이라, 잔액은 직접 봐야 한다 —
+  `docs/DEPLOY.md`에 추가.
+- **타임아웃이 두 배가 되는 문제 — 결정함: primary 타임아웃을 30초로 캡.** GPU가
+  "꺼진" 경우(연결거부)는 거의 공짜로 넘어가지만, "멈춘"(hung) 경우 primary가
+  전체 타임아웃(솔루션 60s·인사이트 12s)을 다 기다린 뒤 fallback이 또 전체
+  타임아웃을 쓸 수 있어 최악 120s/24s였다. 6차 재측정(솔루션 p95 24.5s·max
+  43.2s, `docs/STATE.md` 6차 절·PR #189)을 근거로 결정했다 — 신규 설정
+  `LLM_FALLBACK_PRIMARY_TIMEOUT_SECONDS=30`으로 primary 시도에만 상한을 씌운다
+  (`app/clients/llm.py::_primary_timeout()`). 호출자가 이미 더 짧은 값을
+  요청했으면(인사이트 12초) 그대로 두고, fallback(Claude) 시도는 상한을 안
+  받는다. **주의: 6차의 max 43.2s는 단일 시도가 아니라 콘텐츠 재시도
+  (`MAX_RETRY=1`) 2회 합이다** — 단일 시도 p95는 24.5s라 30초 캡과 충돌하지
+  않는다(2026-10-19, 사용자 확인). 다음 재측정에서 단일 시도 꼬리 레이턴시가
+  30초에 가까워지면 올리기로 했다 — 지금은 30 유지.
 
 ## 2026-10-16 — 챗봇 조회 툴 3종 추가: 순이익·날씨·상권 (Issue #170)
 

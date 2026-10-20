@@ -6,6 +6,7 @@ from app.api.chat import _stream
 from app.core import sentry as sentry_config
 from app.core.config import settings
 from app.core.errors import ApiError, register_error_handlers
+from app.services.chat import graph as chat_graph
 
 
 def test_설정된_DSN과_release로_Sentry를_초기화한다(monkeypatch):
@@ -126,7 +127,19 @@ async def test_챗봇_스트림_오류도_Sentry에_수집한다(monkeypatch):
             yield {"event": "on_chain_start", "name": "agent"}
             raise ApiError(504, "AI_TIMEOUT", "모델 타임아웃")
 
-    chunks = [chunk async for chunk in _stream(FailingGraph(), {})]
+    monkeypatch.setattr(chat_graph, "get_model", lambda tools, provider, model_name: object())
+    monkeypatch.setattr(chat_graph, "build_graph", lambda model, tools: FailingGraph())
+
+    chunks = [
+        chunk
+        async for chunk in _stream(
+            tools=[],
+            initial_state={},
+            provider="anthropic",
+            model_name="claude-sonnet-4-5",
+            started_on_fallback=False,
+        )
+    ]
 
     assert "AI_TIMEOUT" in chunks[0]
     assert chunks[-1] == "data: [DONE]\n\n"
