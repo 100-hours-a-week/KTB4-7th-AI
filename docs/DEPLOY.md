@@ -32,6 +32,12 @@
 
 ### GPU(로컬 vLLM) → Claude 자동 폴백 (2026-10-19)
 
+RunPod Pod에서 vLLM을 기동하는 커맨드는 `infra/vllm/serve.sh`에 고정해뒀다 — Pod를
+새로 만들 때마다 `VLLM_USE_FLASHINFER_SAMPLER=0`·`--api-key` 같은 설정이 빠져
+측정값·운영 동작이 달라지는 문제(3차, `docs/STATE.md`)를 막기 위해서다. `VLLM_API_KEY`는
+스크립트에 안 넣고 Pod 환경변수로만 주입한다 — 같은 값을 AI 서버 쪽
+`OPENAI_API_KEY`에도 넣어야 한다(아래).
+
 GPU 서빙 예산이 한정돼 상시 가동하지 않는다. `LLM_PROVIDER=openai`(vLLM)로 운영하면서
 `LLM_FALLBACK_PROVIDER=anthropic` + `LLM_FALLBACK_MODEL=claude-sonnet-4-5` 를 같이
 넣으면, GPU 호출이 연결실패·타임아웃·5xx로 실패할 때 같은 요청을 Claude로 넘겨
