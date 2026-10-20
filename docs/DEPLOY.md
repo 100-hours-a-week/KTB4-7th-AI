@@ -21,7 +21,7 @@
 | `LLM_FALLBACK_PRIMARY_TIMEOUT_SECONDS` | | `30` (기본) | — (`LLM_FALLBACK_PROVIDER` 설정 시에만 의미 있음) |
 | `BACKEND_TIMEOUT_SECONDS` | | `2.0` (기본) | — |
 | `INSIGHT_LLM_TIMEOUT_SECONDS` | | `12` (기본) | — |
-| `INTERNAL_AI_TOKEN` | | (없음) | 토큰 검증을 하지 않는다 |
+| `INTERNAL_AI_TOKEN` | | (없음) | BE→AI 요청을 검증하지 않고, **챗봇 날씨·상권 조회가 401** |
 | `SENTRY_DSN` | | (없음) | Sentry 오류 수집을 하지 않는다 |
 | `SENTRY_ENVIRONMENT` | | `production` | `local` |
 | `SENTRY_RELEASE` | | `ktb4-ai-server@0.1.0+<commit SHA>` | CI 이미지에 빌드 시 포함된 값 사용 |
@@ -111,12 +111,35 @@ CI 이미지의 `SENTRY_RELEASE` 는 `pyproject.toml` 버전과 full commit SHA�
 **인바운드를 BE 로만 제한하는 보안 그룹이 1차 경계다**(2026-09-16 팀 결정).
 AI 서버가 외부에 열리면 인증 없이 LLM 을 호출할 수 있게 되므로, 보안 그룹 설정이 반드시 필요하다.
 
-`INTERNAL_AI_TOKEN` 은 그 보안 그룹이 빠졌을 때를 위한 2차 방어선이다.
-**값을 넣으면 검증이 켜지고, 비워 두면 기존대로 검증하지 않는다.**
-BE 는 `Authorization: Bearer {INTERNAL_AI_TOKEN}` 으로 보낸다(2026-09-22 계약).
+## 내부 토큰
 
-켤 때는 **BE 와 AI 양쪽에 같은 값**을 넣어야 한다. 한쪽만 설정하면 모든 요청이 401 이다.
-연동 테스트는 비워 둔 채로 통과시키고, 끝난 뒤에 양쪽 동시에 주입하는 순서를 권한다.
+`INTERNAL_AI_TOKEN` 은 위 보안 그룹이 빠졌을 때를 위한 2차 방어선이고,
+**2026-10-19 부터 양방향으로 쓴다.**
+
+| 방향 | 검증하는 쪽 | 값이 비면 |
+|---|---|---|
+| BE → AI (솔루션·인사이트·챗봇 SSE) | AI (`app/core/auth.py`) | 검증하지 않는다 — 기존 동작 |
+| AI → BE (챗봇 날씨·상권 조회) | BE (BE PR #507) | 헤더를 보내지 않아 **401** |
+
+BE 는 `Authorization: Bearer {INTERNAL_AI_TOKEN}` 으로 보내고(2026-09-22 계약),
+AI 도 같은 헤더로 보낸다(2026-10-19 계약, `app/clients/backend.py::_headers`).
+AI 쪽은 BE 가 검증하는 두 경로만 가리지 않고 내부 호출 전부에 붙인다 — BE 가 나중에
+다른 경로에 토큰을 걸어도 깨지지 않는다.
+
+**양쪽에 같은 값을 넣어야 한다.** 값이 다르거나 한쪽만 설정하면 방향마다 증상이 다르다.
+
+- **BE→AI 가 깨지면** AI 의 모든 엔드포인트가 401 이다.
+- **AI→BE 가 깨지면 챗봇 날씨·상권만** 401 이고 나머지 조회(매출·카테고리·시간대·
+  예측·순이익)는 정상이다. BE 가 그 두 경로에만 검증을 걸었기 때문이다.
+  **챗봇은 "조회에 실패했습니다" 만 보여주므로 데이터가 없는 경우와 겉으로 구분되지
+  않는다** — 날씨·상권만 안 되면 토큰을 먼저 본다.
+
+AI 쪽은 값이 비어 있으면 헤더를 **아예 보내지 않는다.** 빈 `Bearer ` 를 보내면 토큰을
+검사하지 않는 `devtools/stub_backend.py` 와 로컬 개발이 오히려 깨진다.
+
+연동 테스트를 비워 둔 채로 통과시키고 끝난 뒤에 양쪽 동시에 주입하는 순서를 권하는데,
+**챗봇 날씨·상권은 예외다** — BE 가 자기 토큰 미설정 자체를 401 로 거절하므로 그 경로는
+양쪽에 값이 들어간 뒤에야 테스트할 수 있다.
 
 ## 오류 응답 형식
 
@@ -151,7 +174,7 @@ BE 재시도 정책이 504 를 재시도 대상으로 둔다. 실제로 그 경�
 |---|---|
 | `504` 모델 타임아웃 | `INSIGHT_LLM_TIMEOUT_SECONDS=0.001` 로 기동 |
 | `502` 공급자 오류 | `ANTHROPIC_API_KEY=` (빈 값)으로 기동 |
-| `401` 토큰 불일치 | `INTERNAL_AI_TOKEN` 을 설정하고 헤더 없이 호출 |
+| `401` 토큰 불일치 (BE→AI 방향) | `INTERNAL_AI_TOKEN` 을 설정하고 헤더 없이 호출 |
 | `200 INSUFFICIENT_DATA` | `metrics.salesSummary.orderCount` 를 `0` 으로 |
 
 `INSIGHT_LLM_TIMEOUT_SECONDS` 는 인사이트 경로에만 적용된다. 솔루션·챗봇은
