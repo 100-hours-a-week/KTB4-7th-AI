@@ -10,7 +10,9 @@ set -euo pipefail
 # ninja 부재로 기본 flashinfer 샘플러가 JIT 빌드에 실패해 우회한다(6차, PR #189).
 export VLLM_USE_FLASHINFER_SAMPLER=0
 
-vllm serve Qwen/Qwen3-32B-AWQ --port 8000 --quantization awq_marlin \
+# exec로 바꿔치기해서 이 스크립트의 PID가 곧 vllm 프로세스 PID가 되게 한다 —
+# watchdog.sh가 바깥에서 kill할 때 bash 래퍼만 죽고 vllm은 고아로 남는 걸 막는다.
+exec vllm serve Qwen/Qwen3-32B-AWQ --port 8000 --quantization awq_marlin \
   --max-model-len 8192 --gpu-memory-utilization 0.90 \
   --enable-auto-tool-choice --tool-call-parser hermes \
   --api-key "${VLLM_API_KEY}"

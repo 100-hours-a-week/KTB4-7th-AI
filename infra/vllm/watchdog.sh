@@ -11,31 +11,42 @@ LOG=/root/vllm_watchdog.log
 HEALTH_URL="http://localhost:8000/health"
 MAX_UNHEALTHY=3          # health check 실패 허용 횟수 (20초 간격 * 3 = 약 60초)
 MIN_RESTART_INTERVAL=30  # 재시도 최소 간격 — 반복 실패(OOM 등)로 로그가 폭주하지 않게
+STARTUP_GRACE=240        # 32B 모델 로딩(가중치 다운로드+컴파일)이 보통 1~3분 걸린다 —
+                         # 이 시간 안의 health 실패는 장애가 아니라 "아직 로딩 중"으로 본다.
 
 restart_count=0
 
 while true; do
   echo "$(date -Iseconds) vLLM 기동 시도 (누적 재시작 ${restart_count}회)" >> "$LOG"
-  ./serve.sh >> /root/vllm_serve.log 2>&1 &
+  # setsid로 새 세션의 그룹 리더로 띄운다 — serve.sh는 exec로 vllm과 PID가 같아지므로,
+  # 이 PID가 곧 vllm의 프로세스 그룹 ID(PGID)다. 그룹째로 죽여야 vllm이 내부적으로
+  # 띄우는 EngineCore·resource_tracker 같은 하위 프로세스까지 같이 정리된다 —
+  # 개별 PID만 죽이면 하위 프로세스가 고아로 남아 GPU를 계속 쥐고 있을 수 있다(헥터 리뷰).
+  setsid ./serve.sh >> /root/vllm_serve.log 2>&1 &
   serve_pid=$!
+  start_ts=$(date +%s)
 
   unhealthy=0
   while kill -0 "$serve_pid" 2>/dev/null; do
     sleep 20
     if curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$HEALTH_URL" 2>/dev/null | grep -q 200; then
       unhealthy=0
+    elif [ $(( $(date +%s) - start_ts )) -lt "$STARTUP_GRACE" ]; then
+      continue  # 아직 로딩 유예시간 안 — 실패로 안 센다
     else
       unhealthy=$((unhealthy + 1))
       echo "$(date -Iseconds) health check 실패 (${unhealthy}/${MAX_UNHEALTHY})" >> "$LOG"
       if [ "$unhealthy" -ge "$MAX_UNHEALTHY" ]; then
-        echo "$(date -Iseconds) health check 연속 실패 — 프로세스 강제 종료" >> "$LOG"
-        kill -9 "$serve_pid" 2>/dev/null
+        echo "$(date -Iseconds) health check 연속 실패 — 프로세스 그룹 강제 종료" >> "$LOG"
+        kill -9 -- "-${serve_pid}" 2>/dev/null
         break
       fi
     fi
   done
 
   wait "$serve_pid" 2>/dev/null
+  # 정상/비정상 종료든 상관없이 혹시 남은 하위 프로세스가 있으면 같이 정리한다.
+  kill -9 -- "-${serve_pid}" 2>/dev/null
   restart_count=$((restart_count + 1))
   echo "$(date -Iseconds) vLLM 종료 감지(누적 ${restart_count}회) — ${MIN_RESTART_INTERVAL}초 후 재기동" >> "$LOG"
   sleep "$MIN_RESTART_INTERVAL"
