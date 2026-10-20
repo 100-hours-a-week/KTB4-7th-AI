@@ -175,6 +175,89 @@ A40 5차가 드러낸 트레이드오프다. 콘텐츠 품질은 98.3~100% 로 �
 
 ---
 
+## 2026-10-20 — GPU(RunPod A40) 실제 기동·운영 전환 준비 (Issue #184 후속)
+
+PR #185가 `dev`에 머지됐다(`50a6bf6`, 2026-10-20 03:57 UTC). 이후 작업은 실제
+Pod에 vLLM을 띄워 운영 전환을 준비하는 단계 — 코드보다 실측·운영 쪽에서 버그를
+여러 개 발견·수정했다.
+
+### PR #185 머지 후, 후속 작업은 새 Issue·PR로 분리
+
+머지된 브랜치에 계속 push하면 `dev`에 자동으로 안 들어간다는 걸 뒤늦게 확인하고
+분리했다.
+- 워치독 추가분 → Issue #196, PR #197
+- `devtools/llm_smoke.py` 카드 수 검증 stale 버그 → Issue #198, PR #199
+
+### vLLM 실제 기동 (Pod `dead_magenta_lemming`, ID `e7p6afstfgv6wr`)
+
+vLLM 0.32.0 설치, `Qwen/Qwen3-32B-AWQ` 기동. 외부 HTTPS 경로로 인증 동작 확인
+(무인증 401 · 정상 키 200 · `/health` 200). vLLM 인증 미들웨어 소스를 직접
+읽어서(`vllm/entrypoints/serve/middleware/authenticate.py`) `GUARDED_PREFIX =
+("/v1", "/v2", "/inference", "/cohere")`를 확인했다 — **`/health`는 애초에 인증
+대상이 아니다.** 2026-10-19에 "`--api-key`가 `/health`까지 막을 수도 있다"고 방어적으로
+짠 `_vllm_healthy()`의 토큰 전송은 결과적으로 불필요했지만 무해해서 그대로 둔다.
+`/v2`는 임베딩·Cohere 호환용 별도 라우트고 우리가 쓰는 `/v1/chat/completions`와는
+무관하다.
+
+### 워치독(`infra/vllm/watchdog.sh`) — 실제로 띄워보며 버그 3개 발견·수정
+
+1. **`pkill -f`가 자기 자신을 죽임** — SSH로 보낸 명령어 문자열 자체에 kill
+   패턴이 포함돼 있어서, 원격 쉘이 자기 자신을 매치해 죽었다. PID 직접 지정으로
+   바꿨다.
+2. **하위 프로세스 고아화** — `serve.sh`가 `vllm serve`를 자식 프로세스로 fork하는
+   구조라, 워치독이 `serve.sh`의 PID만 죽이면 vLLM이 내부적으로 띄우는
+   EngineCore 등 하위 프로세스가 고아로 남아 GPU를 계속 쥐고 있었다(새 기동 시도가
+   엔진 초기화 실패로 반복 크래시). `serve.sh` 마지막 커맨드를 `exec`로 바꿔 PID를
+   합치고, 워치독은 `setsid`로 띄워 프로세스 그룹째로 kill하게 고쳤다.
+3. **로딩 유예시간 부재** — 32B 모델 로딩에 1~3분 걸리는데, 워치독이 60초 안에
+   health 실패 3회를 기준으로 삼아서 **멀쩡히 로딩 중인 프로세스를 반복
+   오살**했다. 기동 유예시간 240초를 추가해 해결.
+
+측정: 캐시가 이미 있는 상태(재기동) 기준 기동 시도→`/health` 200까지 **1분
+27초**. 완전 콜드스타트(모델 캐시 없음)는 아직 측정 못 함 — 다음 할 일.
+
+### 운영 전환에 필요한 AI 서버 env var 7개, 클라우드팀에 전달·반영 완료
+
+`LLM_PROVIDER` / `LLM_BASE_URL`(`.../v1` 접미사 필수) / `LLM_MODEL` /
+`LLM_DISABLE_THINKING` / `LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL` /
+`OPENAI_API_KEY`(Pod의 `VLLM_API_KEY`와 동일 값). 재배포 조건으로 "`50a6bf6`(PR
+#185 머지 커밋) 이후 이미지"를 같이 전달했다. 클라우드팀이 커밋 확인 + env var
+추가 + 재배포 완료를 확인해줬다.
+
+### GPU 실사용 여부 — 아직 직접 확인 못 함
+
+- BE 업로드 테스트 중 `UPLOAD_PROCESSING_ERROR`(AI 서버 에러 코드 체계에 없는
+  값) 발생 — BE 쪽 문제로 보이고 GPU 전환과는 무관해 보인다.
+- 챗봇 SSE 응답(`app/api/chat.py`)엔 provider·모델 식별 필드가 아예 없어서,
+  프런트엔드 네트워크 탭으로는 GPU/Claude 구분이 안 된다.
+- "폴백 발생 시 `logger.warning`으로 남긴다"던 2026-10-19 설계가 실제로는
+  구현 안 돼 있었다(발견만 함, 아직 미수정).
+- CloudWatch에 AI 서버 로그 그룹 자체가 없다(`/ecs/memme/backend-v2`,
+  `/aws/ssm/AWS-RunShellScript` 둘뿐). 클라우드팀이 AI 로그 그룹을 추가하기로
+  함 — 추가되면 재확인.
+
+### GPU 예산 계산 (A40 $0.59/hr)
+
+환율 1,330원 기준 458.8시간(19.1일), 1,380원 기준 442.2시간(18.4일) — 10/20~11/17
+전체(672시간) 상시 가동은 예산이 부족하다. 이번 주(10/20~10/24, 96시간) GPU
+상시 가동 후 10/25부터 API로 전환하고, 1,330원 기준이면 11/2, 1,380원 기준이면
+11/3부터 GPU를 다시 켜면 11/17까지 버틴다.
+
+### 다음 할 일
+
+- (사용자 승인 시) 새 A40 Pod로 완전 콜드스타트(설치~로딩) 시간 측정 + Pod
+  stop→start가 실제로 되는지(A40 재고 문제)와 걸리는 시간 측정.
+- **계획된 GPU 셧다운 기간엔 breaker probe에 맡기지 말고 `LLM_PROVIDER`를
+  `anthropic`으로 직접 전환하는 쪽을 권장** — `LLM_FALLBACK_PROVIDER`와 같아지면
+  동일-provider 가드(`should_use_fallback()`)가 걸려 breaker 자체가 비활성화된다.
+  크래시·일시 장애엔 breaker, 계획된 장기 셧다운엔 설정값 직접 전환으로 구분해서
+  쓰는 게 맞다고 판단했다 — 아직 실행은 안 함, 운영 반영 시점에 결정 필요.
+- PR #197(워치독), #199(llm_smoke.py 수정) 리뷰 대기.
+- 솔루션 카드 텍스트에서 드물게(6회 중 1회) 한글 mojibake(깨진 문자) 발견 —
+  재현율이 낮아 당장은 안 막고 운영 중 빈도만 모니터링하기로 함.
+
+---
+
 ## 2026-10-19 — GPU(로컬 vLLM) → Claude API 자동 폴백 (Issue #184)
 
 GPU(RunPod A40 + vLLM) 서빙 예산이 36만원으로 한정돼 있어 상시 가동하지 않기로
