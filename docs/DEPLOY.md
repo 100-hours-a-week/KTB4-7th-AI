@@ -182,14 +182,49 @@ BE 재시도 정책이 504 를 재시도 대상으로 둔다. 실제로 그 경�
 
 500(생성 실패)은 모델 응답이 깨져야 나와서 환경변수로 재현할 수 없다.
 
-## 아직 안 된 것
+## 이미지 배포
 
-ECR push 단계는 붙었다(#85, OIDC). **GitHub 레포 변수 4개가 비어 있어 건너뛴다.**
+ECR push 는 **돌고 있다**(#85, OIDC). 필요한 GitHub 레포 변수 4개
+(`AWS_ACCOUNT_ID` / `AWS_REGION` / `AWS_ROLE_TO_ASSUME` / `ECR_REPOSITORY`)는
+2026-09-22 에 채워졌다.
 
-- `AWS_ACCOUNT_ID`
-- `AWS_REGION`
-- `AWS_ROLE_TO_ASSUME`
-- `ECR_REPOSITORY`
+> 2026-10-20 까지 이 절이 "변수 4개가 비어 있어 건너뛴다" 고 적혀 있었다 — 한 달 내내
+> 틀린 상태였다. 배포 상태를 문서로 판단하면 "수동 배포해야 한다" 고 잘못 믿게 된다.
+> 실제 동작은 `.github/workflows/ci.yml` 의 `publish-image` 잡과 Actions 실행 기록으로
+> 확인한다.
 
-네 값이 채워지면 `dev` push 마다 커밋 SHA 태그로 이미지가 올라간다. 그 전까지는
-빌드와 컨테이너 기동 확인(`/health`)까지만 돈다.
+- `publish-image` 잡은 `if: github.event_name == 'push'` 다 — **PR 에서는 돌지 않고
+  `dev` push 에서만** 돈다. PR 에서는 `verify` 잡(린트·테스트·앱 빌드)까지만 본다.
+- `Verify ECR configuration` 스텝이 위 변수 4개를 `test -n` 으로 확인한다. 하나라도
+  비면 **거기서 실패**하므로, 이 잡이 success 면 변수가 채워져 있다는 뜻이다.
+- 태그는 커밋 SHA(`$GITHUB_SHA`)다. **같은 태그가 이미 있으면 푸시하지 않고 기존
+  digest 를 재사용한다**(immutable 태그).
+- 이미지 URI 는 `{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com/{ECR_REPOSITORY}:{SHA}`.
+  digest 는 잡 요약(`$GITHUB_STEP_SUMMARY`)에 남는다.
+
+푸시까지가 CI 범위다. **ECR 이미지를 실제 서비스에 올리는 배포는 클라우드 담당이 한다** —
+`dev` 에 머지됐다는 것이 곧 배포됐다는 뜻은 아니다.
+
+## 배포 검증 기록
+
+### 2026-10-20 — 내부 토큰 양방향 (클라우드팀)
+
+AI·BE 에 동일한 `INTERNAL_AI_TOKEN` 을 저장하고 재배포한 뒤 확인했다.
+
+| 확인 | 결과 |
+|---|---|
+| 날씨·상권 API, 정상 토큰 | 200 |
+| 날씨·상권 API, 토큰 누락·오류 | 401 |
+| 실제 AI 클라이언트의 두 API 호출 | 성공 |
+
+웹 2대·배치 1대와 ALB 정상, 기존 Redis 설정과 백엔드 사양 유지.
+
+재배포된 이미지에 PR #193(토큰 헤더)이 들어갔는지는 시각으로 확인된다 — #193 머지
+05:15:34 직후 `dev` CI 의 `Publish immutable image and record digest` 가 success 다.
+#193 이 없으면 AI 클라이언트가 헤더를 안 보내 401 → 502 로 실패하므로, 위 "실제 AI
+클라이언트 호출 성공" 자체가 그 코드가 들어갔다는 증거다.
+
+**`EMPTY` 경로는 실서버로 아직 검증되지 않았다.** 위에서 확인된 것은 200 과 401 이다.
+BE 가 데이터 부재를 `200 {"status":"EMPTY","data":null}` 로 보내는 경로는 PR #193 의
+자동 테스트로만 덮여 있다. 상권은 **서울 외 매장·행정동 코드 누락·카페 3곳 미만이 전부
+EMPTY** 라 흔한 경로다 — 그런 매장의 `storeId` 하나로 챗봇에 상권을 물어보면 확인된다.
