@@ -467,3 +467,83 @@ async def test_출력_상한을_전역_기본값보다_낮춘다(monkeypatch):
     assert res.status_code == 200
     assert seen["max_tokens"] == MAX_TOKENS
     assert MAX_TOKENS < 2000
+
+
+# ── 차단 게이트 (2026-10-20) ──────────────────────────────────────────
+# A40 실측(n=40, Qwen3-32B)에서 금액_어림_없음 77.5%·수치_정확 65.0% 가 **그대로 점주에게
+# 나갔다** — 인사이트에는 솔루션과 달리 차단 게이트가 아예 없었다. Claude 로 잴 때는 둘 다
+# 100% 라 안 보였다.
+
+
+async def test_금액을_어림한_문장은_버리고_나머지를_내보낸다(monkeypatch):
+    """세 문장 중 하나가 틀렸다고 셋을 다 버리면 그날 인사이트가 통째로 없어진다 —
+    솔루션의 "최소 1장" 과 같은 판단이다.
+    """
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        calls.append(1)
+        return json.dumps(
+            {
+                "insights": [
+                    "9월 총 매출은 약 790만원입니다.",  # 어림 금액
+                    "9월 총 매출은 7,920,000원으로 이전 기간보다 4.2% 증가했습니다.",
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(calls) == 1, "남은 문장이 있으면 재시도하지 않는다"
+    insights = res.json()["data"]["insights"]
+    assert len(insights) == 1
+    assert "790만원" not in insights[0]
+
+
+async def test_지표에_없는_수치를_쓴_문장도_버린다(monkeypatch):
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return json.dumps(
+            {
+                "insights": [
+                    "9월 객단가는 12,345원입니다.",  # 지표에 없는 값
+                    "주문 건수는 923건입니다.",
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    insights = res.json()["data"]["insights"]
+    assert len(insights) == 1
+    assert "12,345" not in insights[0]
+
+
+async def test_전부_위반이면_재시도하고_그래도_안_되면_500이다(monkeypatch):
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        calls.append(1)
+        return json.dumps({"insights": ["총 매출은 약 790만원입니다."]}, ensure_ascii=False)
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    assert len(calls) == 2, "한 문장도 못 건지면 재시도한다"
+    assert res.status_code == 500
+
+
+async def test_정상_문장은_그대로_통과한다(monkeypatch):
+    """넓게 막다가 멀쩡한 문장을 버리면 인사이트가 비어 보인다."""
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return LLM_SUCCESS
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    assert len(res.json()["data"]["insights"]) == 2

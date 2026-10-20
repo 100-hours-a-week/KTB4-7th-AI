@@ -14,6 +14,7 @@ from app.core.errors import ApiError
 from app.prompts import insight as insight_prompt
 from app.schemas.insight import InsightData, InsightRequest, InsightResponse
 from app.services.insight_focus import assign as assign_focus
+from app.services.solution import _ROUNDED_AMOUNT, _ungrounded
 
 MAX_RETRY = 1
 
@@ -61,12 +62,37 @@ def _missing_data(metrics) -> list[str] | None:
     return None
 
 
-def _parse(raw: str, max_count: int) -> list[str] | None:
+# 솔루션 쪽 검사기를 그대로 쓴다. 세 번째 복사본을 만들면 드리프트가 는다 — 채점기와
+# 서비스가 어긋나서 측정이 틀린 사고가 이 레포에서 이미 여러 번 났다. 공통 모듈로 빼는
+# 게 맞지만 그건 별도 작업으로 두고, 지금은 로컬 모델에서 드러난 결함부터 막는다.
+_INSIGHT_BLOCKING = ("ROUNDED_AMOUNT", "UNGROUNDED_NUMBER")
+
+
+def _violations(sentence: str, metrics: dict) -> list[str]:
+    """재시도로 보낼 이유. 비어 있으면 통과다.
+
+    둘 다 프롬프트에 규칙이 있는데 지켜지지 않는다. A40 실측(n=40, Qwen3-32B)에서
+    금액_어림_없음 77.5%, 수치_정확 65.0% 였고 **그대로 점주에게 나갔다** — 인사이트에는
+    솔루션과 달리 차단 게이트가 아예 없었다. Claude 로 잴 때는 둘 다 100% 라 안 보였다.
+    """
+    reasons = []
+    if _ROUNDED_AMOUNT.search(sentence):
+        reasons.append("ROUNDED_AMOUNT")
+    if _ungrounded(sentence, metrics):
+        reasons.append("UNGROUNDED_NUMBER")
+    return reasons
+
+
+def _parse(raw: str, max_count: int, metrics: dict | None) -> list[str] | None:
     """화면에 그대로 뿌릴 수 있는 문장 목록만 돌려준다. 어긋나면 None 이라 재시도한다.
 
     빈 문자열이 섞이면 AN-01 화면에 빈 불릿이 생기고, 개수가 넘치면 BE 가 요청한
     maxInsightCount 를 어긴다. 길이를 넘기면 카드가 밀린다. 셋 다 에러가 아니라 화면이
     이상해지는 방식으로 드러난다.
+
+    metrics 를 주면 금액 어림·지표에 없는 수치까지 검사해 위반 문장을 버린다. None 이면
+    그 검사를 건너뛴다 — 순이익 인사이트(app/services/profit_insight.py)가 그렇다.
+    거기는 지표 모양이 달라 접지 기준을 아직 못 정했고, 로컬 모델로 측정한 적도 없다.
     """
     try:
         data = json.loads(llm.strip_fence(raw))
@@ -82,7 +108,14 @@ def _parse(raw: str, max_count: int) -> list[str] | None:
         return None
     if any(len(i) > MAX_CHARS for i in insights):
         return None
-    return insights
+
+    # 위반 문장만 버리고 남은 걸 돌려준다. 한 문장도 안 남으면 None 이라 재시도한다 —
+    # 솔루션의 "최소 1장·최대 3장" 과 같은 판단이다(2026-10-17). 세 문장 중 하나가
+    # 틀렸다고 셋을 다 버리면 그날 인사이트가 통째로 없어진다.
+    if metrics is None:
+        return insights
+    kept = [sentence for sentence in insights if not _violations(sentence, metrics)]
+    return kept or None
 
 
 async def generate(req: InsightRequest) -> InsightResponse:
@@ -114,7 +147,7 @@ async def generate(req: InsightRequest) -> InsightResponse:
             max_tokens=MAX_TOKENS,
             timeout=settings.insight_llm_timeout_seconds,
         )
-        insights = _parse(raw, wanted)
+        insights = _parse(raw, wanted, metrics)
         if insights:
             break
 

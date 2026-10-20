@@ -191,6 +191,13 @@ def _ungrounded_ratios(texts, metrics: dict) -> bool:
 def _metric_numbers(metrics: dict) -> set[str]:
     """지표에 실제로 있는 값들. 비율은 백분율로도 인정한다(0.417 → 41.7).
 
+    문자열 값 안의 숫자도 센다(3자리 이상만). `period`("2026-01-01~2026-03-31") 같이
+    **지표가 문자열로 주는 값**을 버리면 모델이 그걸 인용할 때마다 "지표에 없는 수" 로
+    걸린다. 2026-10-20 에 period 를 받기로 하면서 드러났다 — 기간을 안 쓰면 VAGUE_PERIOD,
+    쓰면 UNGROUNDED_NUMBER 라 양쪽이 다 막혔다. 채점기는 2026-10-16(PR #161 리뷰)에
+    같은 수정이 들어갔는데 서비스 쪽이 빠져 있었다.
+
+
     devtools/grade.py::_metric_numbers 와 같은 로직이어야 한다 — 어긋나면 측정과 실제
     동작이 갈린다.
     """
@@ -205,6 +212,14 @@ def _metric_numbers(metrics: dict) -> set[str]:
                 walk(item)
         elif isinstance(value, bool) or value is None:
             return
+        elif isinstance(value, str):
+            # 3자리 미만은 안 뽑는다 — devtools/grade.py 와 같은 이유다. 2자리 이하는
+            # _ungrounded 가 이미 "실행 지시" 로 봐주므로 필요가 없고, 다 뽑으면
+            # basisDateTime "2026-10-07 11:00" 의 "10" 이 "10% 할인" 같은 진짜 실행
+            # 지시와 충돌해 _metric_figures(필드간 중복 검사)가 오탐한다.
+            out.update(
+                m.group() for m in _ANYNUM.finditer(value) if len(m.group().split(".")[0]) >= 3
+            )
         elif isinstance(value, int):
             out.add(str(value))
         elif isinstance(value, float):
