@@ -66,6 +66,43 @@ class WeatherContext(Contract):
     isNotable: bool
 
 
+class ConditionMenu(Contract):
+    menuName: str
+    avgQuantity: int
+    baselineAvgQuantity: int
+    vsBaseline: float
+    avgSales: int
+    baselineAvgSales: int
+
+
+class ConditionPattern(Contract):
+    """V2: 과거 강수별 메뉴 판매 패턴. 2026-10-19 BE 확정(BE PR #492).
+
+    최근 완료된 12주의 ASOS 강수 관측과 날짜별 메뉴 판매를 BE 가 비교해 결과만 넘긴다.
+    1.0mm 이상이 RAIN, 0.1mm 미만이 기준군이고 그 사이는 양쪽에서 빠진다. 비 온 날과
+    무강수 날이 **각각 5일 이상**일 때만 오고, 미달이면 배열 일부나 null 이 아니라
+    conditionPatterns 전체가 생략된다.
+
+    **아직 프롬프트·점수식에 연결하지 않았다**(2026-10-20, 이슈 #194). 받아서 버리지만
+    않는 단계다 — #187 인사이트 게이트의 A40 효과를 먼저 재야 입력 축을 늘린 영향과
+    섞이지 않는다.
+
+    연결할 때 sampleWeekdayRatio·baselineWeekdayRatio 를 먼저 봐야 한다. 두 값이 다르면
+    비 온 날과 기준일의 평일/주말 구성이 다르다는 뜻이어서, 판매량 차이가 강수 때문인지
+    요일 때문인지 구분되지 않는다. BE 도 "변화율은 상관관계이며 강수의 인과 효과로
+    단정하지 않는다" 고 명시했다.
+    """
+
+    condition: str
+    basisWeeks: int
+    thresholdMm: float
+    sampleDays: int
+    baselineDays: int
+    sampleWeekdayRatio: float
+    baselineWeekdayRatio: float
+    menus: list[ConditionMenu] = []
+
+
 class DayHours(Contract):
     opensAt: str  # "08:00"
     closesAt: str  # "22:00"
@@ -101,6 +138,15 @@ class Metrics(Contract):
     menuRankings: list["MenuRankingPoint"] = []
     businessHours: BusinessHours | None = None
     weatherContext: WeatherContext | None = None
+    # weatherContext 는 오늘 예보 스냅샷이라 과거 매출과의 인과를 뒷받침할 지표가 없었다.
+    # 그 자리를 메우는 값이다 — BE 가 12주 관측과 실제 판매를 비교해 결과만 넘긴다.
+    # 선택 필드고, 기본값이 빈 리스트라 BE 가 생략하면 지금과 똑같이 동작한다.
+    #
+    # 아직 프롬프트·점수식에 연결하지 않았다(이슈 #194). 다만 solution.py 가 metrics 를
+    # 통째로 _metric_numbers 에 넘기므로, 연결 전에도 이 값들이 접지 허용 집합에는
+    # 들어간다 — 3자리 이상은 avgSales·baselineAvgSales 둘뿐이고 모델이 보지 못하는
+    # 값이라 날조가 우연히 일치할 확률은 낮다. 3단계에서 어차피 접지돼야 하는 값이다.
+    conditionPatterns: list[ConditionPattern] = []
 
 
 # ── 인사이트 전용 지표 ──────────────────────────────────────────────
