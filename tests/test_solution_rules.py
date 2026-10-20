@@ -662,3 +662,78 @@ def test_차단_사유와_측정_전용_사유가_갈려_있다():
     assert "DUPLICATE_FIGURE" not in _BLOCKING_REASONS
     assert "VAGUE_ACTION" not in _BLOCKING_REASONS
     assert {"UNGROUNDED_NUMBER", "ROUNDED_AMOUNT", "COMPUTED_RATIO"} <= _BLOCKING_REASONS
+
+
+# ── 문자열 지표 값 안의 숫자 (2026-10-20) ────────────────────────────
+# BE 가 period("2026-01-01~2026-03-31")를 보내기로 했는데(2026-10-20 풀스택 확정),
+# `_metric_numbers` 가 문자열 값을 통째로 버리고 있어서 기간을 인용하면 "지표에 없는 수"
+# 로 걸렸다. 기간을 안 쓰면 VAGUE_PERIOD, 쓰면 UNGROUNDED_NUMBER 라 양쪽이 다 막혔다.
+# 채점기는 2026-10-16(PR #161 리뷰)에 같은 수정이 들어갔는데 서비스 쪽이 빠져 있었다.
+
+_PERIOD_METRICS = derive(
+    {
+        "salesSummary": {
+            "netSales": 124946029,
+            "vsPrevPeriod": -0.12,
+            "period": "2026-01-01~2026-03-31",
+        },
+        "hourlyProfile": [
+            {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        ],
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2026-01-01~2026-03-31 순매출이 124,946,029원입니다",
+        "2026년 1월 1일부터 3월 31일까지 순매출이 124,946,029원입니다",
+    ],
+)
+def test_지표가_문자열로_준_기간은_인용해도_된다(text):
+    assert not _violations(_ratio_card(text), _PERIOD_METRICS), text
+
+
+def test_기간을_인용해도_날조는_여전히_막는다():
+    text = "2026-01-01~2026-03-31 순매출이 999,999,999원입니다"
+
+    assert _violations(_ratio_card(text), _PERIOD_METRICS) == ["UNGROUNDED_NUMBER"]
+
+
+def test_기간을_안_쓰고_뭉뚱그리면_여전히_막는다():
+    text = "현재 기간 순매출이 124,946,029원입니다"
+
+    assert _violations(_ratio_card(text), _PERIOD_METRICS) == ["VAGUE_PERIOD"]
+
+
+def test_채점기와_서비스가_같은_지표_숫자를_뽑는다():
+    """둘이 어긋나면 측정과 실제 동작이 갈린다. 이 레포에서 반복된 사고라 고정한다 —
+    `카드3장`·시각 지속시간·`basisQuarter`·`title/summaryText` 누락이 전부 그 종류였다.
+    """
+    from app.services.solution import _metric_numbers as service_numbers
+
+    metrics = {
+        "salesSummary": {
+            "netSales": 124946029,
+            "period": "2026-01-01~2026-03-31",
+            "vsPrevPeriod": -0.12,
+        },
+        "weatherContext": {"basisDateTime": "2026-10-07 11:00", "maxPop": 60},
+        "menuRankings": [{"rank": 1, "menuName": "아이스 아메리카노", "quantity": 912}],
+    }
+
+    assert service_numbers(metrics) == grade._metric_numbers(metrics)
+
+
+def test_두_자리_수는_문자열에서_뽑지_않는다():
+    """basisDateTime "2026-10-07 11:00" 의 "10" 을 뽑으면 "10% 할인" 같은 실행 지시와
+    충돌해 필드간 중복 검사가 오탐한다(제나님이 PR #161 에서 확인).
+    """
+    from app.services.solution import _metric_numbers as service_numbers
+
+    numbers = service_numbers({"weatherContext": {"basisDateTime": "2026-10-07 11:00"}})
+
+    assert "2026" in numbers
+    assert "10" not in numbers and "07" not in numbers
