@@ -29,6 +29,22 @@ class BackendError(Exception):
     pass
 
 
+def _headers() -> dict[str, str]:
+    """AI→BE 내부 호출에 붙이는 헤더.
+
+    BE 는 날씨·상권 두 경로에만 `Authorization: Bearer {INTERNAL_AI_TOKEN}` 을 요구하고
+    없으면 401 이다(2026-10-19 확정, BE PR #507). 경로별로 나누지 않고 전부 붙인다 —
+    나머지 경로는 토큰을 무시하므로 해가 없고, BE 가 다른 경로에 토큰을 걸 때 또 깨지지
+    않는다.
+
+    토큰이 비어 있으면 헤더를 아예 보내지 않는다 — app/core/auth.py 가 BE→AI 방향에서
+    쓰는 기준과 같다. devtools/stub_backend.py 와 로컬 개발은 토큰을 검사하지 않는데,
+    빈 Bearer 를 보내면 그쪽이 오히려 깨진다.
+    """
+    token = settings.internal_ai_token
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 @retry(
     stop=stop_after_attempt(2),
     wait=wait_fixed(0.2),
@@ -47,6 +63,7 @@ async def call_tool(tool: str, params: dict) -> dict:
         async with httpx.AsyncClient(
             base_url=settings.backend_base_url,
             timeout=settings.backend_timeout_seconds,
+            headers=_headers(),
         ) as client:
             res = await client.get(path, params=query)
     except httpx.HTTPError as exc:
@@ -59,4 +76,9 @@ async def call_tool(tool: str, params: dict) -> dict:
     if res.status_code >= 400:
         raise ApiError(502, "BACKEND_ERROR", f"{tool} 요청이 거부되었습니다({res.status_code}).")
 
-    return res.json().get("data", {})
+    # status=EMPTY 는 오류가 아니라 "조회할 데이터가 없음" 이다(2026-10-19 BE 계약, PR #506).
+    # BE 가 `{"status":"EMPTY","data":null}` 로 보내는데, data 키가 있고 값만 null 이라
+    # .get("data", {}) 의 기본값이 쓰이지 않고 None 이 그대로 나간다 — chat/graph.py 의
+    # result.get(...) 에서 AttributeError 로 터진다. 상권은 서울 외 매장·행정동 코드 누락·
+    # 카페 3곳 미만이 전부 EMPTY 라 예외 경로가 아니다. 404 와 같은 자리에서 빈 값으로 둔다.
+    return res.json().get("data") or {}

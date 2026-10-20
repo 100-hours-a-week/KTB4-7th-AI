@@ -75,3 +75,87 @@ async def test_5xx는_재시도_후_실패한다(monkeypatch):
     with pytest.raises(backend.BackendError):
         await backend.call_tool("get_sales_summary", {"storeId": 1})
     assert len(calls) == 2, "재시도 포함 2회 호출되어야 한다"
+
+
+async def test_토큰이_있으면_Authorization_헤더를_붙인다(monkeypatch):
+    """BE 는 날씨·상권 두 경로에서 Bearer 토큰이 없으면 401 이다(2026-10-19, BE PR #507)."""
+    monkeypatch.setattr(backend.settings, "internal_ai_token", "s3cret")
+    captured = {}
+    echo_app = FastAPI()
+
+    @echo_app.get(backend.TOOL_PATHS["get_weather"])
+    async def _echo(request: Request) -> dict:
+        captured["authorization"] = request.headers.get("authorization")
+        return {"status": "READY", "data": {"skyText": "맑음"}}
+
+    _use(monkeypatch, echo_app)
+    await backend.call_tool("get_weather", {"storeId": 1})
+
+    assert captured["authorization"] == "Bearer s3cret"
+
+
+async def test_토큰이_비어_있으면_헤더를_보내지_않는다(monkeypatch):
+    """스텁 BE·로컬 개발은 토큰을 검사하지 않는다. 빈 Bearer 를 보내면 그쪽이 깨진다."""
+    monkeypatch.setattr(backend.settings, "internal_ai_token", "")
+    captured = {}
+    echo_app = FastAPI()
+
+    @echo_app.get(backend.TOOL_PATHS["get_weather"])
+    async def _echo(request: Request) -> dict:
+        captured["authorization"] = request.headers.get("authorization")
+        return {"status": "READY", "data": {"skyText": "맑음"}}
+
+    _use(monkeypatch, echo_app)
+    await backend.call_tool("get_weather", {"storeId": 1})
+
+    assert captured["authorization"] is None
+
+
+async def test_모든_경로에_헤더를_붙인다(monkeypatch):
+    """BE 는 지금 두 경로만 검사하지만 경로별로 나누지 않는다 — 나머지에 걸릴 때 또 깨진다."""
+    monkeypatch.setattr(backend.settings, "internal_ai_token", "s3cret")
+    seen = {}
+    echo_app = FastAPI()
+
+    for tool, path in backend.TOOL_PATHS.items():
+
+        @echo_app.get(path)
+        async def _echo(request: Request, tool: str = tool) -> dict:
+            seen[tool] = request.headers.get("authorization")
+            return {"status": "READY", "data": {"ok": 1}}
+
+    _use(monkeypatch, echo_app)
+    for tool in backend.TOOL_PATHS:
+        await backend.call_tool(tool, {"storeId": 1, "period": "THIS_MONTH"})
+
+    assert seen == {tool: "Bearer s3cret" for tool in backend.TOOL_PATHS}
+
+
+async def test_EMPTY_응답은_빈_결과로_처리한다(monkeypatch):
+    """BE 는 정상적인 데이터 부재를 200 {"status":"EMPTY","data":null} 로 보낸다.
+
+    data 키가 있고 값만 null 이라 .get("data", {}) 의 기본값이 쓰이지 않는다 — None 이
+    그대로 나가면 chat/graph.py 의 result.get(...) 에서 AttributeError 로 터진다.
+    상권은 서울 외 매장·카페 3곳 미만이 전부 EMPTY 라 예외 경로가 아니다.
+    """
+    empty_app = FastAPI()
+
+    @empty_app.get(backend.TOOL_PATHS["get_district_benchmark"])
+    async def _empty() -> dict:
+        return {"status": "EMPTY", "data": None}
+
+    _use(monkeypatch, empty_app)
+    assert await backend.call_tool("get_district_benchmark", {"storeId": 1}) == {}
+
+
+async def test_READY_응답은_data_를_반환한다(monkeypatch):
+    ready_app = FastAPI()
+
+    @ready_app.get(backend.TOOL_PATHS["get_district_benchmark"])
+    async def _ready() -> dict:
+        return {"status": "READY", "data": {"basisQuarter": "2026Q2", "cafeStoreCount": 7}}
+
+    _use(monkeypatch, ready_app)
+    data = await backend.call_tool("get_district_benchmark", {"storeId": 1})
+
+    assert data == {"basisQuarter": "2026Q2", "cafeStoreCount": 7}
