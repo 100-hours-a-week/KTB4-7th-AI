@@ -13,6 +13,7 @@
 | `LLM_PROVIDER` | | `anthropic` (기본) | — |
 | `LLM_MODEL` | | `claude-sonnet-4-5` (기본) | — |
 | `LLM_TIMEOUT_SECONDS` | | `60` (기본) | — |
+| `LLM_DISABLE_THINKING` | | `false` (기본) | vLLM(Qwen3 계열)이 thinking 모드로 응답해 `<think>` 블록이 섞이고 JSON 파싱이 깨짐(`LLM_PROVIDER=openai`+`LLM_BASE_URL` 설정 시에만 의미 있음) |
 | `LLM_FALLBACK_PROVIDER` | | (없음, 기본) | GPU 등 primary가 가용성 문제로 실패해도 폴백 없이 그대로 에러 |
 | `LLM_FALLBACK_MODEL` | | (없음, 기본) | `LLM_FALLBACK_PROVIDER`와 같이 넣어야 한다 |
 | `LLM_FALLBACK_FAILURE_THRESHOLD` | | `3` (기본) | — |
