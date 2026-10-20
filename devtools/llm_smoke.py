@@ -22,6 +22,7 @@ import httpx
 
 from app.core.config import settings
 from app.main import app
+from app.services.solution import MAX_CARDS
 
 METRICS = {
     "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
@@ -82,13 +83,14 @@ async def solutions(client: httpx.AsyncClient) -> dict:
     check(res.status_code == 200, f"HTTP {res.status_code}: {res.text[:300]}")
     data = res.json()["data"]
     cards = data["solutionCards"]
-    check(len(cards) == 3, f"카드가 3장이 아니다: {len(cards)}장")
+    # 솔루션은 최소 1장·최대 MAX_CARDS장이다(2026-10-17 제품 결정) — 억지로 안 채운다.
+    check(1 <= len(cards) <= MAX_CARDS, f"카드 수가 1~{MAX_CARDS}장 범위가 아니다: {len(cards)}장")
     check(
-        sorted(c["rankNo"] for c in cards) == [1, 2, 3],
-        f"rankNo 가 1·2·3 이 아니다: {[c['rankNo'] for c in cards]}",
+        sorted(c["rankNo"] for c in cards) == list(range(1, len(cards) + 1)),
+        f"rankNo 가 1부터 연속이 아니다: {[c['rankNo'] for c in cards]}",
     )
     check(all(c["title"] and c["summaryText"] and c["detailText"] for c in cards), "빈 필드가 있다")
-    check(len({c["title"] for c in cards}) == 3, "제목이 중복된다")
+    check(len({c["title"] for c in cards}) == len(cards), "제목이 중복된다")
     check(bool(data["modelVersion"]), "modelVersion 이 비었다")
     return data
 
