@@ -214,7 +214,7 @@ vLLM 0.32.0 설치, `Qwen/Qwen3-32B-AWQ` 기동. 외부 HTTPS 경로로 인증 �
    오살**했다. 기동 유예시간 240초를 추가해 해결.
 
 측정: 캐시가 이미 있는 상태(재기동) 기준 기동 시도→`/health` 200까지 **1분
-27초**. 완전 콜드스타트(모델 캐시 없음)는 아직 측정 못 함 — 다음 할 일.
+27초**. 완전 콜드스타트(모델 캐시 없음)는 새 Pod에서 별도 측정함 — 아래 참고.
 
 ### 운영 전환에 필요한 AI 서버 env var 7개, 클라우드팀에 전달·반영 완료
 
@@ -243,10 +243,107 @@ vLLM 0.32.0 설치, `Qwen/Qwen3-32B-AWQ` 기동. 외부 HTTPS 경로로 인증 �
 상시 가동 후 10/25부터 API로 전환하고, 1,330원 기준이면 11/2, 1,380원 기준이면
 11/3부터 GPU를 다시 켜면 11/17까지 버틴다.
 
+### 새 A40 Pod로 완전 콜드스타트·stop→start 실측
+
+기존 Pod(`dead_magenta_lemming`)는 운영 중이라 건드리지 않고, 별도 A40 Pod
+(`striking_olive_grasshopper`, ID `65n1ypgw2d1omq`)를 새로 띄워서 측정했다.
+
+**완전 콜드스타트(vLLM 미설치 상태부터)**
+
+| 구간 | 소요 |
+|---|---|
+| `pip install vllm==0.32.0` | 2분 14초 |
+| vLLM 기동 → `/health` 200 (모델 로딩+`torch.compile`, 캐시 없음) | 2분 54초 |
+| **합계** | **5분 51초** |
+
+`torch.compile` 캐시가 없는 진짜 첫 기동이라 2026-10-19에 잰 "1분 27초"(같은
+Pod 재시작, 캐시 있음)의 약 2배다. 캐시 유무가 모델 로딩 시간을 거의 2배
+가른다.
+
+**Pod stop→start (A40 재고 문제 검증)**
+
+사용자가 RunPod 콘솔에서 Stop → Start를 직접 실행(SSH 재연결은 API 권한이
+없어 못함). 컨테이너 로그로 확인:
+
+```
+16:09:01  stop container
+16:09:02  remove container
+16:09:07  create container   (6초)
+16:09:08  Pod Started
+16:09:09  Start script(s) finished — Pod 사용 가능
+```
+
+**stop→재사용 가능까지 8초.** 이번 시도에서는 A40 재고 부족이 발생하지
+않았다 — 단, 이게 항상 보장된다는 뜻은 아니고 그 시점 리전 여유에 달려있다.
+
+**더 중요한 발견 — 디스크가 통째로 날아감.** 시스템 로그에
+`stop container → remove container → create container`로 찍히는 것에서
+보이듯, Stop이 컨테이너를 완전히 교체한다. 재시작 후 확인한 결과:
+
+```
+pip3 show vllm       → Package(s) not found: vllm
+torch_compile_cache  → No such file or directory
+```
+
+이 Pod엔 네트워크 볼륨(영구 디스크)이 안 붙어있어서, **stop→start를 할
+때마다 vLLM 재설치 + 모델 재다운로드/재로딩(위 5분 51초)을 처음부터
+반복해야 한다.** "최초 1회만 콜드스타트"가 아니라 "켤 때마다 콜드스타트"다.
+주말에 한 번 켜서 쭉 쓰는 운영이면 문제없지만, 켰다 껐다를 반복하는
+운영이면 매번 이 비용이 든다 — 네트워크 볼륨을 붙이면 해결되지만 추가
+비용이 든다(금액 미확인).
+
+### Pod 템플릿에 설치·키를 박아서 완전 자동화 테스트
+
+사람이 Start만 누르면 vLLM 설치·기동까지 전부 자동으로 되는지 확인했다.
+RunPod "Container start command"와 "Environment Variables"에
+`VLLM_API_KEY` 고정값 + 설치·기동 커맨드를 등록하고 Deploy.
+
+**1차 시도 — 실패.** Start Command를 통째로
+`bash -c 'pip install ... && exec vllm serve ...'`로 덮어썼더니 Pod가
+"Initializing..."에서 멈춰 SSH·Jupyter가 영영 안 떴다. 원인: RunPod
+기본 이미지는 `/start.sh`가 nginx·sshd·Jupyter를 띄우는데, Start Command를
+통째로 교체하면 이 초기화 자체가 스킵된다.
+
+**2차 시도 — 성공.** `/start.sh`를 백그라운드로 먼저 돌리고 그 뒤에
+설치·기동을 붙이는 방식으로 수정:
+
+```
+bash -c '/start.sh & sleep 5 && pip install --break-system-packages vllm==0.32.0 && \
+  VLLM_USE_FLASHINFER_SAMPLER=0 exec vllm serve Qwen/Qwen3-32B-AWQ --port 8000 \
+  --quantization awq_marlin --max-model-len 8192 --gpu-memory-utilization 0.90 \
+  --enable-auto-tool-choice --tool-call-parser hermes --api-key "$VLLM_API_KEY"'
+```
+
+결과(Pod `direct_blush_ladybug`, ID `i5amp58lh230v6`):
+
+| 구간 | 시각(KST) |
+|---|---|
+| 컨테이너 생성 | 16:37:47 |
+| `/start.sh` 완료(SSH·Jupyter 준비) | 16:37:49 |
+| vLLM 설치 자동 시작(`sleep 5` 유예 후) | 16:37:53 |
+| `/health` 200(설치+모델 로딩 전부 끝) | 16:42:40 |
+| **합계(Pod 생성 → 서빙 가능)** | **4분 53초** |
+
+사람이 한 일은 Deploy 버튼 클릭 1번뿐 — SSH로 들어가 키 생성·스크립트
+복사하는 과정이 전혀 없었다. 실제 운영에서 "같은 Pod를 템플릿으로 저장해
+재사용"하면 이 자동화가 그대로 적용된다. 단, Pod가 완전히 바뀌면(재고
+부족으로 새 Pod를 사는 경우) `LLM_BASE_URL`(프록시 도메인에 Pod ID가
+포함됨)이 바뀌므로 그건 매번 클라우드팀에 수동으로 알려 Secret을 갱신해야
+한다 — 이 부분은 자동화 불가.
+
+**곁다리 발견**: RunPod 프록시 SSH 주소(`<pod-id>-<접미사>@ssh.runpod.io`)의
+접미사가 계정 고정값이 아니라 **Pod마다 다르다.** 이전 Pod의 접미사를
+재사용했다가 "container not found"로 한참 헤맸다 — 매번 Connect 탭에서
+새로 확인해야 한다.
+
 ### 다음 할 일
 
-- (사용자 승인 시) 새 A40 Pod로 완전 콜드스타트(설치~로딩) 시간 측정 + Pod
-  stop→start가 실제로 되는지(A40 재고 문제)와 걸리는 시간 측정.
+- 네트워크 볼륨 추가 여부 판단 필요 — 운영 Pod(`dead_magenta_lemming`)도
+  같은 구성(볼륨 없음)인지 확인하고, 추가 비용 대비 "켤 때마다 6분
+  콜드스타트" 리스크를 감수할지 결정.
+- 운영 Pod에도 위 Start Command 자동화(`/start.sh & sleep 5 && ...`)를
+  템플릿으로 반영할지 결정 — 반영하면 재시작 시 사람 개입(SSH·키 생성)이
+  완전히 없어진다.
 - **계획된 GPU 셧다운 기간엔 breaker probe에 맡기지 말고 `LLM_PROVIDER`를
   `anthropic`으로 직접 전환하는 쪽을 권장** — `LLM_FALLBACK_PROVIDER`와 같아지면
   동일-provider 가드(`should_use_fallback()`)가 걸려 breaker 자체가 비활성화된다.
