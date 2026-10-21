@@ -137,7 +137,7 @@ def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
     assert solution.VERSION == "2026-10-20"
-    assert insight.VERSION == "2026-10-15"
+    assert insight.VERSION == "2026-10-21"
 
 
 def test_재시도_피드백은_위반_사유가_없으면_빈_문자열이다():

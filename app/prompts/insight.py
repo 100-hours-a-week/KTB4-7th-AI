@@ -46,11 +46,20 @@ app/prompts/solution.py 머리말과 같다. 인사이트는 SYSTEM 이 688자�
 상권 상태로 매출 변화를 설명하면 근거 없는 주장이 된다 — weatherContext 인과 금지
 규칙(app/prompts/solution.py)과 같은 이유다. 배정 기준(매장-행정동 평균 격차,
 표본 가드)은 app/services/insight_focus.py 에 있다.
+
+2026-10-21(#209): districtBenchmark 중첩 객체를 더는 보내지 않는다. 대신
+districtAvgMonthlySalesPerCafe·vsDistrictAvg 는 salesSummary 문장에,
+peakSalesHourBand·peakFootTrafficHourBand·vsDistrictSalesPeak·
+vsDistrictFootTrafficPeak 는 hourlySales 문장에 조건부로 묶여 들어온다
+(app/services/insight_focus.py 참고). 비교 방향(vsDistrictAvg)·피크 일치 여부
+(vsDistrictSalesPeak·vsDistrictFootTrafficPeak)는 코드가 미리 계산해 주므로
+모델에게는 "그대로 따르라"고만 지시한다 — 두 밴드 레이블을 바꿔 말할 위험(설계
+리뷰)도 레이블 고정 문구로 같이 막는다.
 """
 
 import json
 
-VERSION = "2026-10-15"
+VERSION = "2026-10-21"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -67,10 +76,20 @@ salesSummary.vsPrevPeriod 는 **총매출(totalSales)**의 증감률입니다. �
 현재 기간의 사실만 말하세요.
 "3주 연속 감소"처럼 여러 주에 걸친 추세나 연속성은 말하지 마세요 — 주어진 지표는 한 달치
 스냅샷이라 연속성을 확인할 수 없습니다.
-districtBenchmark 는 매장이 속한 행정동의 커피·음료 업종 점포당 월평균 추정매출입니다
-(해당 분기 기준 추정치). 매장 개별 실적이 아니므로 "우리 매장" 성과처럼 쓰지 마세요.
-"상권이 좋아서/나빠서 매출이 ~했다"처럼 상권 상태가 매출에 영향을 줬다고 주장하지 마세요
-— 그런 인과를 뒷받침할 지표가 없습니다.
+districtAvgMonthlySalesPerCafe 는 매장이 속한 행정동의 커피·음료 업종 점포당 월평균
+추정매출입니다(참고용 추정치). 매장 개별 실적이 아니므로 "우리 매장" 성과처럼 쓰지
+마세요. vsDistrictAvg 가 있으면 그 값을 그대로 따르고 직접 비교·계산하지 마세요 —
+ABOVE 는 상권 평균보다 높음, BELOW 는 낮음, EQUAL 은 같음을 뜻합니다.
+peakSalesHourBand 는 반드시 "매출이 가장 많은 시간대"로, peakFootTrafficHourBand 는
+반드시 "유동인구가 가장 많은 시간대"로만 서술하세요 — 두 레이블을 바꿔 쓰지 마세요.
+vsDistrictSalesPeak·vsDistrictFootTrafficPeak 가 있으면 그 값을 그대로 따르고 직접
+비교하지 마세요 — SAME 은 우리 매장의 매출 피크 시간대가 그 밴드와 겹침, DIFFERENT 는
+안 겹침을 뜻합니다(vsDistrictSalesPeak 는 peakSalesHourBand, vsDistrictFootTrafficPeak
+는 peakFootTrafficHourBand 와 짝입니다). 이 두 필드가 없으면 우리 매장의 피크
+시간을 계산할 수 없었다는 뜻이니, 밴드 값만 그대로 전달하고 우리 매장과
+비교해서 "같다/다르다"를 직접 판단해 말하지 마세요. "상권이 좋아서/나빠서
+매출이 ~했다"처럼 상권 상태가 매출에 영향을 줬다고 주장하지 마세요 — 그런
+인과를 뒷받침할 지표가 없습니다.
 무엇을 하라는 제안은 하지 말고, 데이터에서 관찰되는 사실만 말하세요.
 설명 없이 JSON만 출력하세요."""
 
