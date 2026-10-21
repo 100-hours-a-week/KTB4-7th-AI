@@ -48,8 +48,17 @@ def strip_fence(raw: str) -> str:
 # 2026-10-15 는 districtBenchmark(여섯째 근거 축, #157)가 들어오며 "행정동 평균일 뿐
 # 매장 개별 실적이 아니고, 상권 상태로 매출 인과를 주장하지 말라"는 규칙이 추가됐다 —
 # `상권_인과_주장_없음`을 새로 잰다. 기존 항목은 손대지 않았다.
+# 2026-10-21 은 districtBenchmark 중첩 객체를 전용 근거 축에서 빼고, 대신 평평한
+# 필드(districtAvgMonthlySalesPerCafe·vsDistrictAvg·peakSalesHourBand·
+# peakFootTrafficHourBand)로 쪼개 salesSummary·hourlySales 두 축에 조건부로
+# 끼워 넣는 변경이다(#209). "숙주가 그 달 안 뽑힌 것"(정상)과 "뽑혔는데 상권 값을
+# 안 쓴 것"(결함)을 분모가 다른 항목으로 나눠 잰다 —
+# `salesSummary_선정률`·`hourlySales_선정률`(분모: 전체 요청)과
+# `상권_평균매출_반영`·`상권_피크밴드_반영`(분모: 게이트 통과 + 해당 값이 문장에
+# 인용된 요청만, 수치뿐 아니라 비교 방향까지 확인)을 새로 잰다. 기존 항목은
+# 손대지 않았다.
 TARGET_SOLUTION_VERSION = "2026-10-20"
-TARGET_INSIGHT_VERSION = "2026-10-15"
+TARGET_INSIGHT_VERSION = "2026-10-21"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
@@ -102,6 +111,162 @@ _WEATHER_CAUSAL = re.compile(
 _DISTRICT_CAUSAL = re.compile(
     r"(?:상권|행정동|주변\s*(?:카페|업소))[이가]?\s*(?:좋아서|나빠서|활발해서|침체돼서|때문에|탓에|영향으로|영향을\s*받아)"
 )
+
+# app/services/insight_focus.py::_district_gate 와 같은 로직이어야 한다 — app 을
+# import 하지 않으려고 복사해 둔 값이다(둘이 어긋나면 tests/test_grade.py 가 잡는다).
+_MIN_CAFE_STORE_COUNT = 3
+
+
+def _district_gate(district: dict | None) -> bool:
+    if not district:
+        return False
+    if (district.get("cafeStoreCount") or 0) < _MIN_CAFE_STORE_COUNT:
+        return False
+    return (district.get("districtAvgMonthlySalesPerCafe") or 0) > 0
+
+
+# app/services/insight_focus.py::district_comparison 과 같은 로직이어야 한다.
+def _comparison(total_sales: int, district_avg: int) -> str:
+    if total_sales > district_avg:
+        return "ABOVE"
+    if total_sales < district_avg:
+        return "BELOW"
+    return "EQUAL"
+
+
+# app/services/insight_focus.py::_store_peak_hour·_in_band 와 같은 로직이어야 한다.
+def _store_peak_hour(points: list[dict]) -> int | None:
+    selling = [p for p in points if (p.get("menuSales") or 0) > 0]
+    if not selling:
+        return None
+    return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
+
+
+def _in_band(hour: int, band: str) -> bool:
+    start, end = (int(x) for x in band.split("-"))
+    return start <= hour < end
+
+
+def _axis_selected(body: str, metrics: dict, key: str) -> bool:
+    """그 축이 생성 문장에 실제로 쓰였는지 — assign() 선정 여부의 근사치.
+
+    assign() 의 6 축 점수식을 복제하지 않는다(여긴 app 을 import 하지 않는다는
+    전제라 과하다, 모듈 머리말 참고) — 대신 "이 축 숫자가 문장에 등장했는지"로
+    선정 여부를 근사한다. _metric_paths/_evidence_group 과 같은 방식이다.
+    """
+    axis = metrics.get(key) or {}
+    if not axis:
+        return False
+    index = _metric_paths({key: axis})
+    return bool(_evidence_group(body, index))
+
+
+_DIRECTION_WORDS = {
+    "ABOVE": ("높", "웃돌", "상회"),
+    "BELOW": ("낮", "밑돌", "하회"),
+    "EQUAL": ("같습니다", "동일"),
+    "SAME": ("겹칩니다", "일치합니다"),
+    "DIFFERENT": ("겹치지 않", "다른 시간대", "불일치"),
+}
+_OPPOSITE = {
+    "ABOVE": "BELOW",
+    "BELOW": "ABOVE",
+    "EQUAL": None,
+    "SAME": "DIFFERENT",
+    "DIFFERENT": "SAME",
+}
+
+
+def _direction_correct(body: str, comparison: str) -> bool:
+    """방향 어휘가 실제 계산 결과와 반대로 쓰였는지만 본다 — 간단한 어휘 대조다
+    (완전한 자연어 이해는 아니다, 1 차는 검출 시도 수준). 올바른 어휘가 없어도
+    (수치만 언급) 통과시킨다 — 의견 없는 문장을 결함으로 몰지 않는다. 반대
+    방향 어휘가 있을 때만 실패시킨다(설계 'C').
+    """
+    opposite = _OPPOSITE[comparison]
+    if opposite and any(word in body for word in _DIRECTION_WORDS[opposite]):
+        return False
+    return True
+
+
+def _district_avg_reflected(body: str, metrics: dict) -> bool | None:
+    """게이트를 통과하고 salesSummary 가 실제로 선정됐을 때만 유효한 측정이다(#209 "A").
+
+    둘 중 하나라도 아니면 None — "선정 안 됨"은 결함이 아니다. devtools/bench.py
+    가 None 을 분모에서 뺀다(설계 리뷰 — 안 빼면 실제보다 낮게 보인다). 값이
+    보여도 방향이 반대면 실패로 센다(설계 'C').
+    """
+    district = metrics.get("districtBenchmark")
+    if not _district_gate(district):
+        return None
+    if not _axis_selected(body, metrics, "salesSummary"):
+        return None
+    avg = str(district["districtAvgMonthlySalesPerCafe"])
+    if avg not in _numbers_in(body):
+        return False
+    summary = metrics.get("salesSummary") or {}
+    comparison = _comparison(
+        summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"]
+    )
+    return _direction_correct(body, comparison)
+
+
+def _band_mentioned(body: str, band: str) -> bool:
+    start, end = band.split("-")
+    numbers = _numbers_in(body)
+    return start in numbers and end in numbers
+
+
+def _band_direction_correct(body: str, comparison: str, band: str) -> bool:
+    """밴드별 방향 어휘 대조 — 그 밴드의 시작 시각이 들어간 구(쉼표·마침표로 나눈
+    절)에서만 반대 방향 어휘를 찾는다. `_direction_correct`처럼 본문 전체를 보면,
+    매출·유동인구 두 비교가 한 문장에 같이 있을 때 서로의 반대 어휘에 오염된다
+    (예: "매출 피크와 겹치지만, 유동인구 피크와는 다른 시간대" — 전체를 보면
+    "다른 시간대"가 매출 쪽 SAME 판정까지 반대로 오판한다).
+    """
+    opposite = _OPPOSITE[comparison]
+    if not opposite:
+        return True
+    start, _ = band.split("-")
+    for clause in re.split(r"[,.\n]", body):
+        if start in clause and any(word in clause for word in _DIRECTION_WORDS[opposite]):
+            return False
+    return True
+
+
+def _district_band_reflected(body: str, metrics: dict) -> bool | None:
+    """게이트를 통과하고 두 밴드가 모두 문장에 인용됐을 때만 유효한 측정이다(#209 "A").
+
+    hourlySales candidate는 두 밴드·두 비교 필드를 같은 한 문장에 묶어 넘긴다
+    (vsDistrictAvg가 salesSummary 문장에 묶이는 것과 같은 구조, 위 "A" 주석 참고) —
+    한쪽만 말하고 다른 쪽을 빠뜨리면 결함이다("문장마다 근거 하나"는 축 사이의
+    얘기라 같은 축 번들 안의 누락엔 안 걸린다. 재검토로 "둘 다 요구"로 되돌림,
+    2026-10-21(6)). 둘 다 언급 안 됐으면 이번엔 hourlySales 가 선정 안 된 것으로
+    보고 None — 결함이 아니다.
+    """
+    district = metrics.get("districtBenchmark")
+    if not _district_gate(district):
+        return None
+    sales_band = district["peakSalesHourBand"]
+    traffic_band = district["peakFootTrafficHourBand"]
+    sales_mentioned = _band_mentioned(body, sales_band)
+    traffic_mentioned = _band_mentioned(body, traffic_band)
+    if not sales_mentioned and not traffic_mentioned:
+        return None
+    if not (sales_mentioned and traffic_mentioned):
+        return False
+    peak_hour = _store_peak_hour(metrics.get("hourlySales") or [])
+    if peak_hour is None:
+        # 우리 매장 피크를 계산할 수 없었던 달이다(app 쪽과 같은 이유로
+        # vsDistrictSalesPeak/vsDistrictFootTrafficPeak 가 안 보내진다) — 비교를
+        # 요구하지 않고 둘 다 인용됐는지만으로 통과시킨다.
+        return True
+    sales_comparison = "SAME" if _in_band(peak_hour, sales_band) else "DIFFERENT"
+    traffic_comparison = "SAME" if _in_band(peak_hour, traffic_band) else "DIFFERENT"
+    return _band_direction_correct(body, sales_comparison, sales_band) and _band_direction_correct(
+        body, traffic_comparison, traffic_band
+    )
+
 
 _DOW_KO = {
     "MONDAY": "월요일",
@@ -429,6 +594,10 @@ def grade_insight(raw: str, metrics: dict) -> dict:
     result["ratio_분모_정확"] = not re.search(r"(전체|총\s*매출)의\s*\d", body)
 
     result["상권_인과_주장_없음"] = not _DISTRICT_CAUSAL.search(body)
+    result["salesSummary_선정률"] = _axis_selected(body, metrics, "salesSummary")
+    result["hourlySales_선정률"] = _axis_selected(body, metrics, "hourlySales")
+    result["상권_평균매출_반영"] = _district_avg_reflected(body, metrics)
+    result["상권_피크밴드_반영"] = _district_band_reflected(body, metrics)
 
     result["insights"] = insights
     return result

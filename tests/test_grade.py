@@ -13,6 +13,7 @@ import pytest
 from app.clients import llm
 from app.prompts import insight as insight_prompt
 from app.prompts import solution as solution_prompt
+from app.services import insight_focus
 from devtools import grade
 from devtools.contract_check import EXAMPLES
 
@@ -262,10 +263,20 @@ def _insight(*sentences) -> dict:
 
 
 def test_정상_인사이트는_모든_항목을_통과한다():
+    # 2026-10-21(#209): hourlySales_선정률이 추가되면서 둘째 문장(원래
+    # menuRankings 인용, 측정 대상 아님)을 hourlySales 전용 문장으로 바꿨다 —
+    # 안 바꾸면 이 "정상" 응답조차 hourlySales 를 한 번도 선정하지 않아
+    # hourlySales_선정률 이 False 가 되고(실제로 그렇다, 결함은 아니다), 아래
+    # "모든 항목 통과" 전제가 깨진다. 셋째 문장(salesSummary+상권 번들)에 섞지
+    # 않는다 — "문장마다 근거 하나" 는 축 사이(salesSummary vs hourlySales)
+    # 원칙이라 한 문장에 두 축을 합치면 그 원칙을 거스르는 예시가 된다.
+    # "높습니다" 를 쓰지 않는다 — _direction_correct(vsDistrictAvg 용)는 본문
+    # 전체를 보므로, 이 문장의 "높다" 가 셋째 문장의 BELOW 판정과 반대 어휘로
+    # 오염돼 상권_평균매출_반영 이 False 로 깨진다(직접 실행해서 확인했다).
     result = _insight(
         "커피 카테고리 매출이 메뉴 매출의 41.7%를 차지하고 있습니다.",
-        "아메리카노가 메뉴 매출의 28.2%를 차지합니다.",
-        "총 매출은 전기 대비 4.2% 증가했습니다.",
+        "낮 12시 매출이 420,000원으로 하루 중 가장 많습니다.",
+        "총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 낮습니다.",
     )
 
     failed = [k for k, v in result.items() if isinstance(v, bool) and not v]
@@ -328,3 +339,163 @@ def test_카드_개수는_배정된_장수로_채점한다():
 
     assert grade_solution(two, metrics, expected_cards=2)["카드_개수_적정"] is True
     assert grade_solution(two, metrics)["카드_개수_적정"] is True, "2 장은 1~3 안이라 정상이다"
+
+
+_DISTRICT_METRICS = {
+    "salesSummary": {
+        "totalSales": 7920000,
+        "menuSales": 7480000,
+        "orderCount": 923,
+        "averageOrderValue": 8581,
+        "vsPrevPeriod": 0.042,
+    },
+    "hourlySales": [
+        {"dayType": "WEEKDAY", "hour": 14, "menuSales": 500000, "orderCount": 60},
+    ],
+    "districtBenchmark": {
+        "basisQuarter": "2026Q3",
+        "districtAvgMonthlySalesPerCafe": 9413000,
+        "cafeStoreCount": 133,
+        "peakSalesHourBand": "14-17",
+        "peakFootTrafficHourBand": "11-14",
+    },
+}
+
+
+def _district_insight(*sentences: str, metrics: dict = _DISTRICT_METRICS) -> dict:
+    return grade.grade_insight(json.dumps({"insights": list(sentences)}), metrics)
+
+
+def test_채점기의_상권_게이트가_서비스와_같다():
+    """app 을 import 하지 않으려고 복사해 둔 함수다 — 어긋나면 채점 결과가 서비스와
+    달라진다(devtools/grade.py::_district_gate 참고)."""
+    cases = [
+        None,
+        {},
+        {"cafeStoreCount": 2, "districtAvgMonthlySalesPerCafe": 9413000},
+        {"cafeStoreCount": 133, "districtAvgMonthlySalesPerCafe": 0},
+        {"cafeStoreCount": 133, "districtAvgMonthlySalesPerCafe": 9413000},
+    ]
+    for district in cases:
+        assert grade._district_gate(district) == insight_focus._district_gate(district)
+
+
+def test_채점기의_비교_방향이_서비스와_같다():
+    cases = [(10_000_000, 9_413_000), (7_920_000, 9_413_000), (9_413_000, 9_413_000)]
+    for total_sales, district_avg in cases:
+        assert grade._comparison(total_sales, district_avg) == insight_focus.district_comparison(
+            total_sales, district_avg
+        )
+
+
+def test_매출요약이_선정되면_선정률이_참이다():
+    result = _district_insight("총 매출은 전기 대비 4.2% 증가했습니다.")
+
+    assert result["salesSummary_선정률"] is True
+
+
+def test_매출요약이_선정_안_되면_선정률이_거짓이다():
+    result = _district_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
+
+    assert result["salesSummary_선정률"] is False
+
+
+def test_매출요약이_선정되고_상권_평균을_방향까지_맞게_인용하면_반영으로_통과한다():
+    """totalSales(792만)가 districtAvgMonthlySalesPerCafe(941.3만)보다 작으므로
+    BELOW다 — "낮습니다"가 맞는 방향이다."""
+    result = _district_insight(
+        "총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 낮습니다."
+    )
+
+    assert result["상권_평균매출_반영"] is True
+
+
+def test_상권_평균_수치는_맞는데_방향이_반대면_걸린다():
+    """숫자는 지표에 있는 값이라 UNGROUNDED_NUMBER 로는 못 잡는 오류다(설계 'C')."""
+    result = _district_insight(
+        "총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 높습니다."
+    )
+
+    assert result["상권_평균매출_반영"] is False
+
+
+def test_매출요약이_선정됐는데_상권_평균이_안_보이면_걸린다():
+    result = _district_insight("총 매출은 전기 대비 4.2% 증가했습니다.")
+
+    assert result["상권_평균매출_반영"] is False
+
+
+def test_매출요약이_선정_안_되면_상권_평균매출_반영은_측정_대상이_아니다():
+    """숙주가 안 뽑힌 건 결함이 아니다 — None 이어야 분모에서 빠진다(설계 리뷰)."""
+    result = _district_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
+
+    assert result["상권_평균매출_반영"] is None
+
+
+def test_두_밴드_모두_정확히_인용하면_반영으로_통과한다():
+    """우리 매장 피크(14시)는 peakSalesHourBand(14-17) 안(SAME), peakFootTrafficHourBand
+    (11-14) 밖(DIFFERENT)이다. 한 문장에 두 비교를 같이 담는다 — hourlySales candidate가
+    둘을 같은 문장에 묶어 넘기기 때문이다(재검토로 "둘 다 요구"로 되돌림, 2026-10-21(6))."""
+    result = _district_insight(
+        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지만, "
+        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 다른 시간대입니다."
+    )
+
+    assert result["상권_피크밴드_반영"] is True
+
+
+def test_한쪽_밴드만_설명하면_걸린다():
+    """매출 피크만 설명하고 유동인구 피크를 빠뜨렸다 — 번들로 받은 정보 중 일부를
+    누락한 진짜 결함이다. "문장마다 근거 하나" 원칙은 축 사이의 얘기라 여기엔
+    안 걸린다(같은 hourlySales 축 안의 번들)."""
+    result = _district_insight("오후 2시(14시)부터 17시까지 매출이 가장 높습니다.")
+
+    assert result["상권_피크밴드_반영"] is False
+
+
+def test_둘_다_설명해도_한쪽_방향이_틀리면_걸린다():
+    """실제로는 매출 피크(SAME)·유동인구 피크(DIFFERENT)인데 문장은 반대로 말했다."""
+    result = _district_insight(
+        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지 않고, "
+        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와 일치합니다."
+    )
+
+    assert result["상권_피크밴드_반영"] is False
+
+
+def test_시간대축이_선정_안_되면_상권_피크밴드_반영은_측정_대상이_아니다():
+    """두 밴드 숫자 중 어느 것도 안 나왔으면 이번엔 hourlySales 가 선정 안 된 것으로
+    본다 — 결함이 아니라 None 이어야 분모에서 빠진다."""
+    result = _district_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
+
+    assert result["상권_피크밴드_반영"] is None
+
+
+def test_우리_매장_피크를_계산할_수_없으면_밴드_인용만으로도_통과한다():
+    """비교 필드(vsDistrictSalesPeak 등)가 없을 상황이다 — 영업 중인 행이
+    없으면(_store_peak_hour 가 None) 방향을 요구하지 않고 둘 다 인용됐는지만 본다
+    (별도 검토, 2026-10-21(5))."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "hourlySales": [{"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0}],
+    }
+
+    assert grade._store_peak_hour(metrics["hourlySales"]) is None
+    result = _district_insight(
+        "상권의 매출은 14시부터 17시까지, 유동인구는 11시부터 14시까지가 피크입니다.",
+        metrics=metrics,
+    )
+
+    assert result["상권_피크밴드_반영"] is True
+
+
+def test_시간대축이_선정되면_hourlySales_선정률이_참이다():
+    result = _district_insight("오후 2시(14시)부터 17시까지 매출이 가장 높습니다.")
+
+    assert result["hourlySales_선정률"] is True
+
+
+def test_시간대축이_선정_안_되면_hourlySales_선정률이_거짓이다():
+    result = _district_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
+
+    assert result["hourlySales_선정률"] is False

@@ -436,8 +436,12 @@ def _pad(text: str, width: int) -> str:
     return text + " " * (width - _width(text))
 
 
-def _checks(result: dict) -> dict[str, bool]:
-    return {key: bool(value) for key, value in result.items() if key not in SKIP_KEYS}
+def _checks(result: dict) -> dict[str, bool | None]:
+    return {
+        key: (value if value is None else bool(value))
+        for key, value in result.items()
+        if key not in SKIP_KEYS
+    }
 
 
 async def _one(
@@ -482,11 +486,16 @@ async def _one(
     return row
 
 
-def _rates(rows: list[dict]) -> tuple[list[str], dict[str, tuple[float, float]], float, float]:
-    """항목별 (모델, 서비스) 통과율과 전항목 통과율. 분모는 항상 전체 요청 수다.
+def _rates(
+    rows: list[dict],
+) -> tuple[list[str], dict[str, tuple[float | None, float | None]], float, float]:
+    """항목별 (모델, 서비스) 통과율과 전항목 통과율.
 
-    행에 없는 항목은 실패로 센다 — 500 과 파싱 실패는 검사 결과가 아예 없기 때문에,
+    분모는 보통 전체 요청 수다. 행에 없는 항목(500·파싱 실패)은 결함으로 센다,
     있는 항목만 평균하면 "응답이 안 온 요청"이 통계에서 사라져 숫자가 좋아 보인다.
+    다만 조건부 항목(값이 None)은 그 요청에서 측정 대상이 아니라는 뜻이라 분모에서
+    뺀다 — 그대로 결함으로 세면 "선정 안 됨"이 "결함"으로 잡혀 실제보다 낮게 보인다
+    (#209 설계 리뷰, 헥터 — #178 카드_개수_일치 사고와 같은 모양).
     """
     total = len(rows)
     keys: dict[str, None] = {}
@@ -494,15 +503,30 @@ def _rates(rows: list[dict]) -> tuple[list[str], dict[str, tuple[float, float]],
         keys.update(dict.fromkeys(row["model"]))
         keys.update(dict.fromkeys(row["service"]))
 
-    per_key = {
-        key: (
-            sum(1 for r in rows if r["model"].get(key)) / total,
-            sum(1 for r in rows if r["service"].get(key)) / total,
-        )
-        for key in keys
-    }
-    all_model = sum(1 for r in rows if all(r["model"].get(k) for k in keys)) / total
-    all_service = sum(1 for r in rows if all(r["service"].get(k) for k in keys)) / total
+    def _rate(column: str, key: str) -> float | None:
+        numerator = 0
+        denominator = 0
+        for row in rows:
+            values = row[column]
+            if key not in values:
+                denominator += 1  # 응답 실패·파싱 실패 — 결함으로 센다
+                continue
+            value = values[key]
+            if value is None:
+                continue  # 조건부 항목의 "해당 없음" — 분모에서 뺀다
+            denominator += 1
+            numerator += 1 if value else 0
+        return numerator / denominator if denominator else None
+
+    def _effective(values: dict, key: str) -> bool:
+        if key not in values:
+            return False
+        value = values[key]
+        return True if value is None else bool(value)
+
+    per_key = {key: (_rate("model", key), _rate("service", key)) for key in keys}
+    all_model = sum(1 for r in rows if all(_effective(r["model"], k) for k in keys)) / total
+    all_service = sum(1 for r in rows if all(_effective(r["service"], k) for k in keys)) / total
     return list(keys), per_key, all_model, all_service
 
 
@@ -536,8 +560,10 @@ def _report(name: str, rows: list[dict]) -> None:
     print(f"  {rule}")
     for key in keys:
         model, service = per_key[key]
-        mark = "  <--" if service < 0.95 else ""
-        print(f"  {_pad(key, width)}   {f'{model:.1%}':>11}   {f'{service:.1%}':>12}{mark}")
+        model_text = f"{model:.1%}" if model is not None else "N/A"
+        service_text = f"{service:.1%}" if service is not None else "N/A"
+        mark = "  <--" if service is not None and service < 0.95 else ""
+        print(f"  {_pad(key, width)}   {model_text:>11}   {service_text:>12}{mark}")
 
     print(f"  {rule}")
     print(f"  {_pad('전항목', width)}   {f'{all_model:.1%}':>11}   {f'{all_service:.1%}':>12}")
@@ -548,7 +574,7 @@ def _report(name: str, rows: list[dict]) -> None:
             print(f"\n  [{row['status']}] {row['error']}")
             break
 
-    failed_keys = [key for key in keys if per_key[key][1] < 1.0]
+    failed_keys = [key for key in keys if per_key[key][1] is not None and per_key[key][1] < 1.0]
     if failed_keys:
         print("\n  걸린 응답 (항목별 첫 건):")
     for key in failed_keys:

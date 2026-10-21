@@ -104,3 +104,24 @@ def test_솔루션_케이스가_모든_근거_축을_덮는다():
     covered = {key for _, metrics in SOLUTION_CASES for key, value in metrics.items() if value}
 
     assert not (axes - covered), f"케이스가 덮지 않는 지표: {sorted(axes - covered)}"
+
+
+def test_조건부_항목의_None은_분모에서_빠진다():
+    """선정 안 된 조건부 항목(None)을 결함으로 세면 실제보다 낮게 보인다(#209, 헥터)."""
+    rows = [
+        _row(
+            200,
+            {"parsed": True, "상권_평균매출_반영": None},
+            {"parsed": True, "상권_평균매출_반영": None},
+        ),
+        _row(
+            200,
+            {"parsed": True, "상권_평균매출_반영": True},
+            {"parsed": True, "상권_평균매출_반영": False},
+        ),
+    ]
+    _, per_key, all_model, all_service = _rates(rows)
+
+    assert per_key["상권_평균매출_반영"] == (1.0, 0.0), "None 인 행은 분모에서 빠져야 한다"
+    assert all_model == 1.0, "None 은 결함이 아니라 전항목 집계에서 통과로 센다"
+    assert all_service == 0.5, "False 는 여전히 결함이다 — None 과 다르게 센다"
