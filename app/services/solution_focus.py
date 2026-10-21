@@ -33,6 +33,12 @@ _PREDICTION_WEIGHT = 2.0
 # 날씨가 들어오게 한다 — 이 값도 다른 가중치처럼 잠정값이다.
 _WEATHER_SUPPLEMENT_SCORE = 0.3
 
+# 특보급 날씨는 그 날 가장 할 말이 많다. 보통 날씨의 "보충" 자리와 성격이 다르다.
+# 기준은 기상청 주의보 발효 기준을 그대로 쓴다 — 우리가 고른 숫자가 아니다.
+_COLD_WAVE_MIN_TEMP = -12  # 한파주의보: 아침 최저기온 -12℃ 이하
+_HEAT_WAVE_MAX_TEMP = 33  # 폭염주의보: 최고기온 33℃ 이상
+_WEATHER_ALERT_SCORE = 1.0
+
 # 프롬프트에 보여줄 행 수 — 잠정값. dayType 별 상·하위 몇 행, 비중 상위 몇 종.
 # 시간대는 24 시간 × 2 dayType = 48 행이 올 수 있고 카테고리도 20 종까지 가능한데,
 # 한 카드가 쓰는 건 두세 행이고 나머지는 틀릴 숫자를 공급한다 — 지표를 많이 주면
@@ -232,13 +238,27 @@ def _prediction_score(predicted: int | None, net_sales: int) -> float:
 
 
 def _weather_score(weather: dict | None) -> float:
-    """BE 가 이미 isNotable 로 참/거짓을 판정해 보낸다 — AI 가 원시값(POP·기온)으로
+    """notable 이면 보충 점수, 그중 특보급이면 1 순위.
 
-    세부 점수를 또 매길 근거가 없다. notable 이면 고정값(_WEATHER_SUPPLEMENT_SCORE),
-    아니면 후보에서 뺀다.
+    2026-10-14 에는 "isNotable 이 참/거짓뿐이라 세부 점수를 매길 근거가 없다" 고 보고
+    고정값 하나만 썼는데, **원시값이 같이 온다는 걸 놓쳤다**(minTempC·maxTempC 등).
+    그래서 한파든 흐린 날이든 점수가 같았고, A40 8 차에서 날씨가 축 다섯 중 5 위로
+    밀렸다(2026-10-21, 이슈 #217).
+
+    한파·폭염은 **기상청 주의보 기준**으로 가른다 — 우리가 고른 숫자가 아니다.
+    그 날엔 "오늘 뭘 할까" 의 답이 날씨라서 다른 축보다 앞선다.
+
+    **태풍·대설은 판정할 수 없다.** 풍속도 적설도 계약에 없다(WeatherContext 는
+    basisDateTime·skyText·minTempC·maxTempC·maxPop·rainHours·precipitationMm·isNotable).
+    BE 에 특보 발효 여부를 받는 쪽이 원시값으로 재구성하는 것보다 정확하다 — 요청해 둘 것.
     """
     if not weather or not weather.get("isNotable"):
         return -1.0
+    low, high = weather.get("minTempC"), weather.get("maxTempC")
+    if (low is not None and low <= _COLD_WAVE_MIN_TEMP) or (
+        high is not None and high >= _HEAT_WAVE_MAX_TEMP
+    ):
+        return _WEATHER_ALERT_SCORE
     return _WEATHER_SUPPLEMENT_SCORE
 
 

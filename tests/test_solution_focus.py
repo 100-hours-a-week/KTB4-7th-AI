@@ -508,3 +508,69 @@ def test_로그에_지표_값은_안_남는다(caplog):
     assert "1540000" not in line
     assert "210000" not in line
     assert "커피" not in line
+
+
+# ── 특보급 날씨 (2026-10-21, 이슈 #217) ──────────────────────────────
+# 날씨가 isNotable 이면 한파든 흐린 날이든 0.3 으로 같았다. 축이 다섯이 되면서
+# 특보급 날씨도 5 위로 밀렸다(A40 8차). 기상청 주의보 기준으로 가른다.
+
+_BUSY_DAY = {
+    "salesSummary": {"netSales": 1540000, "vsPrevPeriod": -0.11},
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ],
+    "categoryBreakdown": [
+        {"name": "커피", "share": 0.52, "vsPrevPeriod": -0.09},
+        {"name": "디저트", "share": 0.28, "vsPrevPeriod": 0.04},
+    ],
+    "menuRankings": [
+        {
+            "rank": 1,
+            "menuName": "아이스 아메리카노",
+            "menuSales": 3980000,
+            "quantity": 864,
+            "ratio": 0.25,
+            "vsPrevPeriod": -0.14,
+        },
+    ],
+}
+_MILD = {"skyText": "흐림", "minTempC": 9, "maxTempC": 19, "maxPop": 0.6, "isNotable": True}
+
+
+def test_평범한_날씨는_다른_축에_밀린다():
+    """축이 다섯인 보통 날에는 날씨가 보충 자리다 — 기존 설계 그대로."""
+    focus = assign({**_BUSY_DAY, "weatherContext": _MILD})
+
+    assert not any("weatherContext" in card for card in focus)
+
+
+def test_한파주의보급이면_1순위가_된다():
+    """기상청 한파주의보: 아침 최저기온 -12℃ 이하."""
+    cold = {**_MILD, "minTempC": -13, "maxTempC": -4}
+    focus = assign({**_BUSY_DAY, "weatherContext": cold})
+
+    assert "weatherContext" in focus[0]
+
+
+def test_폭염주의보급이면_1순위가_된다():
+    """기상청 폭염주의보: 최고기온 33℃ 이상."""
+    hot = {**_MILD, "minTempC": 26, "maxTempC": 35}
+    focus = assign({**_BUSY_DAY, "weatherContext": hot})
+
+    assert "weatherContext" in focus[0]
+
+
+def test_기준_바로_아래는_보충_자리에_머문다():
+    """-11℃·32℃ 는 주의보가 아니다. 경계에서 한 단계 더 가지 않는지 본다."""
+    for edge in ({"minTempC": -11, "maxTempC": -2}, {"minTempC": 25, "maxTempC": 32}):
+        focus = assign({**_BUSY_DAY, "weatherContext": {**_MILD, **edge}})
+        assert not any("weatherContext" in card for card in focus), edge
+
+
+def test_isNotable이_아니면_특보_기온이어도_후보에서_빠진다():
+    """BE 판정이 우선이다 — 우리가 isNotable 을 덮어쓰지 않는다."""
+    cold = {**_MILD, "minTempC": -13, "isNotable": False}
+    focus = assign({**_BUSY_DAY, "weatherContext": cold})
+
+    assert not any("weatherContext" in card for card in focus)
