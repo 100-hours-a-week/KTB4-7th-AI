@@ -32,7 +32,16 @@ _DISTRICT_SUPPLEMENT_SCORE)으로 바꿨다. "다른 세 축이 전부 약할 �
 peakFootTrafficHourBand)로 쪼개져 두 축에 나뉜다. 비교 방향(vsDistrictAvg)은 코드가
 미리 계산한다 — solution_focus.peak_ratios() 와 같은 이유로, 두 숫자 다 지표에 있어
 UNGROUNDED_NUMBER 로 못 잡는 "방향 반전" 오류를 막는다.
+
+2026-10-21(#209 최종 리뷰 Important #4): _district_gate 가 peakSalesHourBand·
+peakFootTrafficHourBand 의 포맷을 검증하지 않아서, BE 가 그 문자열을 바꾸면(과거
+10-19 에 BE 계약 3 건이 통보 없이 바뀐 전례가 있다) _in_band 의 int() 변환이
+터져 상권 붙은 모든 인사이트 요청이 500 이 된다 — 이 번들링 변경 전에는 밴드
+문자열을 파싱 없이 그대로 프롬프트에 넘겨서 이 크래시 경로가 없었다. 게이트에서
+포맷이 안 맞으면 조용히 탈락시킨다 — 상권만 빠지고 인사이트는 정상 생성된다.
 """
+
+import re
 
 # 잠정 가중치 — 증감률은 절대값이 작아서(0.042) 격차 점수와 자릿수를 맞춘다.
 _CHANGE_WEIGHT = 3.0
@@ -41,6 +50,12 @@ _SHARE_CHANGE_WEIGHT = 2.0
 # 표본이 1~2 곳인 상권은 평균 자체가 의미가 없다(#157). BE 가 자기 필터링 기준과
 # 크로스체크할 수 있게 상수로 분리해 둔다 — 잠정값이다.
 _MIN_CAFE_STORE_COUNT = 3
+
+# peakSalesHourBand·peakFootTrafficHourBand 의 기대 포맷("HH-HH") — BE
+# DistrictBenchmarkService.VALID_HOUR_BANDS 는 그 서비스 내부 약속일 뿐 우리
+# 스키마(str)에는 강제되지 않는다. 안 맞으면 _in_band 의 int() 변환이 터져
+# 상권 붙은 모든 요청이 500 이 된다(#209 최종 리뷰 Important #4).
+_HOUR_BAND = re.compile(r"^\d{1,2}-\d{1,2}$")
 
 # 프롬프트에 보여줄 행 수 — 잠정값. 상·하위 몇 행, 비중 상위 몇 종.
 # hourlySales 는 24 시간 × 2 dayType, salesTrend 는 한 달치가 올 수 있다. 한 문장이
@@ -131,6 +146,22 @@ def _district_gate(district: dict | None) -> bool:
     return (district.get("districtAvgMonthlySalesPerCafe") or 0) > 0
 
 
+def _band_gate(district: dict | None) -> bool:
+    """peakSalesHourBand·peakFootTrafficHourBand 포맷이 "HH-HH" 인지만 본다.
+
+    hourlySales 번들링만 그 문자열을 _in_band 로 파싱한다 — salesSummary 쪽은
+    평균매출만 쓰고 밴드는 안 건드려 포맷과 무관하다. _district_gate 에 합치지
+    않고 hourlySales 호출부에서만 추가로 본다(#209 최종 리뷰 Important #4) —
+    합치면 밴드 포맷만 깨져도 상권 평균매출(salesSummary 쪽)까지 같이 멈춘다.
+    """
+    if not district:
+        return False
+    return bool(
+        _HOUR_BAND.fullmatch(district.get("peakSalesHourBand") or "")
+        and _HOUR_BAND.fullmatch(district.get("peakFootTrafficHourBand") or "")
+    )
+
+
 def _store_peak_hour(points: list[dict]) -> int | None:
     """영업 중(menuSales > 0)인 행 중 매출이 가장 높은 시간. 없으면 None."""
     selling = _selling(points)
@@ -172,7 +203,7 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     for key, order_key in series_axes:
         points = metrics.get(key) or []
         focus = {key: _spread_rows(points, order_key)}
-        if key == "hourlySales" and _district_gate(district):
+        if key == "hourlySales" and _district_gate(district) and _band_gate(district):
             focus["peakSalesHourBand"] = district["peakSalesHourBand"]
             focus["peakFootTrafficHourBand"] = district["peakFootTrafficHourBand"]
             peak_hour = _store_peak_hour(points)

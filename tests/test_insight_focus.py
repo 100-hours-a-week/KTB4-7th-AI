@@ -229,6 +229,30 @@ def test_표본이_너무_적은_상권은_시간대_축에_안_묻는다():
     assert "peakSalesHourBand" not in hourly_focus
 
 
+def test_밴드_포맷이_깨지면_시간대_축에_안_묻고_500으로_안_죽는다():
+    """BE 가 peakSalesHourBand 포맷을 바꾸면(과거 전례 있음, 통보 없이 계약
+    변경) _in_band 의 int() 변환이 터져 상권 붙은 모든 인사이트 요청이 500이
+    됐다 — 이 번들링 변경이 새로 만든 크래시 경로다(#209 최종 리뷰 Important
+    #4). 게이트에서 조용히 탈락시킨다."""
+    district = {**DISTRICT, "peakSalesHourBand": "14시-17시"}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeak" not in hourly_focus
+
+
+def test_밴드_포맷이_깨져도_매출요약의_상권_평균은_그대로_묻는다():
+    """밴드 포맷 검증은 hourlySales 번들링에만 건다 — salesSummary 쪽은
+    평균매출만 쓰고 밴드를 안 건드리므로 밴드가 깨져도 영향이 없어야 한다
+    (#209 최종 리뷰 Important #4, 게이트를 합치지 않은 이유)."""
+    district = {**DISTRICT, "peakSalesHourBand": "14시-17시"}
+    focus = assign({**METRICS, "districtBenchmark": district}, max_count=4)
+
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert summary_focus["districtAvgMonthlySalesPerCafe"] == 9413000
+
+
 def test_영업중인_행이_없으면_피크_비교_필드를_안_넣는다():
     """매출이 전부 0 이면(영업 전·휴무) 우리 매장 피크를 계산할 수 없다 — 이때
     DIFFERENT로 단정하지 않고 비교 필드 자체를 뺀다(별도 검토, 2026-10-21(5)).

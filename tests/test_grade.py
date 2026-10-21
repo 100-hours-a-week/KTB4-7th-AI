@@ -386,6 +386,22 @@ def test_채점기의_상권_게이트가_서비스와_같다():
         assert grade._district_gate(district) == insight_focus._district_gate(district)
 
 
+def test_채점기의_밴드_포맷_게이트가_서비스와_같다():
+    """app::_band_gate 와 같은 로직이어야 한다 — 어긋나면 한쪽은 밴드가 깨져도
+    파싱을 시도해 죽고, 다른 쪽은 조용히 탈락시킨다(#209 최종 리뷰 Important
+    #4)."""
+    cases = [
+        None,
+        {},
+        {"peakSalesHourBand": "14-17", "peakFootTrafficHourBand": "11-14"},
+        {"peakSalesHourBand": "14시-17시", "peakFootTrafficHourBand": "11-14"},
+        {"peakSalesHourBand": "14-17", "peakFootTrafficHourBand": ""},
+        {"peakSalesHourBand": "14-17"},  # peakFootTrafficHourBand 자체가 없음
+    ]
+    for district in cases:
+        assert grade._band_gate(district) == insight_focus._band_gate(district)
+
+
 def test_채점기의_비교_방향이_서비스와_같다():
     cases = [(10_000_000, 9_413_000), (7_920_000, 9_413_000), (9_413_000, 9_413_000)]
     for total_sales, district_avg in cases:
@@ -611,6 +627,24 @@ def test_시간대축이_선정_안_되면_상권_피크밴드_반영은_측정_
     """두 밴드 숫자 중 어느 것도 안 나왔으면 이번엔 hourlySales 가 선정 안 된 것으로
     본다 — 결함이 아니라 None 이어야 분모에서 빠진다."""
     result = _district_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
+
+    assert result["상권_피크밴드_반영"] is None
+
+
+def test_밴드_포맷이_깨지면_상권_피크밴드_반영은_측정_대상이_아니고_안_죽는다():
+    """BE 가 peakSalesHourBand 포맷을 바꾸면 _band_mentioned 의 tuple
+    unpacking(band.split("-"))이 터질 수 있다 — 채점기가 --n 20 실측 도중
+    죽지 않고 조용히 측정 대상 제외(None)로 처리해야 한다(#209 최종 리뷰
+    Important #4)."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "districtBenchmark": {**_DISTRICT_METRICS["districtBenchmark"], "peakSalesHourBand": "14"},
+    }
+    result = _district_insight(
+        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지만, "
+        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 다른 시간대입니다.",
+        metrics=metrics,
+    )
 
     assert result["상권_피크밴드_반영"] is None
 

@@ -125,6 +125,23 @@ def _district_gate(district: dict | None) -> bool:
     return (district.get("districtAvgMonthlySalesPerCafe") or 0) > 0
 
 
+# app/services/insight_focus.py::_band_gate 와 같은 로직이어야 한다. 포맷이
+# 안 맞으면 _band_mentioned 의 tuple unpacking(band.split("-"))이나 _in_band
+# 의 int() 변환이 터진다 — _district_band_reflected 전용으로, salesSummary
+# 쪽(_district_avg_reflected)은 밴드를 안 써서 이 게이트가 필요 없다(#209
+# 최종 리뷰 Important #4).
+_HOUR_BAND = re.compile(r"^\d{1,2}-\d{1,2}$")
+
+
+def _band_gate(district: dict | None) -> bool:
+    if not district:
+        return False
+    return bool(
+        _HOUR_BAND.fullmatch(district.get("peakSalesHourBand") or "")
+        and _HOUR_BAND.fullmatch(district.get("peakFootTrafficHourBand") or "")
+    )
+
+
 # app/services/insight_focus.py::district_comparison 과 같은 로직이어야 한다.
 def _comparison(total_sales: int, district_avg: int) -> str:
     if total_sales > district_avg:
@@ -304,7 +321,7 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     보고 None — 결함이 아니다.
     """
     district = metrics.get("districtBenchmark")
-    if not _district_gate(district):
+    if not _district_gate(district) or not _band_gate(district):
         return None
     sales_band = district["peakSalesHourBand"]
     traffic_band = district["peakFootTrafficHourBand"]
