@@ -131,6 +131,23 @@ def _district_gate(district: dict | None) -> bool:
     return (district.get("districtAvgMonthlySalesPerCafe") or 0) > 0
 
 
+def _store_peak_hour(points: list[dict]) -> int | None:
+    """영업 중(menuSales > 0)인 행 중 매출이 가장 높은 시간. 없으면 None."""
+    selling = _selling(points)
+    if not selling:
+        return None
+    return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
+
+
+def _in_band(hour: int, band: str) -> bool:
+    """우리 매장 피크 시간이 상권 밴드("HH-HH") 안에 드는지. 밴드 형식은 BE
+    DistrictBenchmarkService.VALID_HOUR_BANDS 가 고정 집합으로 보장한다. 호출부가
+    hour is None 인 경우를 먼저 걸러내므로 여기선 int 만 받는다.
+    """
+    start, end = (int(x) for x in band.split("-"))
+    return start <= hour < end
+
+
 def assign(metrics: dict, max_count: int) -> list[dict]:
     """문장 순서대로의 근거 지표를 돌려준다. 최대 max_count 개.
 
@@ -155,6 +172,19 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     for key, order_key in series_axes:
         points = metrics.get(key) or []
         focus = {key: _spread_rows(points, order_key)}
+        if key == "hourlySales" and _district_gate(district):
+            focus["peakSalesHourBand"] = district["peakSalesHourBand"]
+            focus["peakFootTrafficHourBand"] = district["peakFootTrafficHourBand"]
+            peak_hour = _store_peak_hour(points)
+            if peak_hour is not None:
+                focus["vsDistrictSalesPeak"] = (
+                    "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
+                )
+                focus["vsDistrictFootTrafficPeak"] = (
+                    "SAME"
+                    if _in_band(peak_hour, district["peakFootTrafficHourBand"])
+                    else "DIFFERENT"
+                )
         candidates.append((focus, _spread(points) if points else -1.0))
     for key in ("categorySales", "menuRankings"):
         points = metrics.get(key) or []

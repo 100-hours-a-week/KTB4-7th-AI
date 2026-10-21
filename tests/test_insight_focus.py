@@ -180,3 +180,69 @@ def test_독립_상권_축은_더_이상_없다():
     focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=4)
 
     assert not any(set(item) == {"districtBenchmark"} for item in focus)
+
+
+HOURLY_METRICS = {
+    **METRICS,
+    "hourlySales": [
+        {"dayType": "WEEKDAY", "hour": 11, "menuSales": 850000, "orderCount": 95},
+        {"dayType": "WEEKDAY", "hour": 19, "menuSales": 210000, "orderCount": 24},
+    ],
+}
+
+
+def test_시간대_축이_선정되면_상권_피크시간대가_같이_묻는다():
+    """우리 매장 매출 피크(11시)는 peakSalesHourBand(14-17)엔 안 들고
+    peakFootTrafficHourBand(11-14)엔 든다."""
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert hourly_focus["peakFootTrafficHourBand"] == "11-14"
+    assert hourly_focus["vsDistrictSalesPeak"] == "DIFFERENT"
+    assert hourly_focus["vsDistrictFootTrafficPeak"] == "SAME"
+
+
+def test_우리_매출_피크가_상권_매출_피크와_겹치면_SAME():
+    district = {**DISTRICT, "peakSalesHourBand": "10-13"}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["vsDistrictSalesPeak"] == "SAME"
+
+
+def test_상권_필드가_없으면_시간대_축에_안_묻는다():
+    focus = assign(HOURLY_METRICS, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "peakFootTrafficHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeak" not in hourly_focus
+    assert "vsDistrictFootTrafficPeak" not in hourly_focus
+
+
+def test_표본이_너무_적은_상권은_시간대_축에_안_묻는다():
+    district = {**DISTRICT, "cafeStoreCount": 2}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+
+
+def test_영업중인_행이_없으면_피크_비교_필드를_안_넣는다():
+    """매출이 전부 0 이면(영업 전·휴무) 우리 매장 피크를 계산할 수 없다 — 이때
+    DIFFERENT로 단정하지 않고 비교 필드 자체를 뺀다(별도 검토, 2026-10-21(5)).
+    밴드 원본 값은 상권 자체의 사실이라 그대로 남긴다."""
+    closed = {
+        **HOURLY_METRICS,
+        "hourlySales": [
+            {"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0},
+            {"dayType": "WEEKDAY", "hour": 4, "menuSales": 0, "orderCount": 0},
+        ],
+    }
+    focus = assign({**closed, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert "vsDistrictSalesPeak" not in hourly_focus
+    assert "vsDistrictFootTrafficPeak" not in hourly_focus
