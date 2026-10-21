@@ -304,6 +304,110 @@ INSIGHT_CASES = [
             ],
         },
     ),
+    # 아래 둘은 2026-10-21 에 추가했다. 그 전까지 케이스 둘 어디에도 districtBenchmark
+    # 가 없어서, 상권(#161)이 인사이트 측정에 한 번도 포함되지 않았다. 솔루션 쪽에서
+    # 같은 구멍을 찾은 직후다(#206).
+    (
+        # 다른 축을 일부러 약하게 둔다. _DISTRICT_SUPPLEMENT_SCORE(0.3) 고정값이
+        # 후보 일곱 중 3 등 안에 들 수 있는 조건이 실제로 있는지 본다.
+        "상권있음",
+        {
+            "salesSummary": {
+                "totalSales": 6840000,
+                "menuSales": 6510000,
+                "orderCount": 812,
+                "averageOrderValue": 8423,
+                "vsPrevPeriod": 0.018,
+            },
+            "categorySales": [
+                {
+                    "categoryName": "커피",
+                    "menuSales": 2210000,
+                    "ratio": 0.3395,
+                    "vsPrevPeriod": 0.012,
+                },
+                {
+                    "categoryName": "논커피",
+                    "menuSales": 2080000,
+                    "ratio": 0.3195,
+                    "vsPrevPeriod": -0.008,
+                },
+            ],
+            "districtBenchmark": {
+                "basisQuarter": "2026Q2",
+                "districtAvgMonthlySalesPerCafe": 18400000,
+                "cafeStoreCount": 7,
+                "peakSalesHourBand": "11-14",
+                "peakFootTrafficHourBand": "17-21",
+            },
+        },
+    ),
+    (
+        # 축 일곱이 한꺼번에 경쟁하는, 지금 운영 입력에 가장 가까운 모양이다.
+        # 번들링(상권을 salesSummary·hourlySales 에 끼워 넣는 안)을 적용하기 전후로
+        # 비교할 기준선이 된다 — 적용 전에 한 번 재두지 않으면 좋아졌는지 말할 수 없다.
+        "전부있음",
+        {
+            "salesSummary": {
+                "totalSales": 9820000,
+                "menuSales": 9340000,
+                "orderCount": 1142,
+                "averageOrderValue": 8599,
+                "vsPrevPeriod": -0.072,
+            },
+            "salesTrend": [
+                {"date": "2026-10-01", "menuSales": 318000, "orderCount": 39},
+                {"date": "2026-10-15", "menuSales": 294500, "orderCount": 36},
+                {"date": "2026-10-31", "menuSales": 341200, "orderCount": 42},
+            ],
+            "weekdaySales": [
+                {"dayOfWeek": "WED", "menuSales": 1182000, "orderCount": 148},
+                {"dayOfWeek": "SAT", "menuSales": 1904000, "orderCount": 231},
+            ],
+            "hourlySales": [
+                {"dayType": "WEEKDAY", "hour": 9, "menuSales": 412000, "orderCount": 61},
+                {"dayType": "WEEKDAY", "hour": 13, "menuSales": 1830000, "orderCount": 224},
+                {"dayType": "WEEKEND", "hour": 15, "menuSales": 1240000, "orderCount": 149},
+            ],
+            "categorySales": [
+                {
+                    "categoryName": "커피",
+                    "menuSales": 4480000,
+                    "ratio": 0.4796,
+                    "vsPrevPeriod": -0.084,
+                },
+                {
+                    "categoryName": "디저트",
+                    "menuSales": 2610000,
+                    "ratio": 0.2794,
+                    "vsPrevPeriod": 0.031,
+                },
+            ],
+            "menuRankings": [
+                {
+                    "rank": 1,
+                    "menuName": "아이스 아메리카노",
+                    "menuSales": 2480000,
+                    "quantity": 704,
+                    "ratio": 0.2655,
+                },
+                {
+                    "rank": 5,
+                    "menuName": "유자차",
+                    "menuSales": 418000,
+                    "quantity": 92,
+                    "ratio": 0.0447,
+                },
+            ],
+            "districtBenchmark": {
+                "basisQuarter": "2026Q2",
+                "districtAvgMonthlySalesPerCafe": 11200000,
+                "cafeStoreCount": 12,
+                "peakSalesHourBand": "11-14",
+                "peakFootTrafficHourBand": "17-21",
+            },
+        },
+    ),
 ]
 
 # ── 계측 ──────────────────────────────────────────────────────────────

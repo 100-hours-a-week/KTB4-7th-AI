@@ -67,6 +67,21 @@ def test_파싱_실패는_error_를_항목으로_세지_않는다():
     assert _checks({"parsed": False, "error": "JSONDecodeError: ..."}) == {"parsed": False}
 
 
+def test_인사이트_케이스가_모든_근거_축을_덮는다():
+    """솔루션과 같은 구멍이 인사이트에도 있었다 — districtBenchmark(#161) 후보 0/2.
+
+    상권이 인사이트 측정에 한 번도 포함되지 않아서, "상권이 경쟁에서 밀린다" 를
+    벤치로 확인할 수 없었다(2026-10-21).
+    """
+    from app.schemas.common import InsightMetrics
+    from devtools.bench import INSIGHT_CASES
+
+    axes = set(InsightMetrics.model_fields)
+    covered = {key for _, metrics in INSIGHT_CASES for key, value in metrics.items() if value}
+
+    assert not (axes - covered), f"케이스가 덮지 않는 지표: {sorted(axes - covered)}"
+
+
 def test_솔루션_케이스가_모든_근거_축을_덮는다():
     """축을 추가하고 케이스를 안 고치면 그 축은 영원히 측정되지 않는다.
 
