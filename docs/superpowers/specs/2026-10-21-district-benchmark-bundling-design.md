@@ -1,5 +1,15 @@
 # 상권(districtBenchmark) 인사이트 번들링 설계
 
+## 변경 이력
+
+- 2026-10-21: 초안.
+- 2026-10-21(2): 헥터가 벤치 케이스에 상권/날씨를 실제로 넣어 머지한 PR #207·#208로
+  초안의 "트레이드오프" 절을 실측으로 재현·보강. `salesSummary`가 숙주로 불안정하다는
+  점(아래 "A"), `basisQuarter` 접지 누수(아래 "B"), 번들링 특유의 오귀속 위험(아래
+  "C") 세 가지를 반영해 설계를 다시 열었다. 세 항목은 성격이 달라 처리 방식도 다르다
+  — A·B는 **추측으로 점수·차단 규칙을 바꾸지 않고 먼저 측정**하고, C는 측정만으로는
+  못 잡는 구조적 위험이라 **구현 시점에 바로 예방 조치**를 넣는다.
+
 ## Context
 
 `POST /internal/v1/ai/sales-insights`는 7개 후보 축(`salesSummary`·`salesTrend`·
@@ -22,6 +32,22 @@
 AI가 쓰느냐"의 문제라 서로 독립적이다 — BE 수정으로 데이터가 도착하기 시작하면 이 설계의
 효과가 비로소 드러난다.
 
+**PR #207·#208로 "밀림" 현상이 실측 확인됐다.** 벤치 케이스(`devtools/bench.py`)가
+`weatherContext`·`districtBenchmark`를 애초에 입력에 포함한 적이 없어, 0~6차 품질
+측정이 전부 "날씨·상권 없음" 조건으로 돌고 있었다(헥터, #206). 케이스를 추가해 돌려본
+결과("전부있음", 운영 입력에 가장 가까움):
+
+```
+솔루션(5축 경쟁)  hourly 0.86 · category 0.52 · menu 0.42 · summary 0.33 · weather 0.30  → 날씨 밀림
+인사이트(7축 경쟁) hourlySales 0.775 · categorySales 0.480 · weekdaySales 0.379 ·
+                 districtBenchmark 0.300 · menuRankings 0.266 · salesSummary 0.216(밀림) ·
+                 salesTrend 0.137
+```
+
+인사이트 쪽에서 **`salesSummary`가 7개 중 6위로 3위 안에 못 들었다** — 이 설계가 상권
+평균매출(`districtAvgMonthlySalesPerCafe`)을 묶으려는 숙주 축이 바로 이 축이다. 아래
+"A"에서 다룬다.
+
 ## 범위
 
 - **포함**: `app/services/insight_focus.py`의 `districtBenchmark` 선발 로직을 전용
@@ -41,17 +67,39 @@ AI가 쓰느냐"의 문제라 서로 독립적이다 — BE 수정으로 데이�
 두 경우 모두 **기존 축 자체의 점수 공식은 그대로 유지** — districtBenchmark 유무가
 순위에 영향을 주지 않는다(조건부 노출, 사용자 확인 완료).
 
-### 1) `salesSummary` + `districtAvgMonthlySalesPerCafe`
+### 1) `salesSummary` + `districtAvgMonthlySalesPerCafe` (+ 비교 방향 사전 계산 — "C")
 
 `salesSummary` candidate를 구성할 때, 상권 게이트(아래)를 통과하면 focus 블록에
-`districtAvgMonthlySalesPerCafe` 한 필드만 추가한다.
+`districtAvgMonthlySalesPerCafe`와 **비교 방향(`vsDistrictAvg`)**을 같이 추가한다.
+
+**왜 비교 방향을 코드가 미리 계산하나.** `totalSales`와 `districtAvgMonthlySalesPerCafe`를
+그냥 나란히 주면, 모델이 "어느 쪽이 더 큰지"를 직접 계산하다 방향을 뒤집어 말할 수 있다
+— 둘 다 지표에 실재하는 숫자라 기존 `UNGROUNDED_NUMBER` 게이트로는 안 걸린다(숫자는
+맞는데 의미가 반전되는 오류). `solution_focus.peak_ratios()`가 "어느 두 시각 사이
+배수인지"를 모델에 맡기지 않고 코드가 계산해 넘기는 것과 같은 이유다(실측으로 확인된
+오귀속 사례: "12시 대 9시" 값을 "12시 대 15시"로 잘못 붙인 문장이 모든 검사를 통과).
+"계산은 코드, 해석만 모델"이라는 이 레포 원칙 그대로다.
 
 ```python
+def _district_comparison(total_sales: int, district_avg: int) -> str:
+    if total_sales > district_avg:
+        return "ABOVE"
+    if total_sales < district_avg:
+        return "BELOW"
+    return "EQUAL"
+
+
 focus = {"salesSummary": summary}
 if _district_gate(district):
     focus["districtAvgMonthlySalesPerCafe"] = district["districtAvgMonthlySalesPerCafe"]
+    focus["vsDistrictAvg"] = _district_comparison(
+        summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"]
+    )
 candidates.append((focus, _summary_score(summary) if summary else -1.0))
 ```
+
+`ABOVE`/`BELOW`/`EQUAL` 세 상태로 나눈다 — 두 값이 같을 때 `BELOW`로 잘못 분류되지
+않게 한다(설계 리뷰에서 지적된 경계값 버그).
 
 ### 2) `hourlySales` + `peakSalesHourBand`/`peakFootTrafficHourBand`
 
@@ -86,7 +134,8 @@ PR #161 결정 그대로).
 
 - `basisQuarter`: 어느 번들에도 안 들어간다. SYSTEM 프롬프트에 "상권 평균은 참고용
   추정치입니다" 같은 고정 문구로만 다룬다 — 분기(상권 기준) vs 월(매출 기준) 단위
-  불일치를 모델이 숫자로 주장하게 두지 않기 위함.
+  불일치를 모델이 숫자로 주장하게 두지 않기 위함. **다만 "안 보낸다"가 "모델이 절대
+  안 쓴다"를 보장하진 않는다** — 아래 "B. basisQuarter 접지 누수 측정" 참고.
 - `cafeStoreCount`: 게이트 판단에만 쓰고 프롬프트에 안 보낸다(기존과 동일).
 
 ## 프롬프트 변경 (`app/prompts/insight.py`)
@@ -96,7 +145,51 @@ PR #161 결정 그대로).
 똑같이 적용돼야 한다. `_DISTRICT_CAUSAL` 채점 정규식(`devtools/grade.py`)도 그대로
 쓴다 — 번들링된 문장에도 같은 검사가 적용된다.
 
+**새 규칙 — 비교 방향.** `vsDistrictAvg`가 있으면 그 값(`ABOVE`/`BELOW`/`EQUAL`)을
+그대로 따르고 직접 비교·계산하지 말라고 명시한다. 세 상태 전부 프롬프트에서 뜻을
+풀어 적는다(`ABOVE`=상권 평균보다 높음, `BELOW`=낮음, `EQUAL`=같음) — 모델이 `EQUAL`을
+빠뜨리고 임의로 ABOVE/BELOW 중 하나로 해석하지 않게 한다.
+
 `VERSION` 상수를 오늘 날짜로 올린다.
+
+## A. `salesSummary` 선발 안정성 — 측정 후 판단
+
+`_summary_score`(=`|vsPrevPeriod|×3`)는 매출 변동이 크지 않은 평범한 달엔 다른 축에
+구조적으로 밀린다(#208 실측: vsPrevPeriod −7.2%일 때 0.216로 7개 중 6위). 상권이
+선정되려면 `salesSummary` 자체가 먼저 뽑혀야 하므로, 이 불안정성이 곧 상권 노출율의
+상한이 된다.
+
+**하지 않는 것**: `_summary_score`에 임의의 하한값(예: 상권 있으면 최소 0.3 보장)을
+추가하지 않는다. 계산해보면 #208의 "전부있음" 사례(weekdaySales 0.379)조차 못 이기고,
+하한을 그 이상으로 올리면 PR #161에서 고친 문제("격차 점수가 거의 고정값이라 매달
+1위") — 즉 득표용 숫자를 추측으로 끼워 넣어 다른 축을 상시로 밀어내는 재발 패턴이 될
+위험이 있다.
+
+**하는 것**: 설계 그대로 구현하고, `devtools/grade.py`에 측정 항목
+`상권_평균매출_반영`(district 게이트를 통과했는데 `districtAvgMonthlySalesPerCafe`
+값이 실제 생성 문장에 안 보이면 실패)을 추가한다 — **이번 구현 범위에 포함.** 실제로
+`--n 20`으로 돌려서 (1) `salesSummary` 선정률, (2) 선정됐을 때 상권 비교가 문장에
+반영된 비율을 확인하는 건 머지 후 다음 단계다. 측정 결과가 낮으면 그때 숙주 교체나
+점수 조정을 다시 연다.
+
+## B. `basisQuarter` 접지 누수 측정
+
+basisQuarter를 어느 focus 블록에도 안 넣기로 했지만(위 "다루지 않는 필드"), 실측으로
+확인된 구멍이 있다 — `_metric_numbers`가 문자열에서 3자리 이상 숫자를 뽑는 동작(#191)
+때문에, 전체 요청 metrics 어딘가(예: basisQuarter 자체, 또는 다른 연도 표기)에 "2026"
+같은 값이 존재하면 `UNGROUNDED_NUMBER` 검사가 그걸 "접지됨"으로 본다 — 모델이 분기를
+지어내 인용해도 걸리지 않을 수 있다.
+
+**하지 않는 것**: 지금 당장 차단 규칙(새 `_INSIGHT_BLOCKING` 사유)을 추가하지 않는다
+— 인사이트는 이미 필드 밀도가 가장 빠듯한 영역이고(아래 트레이드오프 참고), 검증 없이
+차단을 늘리면 "막고 있다고 믿었는데 0개 적중"(`VAGUE_ACTION` 전례) 같은 사고가 반복될
+수 있다.
+
+**하는 것**: `devtools/grade.py`에 측정 항목을 추가한다. 분기 패턴(`\d{4}Q[1-4]`
+등)을 인용한 문장을 찾되, 다음 둘을 구분해서 센다 — ① 그 값이 **요청의 실제
+`basisQuarter`와 일치**하는 경우(접지는 됐지만 설계상 보내지 않기로 한 걸 모델이
+어디서 주워 쓴 "누수"), ② 그 값이 metrics 어디에도 **진짜로 없는** 경우(순수 날조,
+더 심각함). 7차 측정 결과를 보고 차단 규칙 도입 여부를 그때 결정한다.
 
 ## 데이터 흐름 검증 (구현 전 이미 확인함)
 
@@ -117,39 +210,65 @@ PR #161 결정 그대로).
 
 ## 트레이드오프
 
-- **조건부 노출 유지**: salesSummary·hourlySales 둘 다 그 달 선정되지 않으면 상권
-  정보는 (게이트를 통과해도) 노출되지 않는다. "데이터 있으면 무조건 보여준다"는
-  보장하지 않는다 — 전용 슬롯 예약 대신 번들링을 택한 데 따른 의도된 트레이드오프다.
-- **필드 밀도 증가**: `salesSummary` 번들은 필드 5개(기존) + 1개(상권) = 6개,
-  `hourlySales` 번들은 행별 수치(시간대 2~4행) + 문자열 2개가 한 문장 근거로 들어간다.
-  "지표 많을수록 수치_정확이 떨어진다"는 이 레포의 실측 전제가 있어, 적용 후 두 문장
-  유형의 `수치_정확`을 측정해야 한다(아래 "다음 단계" 참고 — 이번 구현 범위엔 미포함).
+- **조건부 노출 유지, 특히 salesSummary 쪽이 더 자주 걸림**: salesSummary·hourlySales
+  둘 다 그 달 선정되지 않으면 상권 정보는 (게이트를 통과해도) 노출되지 않는다. #208
+  실측상 `hourlySales`는 선정률이 높은 편(5/6, #207)인 반면 `salesSummary`는 매출
+  변동이 커야만 이긴다 — **상권의 핵심 수치(`districtAvgMonthlySalesPerCafe`)가
+  피크 시간대 정보보다 더 자주 빠질 걸로 예상된다.** "데이터 있으면 무조건 보여준다"는
+  보장하지 않는다 — 전용 슬롯 예약 대신 번들링을 택한 데 따른 의도된 트레이드오프이고,
+  정확한 빈도는 "A" 절의 측정으로 확정한다.
+- **필드 밀도 증가**: `salesSummary` 번들은 필드 5개(기존) + 2개(상권 평균·비교
+  방향) = 7개, `hourlySales` 번들은 행별 수치(시간대 2~4행) + 문자열 2개가 한 문장
+  근거로 들어간다. "지표 많을수록 수치_정확이 떨어진다"는 이 레포의 실측 전제가 있고,
+  인사이트는 이미 A40 6차 기준 `수치_정확` 65.0%로 전 항목 중 가장 약한 지점이라
+  여유가 없다 — 적용 후 두 문장 유형의 `수치_정확`을 반드시 측정해야 한다(아래 "다음
+  단계").
 - **peakSalesHourBand/peakFootTrafficHourBand 활용도 제한**: hourlySales가 그 달
   안 뽑히면 두 밴드 정보는 한 번도 안 쓰인다. 독립 활용(예: 전용 상권 인사이트)은
   이번 범위 밖.
+- **오귀속 위험은 비교 방향(`vsDistrictAvg`)을 코드가 미리 계산해 줄였지만, 완전히
+  없어진 건 아니다.** 모델이 `vsDistrictAvg=ABOVE`인데 "낮습니다" 같은 반대 어휘를
+  쓸 가능성은 남아 있다 — 채점기로 검출 가능한지는 "테스트 계획" 참고.
 
 ## 테스트 계획
 
 `tests/test_insight_focus.py`:
 
 - `salesSummary`가 선정될 때, 게이트 통과한 district가 있으면 focus 블록에
-  `districtAvgMonthlySalesPerCafe`가 들어있는지
+  `districtAvgMonthlySalesPerCafe`·`vsDistrictAvg`가 들어있는지
+- `vsDistrictAvg`가 `totalSales > district` → `ABOVE`, `<` → `BELOW`,
+  `==` → `EQUAL` 세 경우 모두 정확한지(경계값 포함)
 - `hourlySales`가 선정될 때, 게이트 통과한 district가 있으면 focus 블록에
   `peakSalesHourBand`/`peakFootTrafficHourBand`가 들어있는지
-- `cafeStoreCount < 3`이면 두 번들 모두에서 상권 필드가 빠지는지(기존 게이트 유지)
+- `cafeStoreCount < 3`이거나 `districtAvgMonthlySalesPerCafe <= 0`이면 두 번들
+  모두에서 상권 필드가 빠지는지(게이트 재사용 확인)
 - `districtBenchmark`가 없으면 기존처럼 두 축이 상권 필드 없이 동작하는지(회귀 없음)
 - 독립 `districtBenchmark` candidate가 더 이상 `assign()` 결과에 단독으로 나오지
   않는지(이전 테스트 `test_다른_축이_전부_약하면_상권이_1순위가_된다` 등은 삭제/교체)
 
+`devtools/grade.py` (A·B 측정 항목, 이번 구현 범위에 포함):
+
+- `상권_평균매출_반영`: district 게이트 통과 + `salesSummary` 선정 시
+  `districtAvgMonthlySalesPerCafe` 값이 문장에 실제로 보이는지(위 "A" 참고)
+- 분기 패턴을 인용한 문장 검출 + 요청의 실제 `basisQuarter`와 일치/불일치 구분(위 "B"
+  참고)
+- (가능하면) `vsDistrictAvg`와 반대 방향 어휘("낮습니다"인데 ABOVE 등)를 검출하는
+  측정 항목 — 정규식만으로 완전히 잡기는 어려울 수 있어, 1차는 "검출 시도" 수준으로
+  두고 실측 후 정밀도를 본다.
+
 `devtools/contract_check.py`: 픽스처 구조 변경 없음(districtBenchmark는 여전히
 `InsightMetrics` 최상위 필드) — 수정 불필요.
 
+`devtools/bench.py`: 이미 머지된 #208의 "상권있음"·"전부있음" 케이스를 그대로
+재사용한다 — 이번 구현에서 새로 안 만들어도 됨.
+
 ## 다음 단계 (이번 구현 범위 밖)
 
-- 적용 후 실측: 상권 정보가 실제로 몇 %나 노출되는지, 번들된 문장의 `수치_정확`이
-  떨어지는지.
-- solution의 `weatherContext` 재검토(#206/#207에서 헥터가 확인한 "밀림" 현상) — 날씨는
-  카드 경쟁 구조라 같은 번들링 해법이 그대로 맞는지 별도 판단 필요.
+- **A 측정**: `salesSummary` 선정률과, 선정됐을 때 상권 비교 정보가 실제 문장에
+  반영된 비율을 #208 케이스로 측정. 결과가 낮으면 숙주 교체·점수 조정 재논의.
+- **B 측정 결과 반영**: basisQuarter 누수 비율을 보고 차단 규칙 도입 여부 결정.
+- solution의 `weatherContext` 재검토(#206/#207에서 헥터가 확인한 "밀림" 현상) — 7차
+  측정에서 날씨가 실제로 포함된 숫자가 나온 뒤에 별도로 판단한다(헥터 동의).
 - `peakSalesHourBand`/`peakFootTrafficHourBand`를 hourlySales 외에 더 활용할지(전용
   상권 인사이트 등).
 - BE에 `SeoulDistrictQuarterCollectionScheduler`가 배포 환경에서 최소 1회 성공
