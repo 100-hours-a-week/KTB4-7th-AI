@@ -54,6 +54,11 @@
   `salesSummary_선정률`/`hourlySales_선정률`이 실제 `assign()` 선정이 아니라
   생성된 문장에서 추정한 값이라는 한계는 문서화만 하고(아래 "A"), 실측 벤치마크에
   실제 선정 축을 같이 찍는 건 이번 범위 밖으로 미뤘다.
+- 2026-10-21(7): 위 두 가지(밴드 둘 다 반영 검사, 선정률 추정치 표기)를 "문서만
+  고치고 구현 PR에서 빠뜨리면 안 된다"는 요청을 받아, 구현 계획 문서
+  (`docs/superpowers/plans/2026-10-21-district-benchmark-bundling.md`)의 Global
+  Constraints 바로 뒤에 "구현 PR 필수 검증 항목" 체크리스트로 못박았다 — Task 4
+  커밋 전 재확인, Task 6에 STATE.md 표기 확인 Step 추가.
 
 ## Context
 
