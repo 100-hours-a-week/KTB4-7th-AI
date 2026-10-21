@@ -5,6 +5,9 @@
 검증되지만, 분모를 어떻게 세는지는 코드로 막을 수 있다.
 """
 
+import json
+
+from devtools import grade
 from devtools.bench import MEASURE_ONLY, _checks, _rates
 
 
@@ -156,8 +159,19 @@ def test_checks가_None을_bool로_뭉개지_않는다():
     }
 
 
-def test_measure_only_키가_실제_선정률_키와_같다():
-    """MEASURE_ONLY 가 등록을 빠뜨리면 Important #2 가 조용히 무력화된다 — 실제
-    선정률·인용빈도 키 이름과 어긋나지 않는지 고정해 둔다. 상권_분기_인용됨도 선정률과
-    같은 이유로 여기 있다 — 통과/실패 축이 아니라 사람이 읽을 빈도 숫자다(#209 설계 'B')."""
+def test_선정률_측정값이_전부_MEASURE_ONLY에_등록돼_있다():
+    """grade_insight 가 실제로 내는 선정률 키와 대조한다 — 리터럴끼리 비교하면
+    새 선정률 키를 등록하지 않아도 통과해서 Important #2 가 조용히 무력화된다
+    (#209 최종 리뷰 Important #2). 뒤쪽 단언은 반대 방향 — 진짜 결함 항목을
+    MEASURE_ONLY 에 넣으면 전항목(출하 판정)이 조용히 느슨해진다."""
+    from devtools.contract_check import EXAMPLES
+
+    metrics = EXAMPLES["sales-insights"]["metrics"]
+    body = json.dumps({"insights": ["총 매출은 전기 대비 4.2% 증가했습니다."]}, ensure_ascii=False)
+    result = grade.grade_insight(body, metrics)
+
+    rates = {k for k in result if k.endswith("선정률")}
+
+    assert rates, "선정률 키가 하나도 없다 — 대조가 무의미하다"
+    assert rates <= MEASURE_ONLY
     assert MEASURE_ONLY == {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}

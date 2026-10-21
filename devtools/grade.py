@@ -585,6 +585,17 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     return result
 
 
+# 규칙 위반이 아니라 "이번 요청에서 그 축이 선정됐는지"·"분기를 인용했는지" 를 재는
+# 측정값들. 3 문장 안에 6 축이 다 선정되지 않는 게 정상이고 정상 인사이트는 분기를
+# 인용하지 않으므로 False 가 흔하다 — devtools/bench.py 의 전항목(출하 판정) 집계에
+# 그대로 넣으면 상시 0% 가 나온다(#209 리뷰 Important #2, #178 카드_개수_일치 사고와
+# 같은 모양). per_key 표에는 그대로 찍고 전항목에서만 뺀다.
+# 상권_분기_날조_없음은 넣지 않는다 — 인용했는데 값이 틀린 건 진짜 결함이다.
+# 키가 태어나는 곳에 둔다(원래 devtools/bench.py 에 있었다) — 등록을 잊었는지는
+# tests/test_bench.py 가 grade_insight 결과와 대조해 잡는다.
+MEASURE_ONLY = {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}
+
+
 def grade_insight(raw: str, metrics: dict) -> dict:
     """매출 인사이트를 app/prompts/insight.py(2026-09-23) 기준으로 채점한다."""
     result: dict = {"parsed": False}

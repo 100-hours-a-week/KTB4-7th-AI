@@ -426,16 +426,8 @@ async def _recording_complete(*args, **kwargs) -> str:
 
 SKIP_KEYS = {"cards", "insights", "error"}
 
-# salesSummary_선정률·hourlySales_선정률은 규칙 위반이 아니라 "이번 요청에서 그 축이
-# 선정됐는지" 를 재는 값이다 — 3 문장 안에 6 축이 다 선정되지 않는 게 정상이라 False 가
-# 흔하다. 출하 판정(전항목)에 그대로 넣으면 상시 0% 가 나온다(#209 리뷰 Important #2,
-# #178 카드_개수_일치 사고와 같은 모양) — per_key 표에는 그대로 찍되 전항목 집계에서만
-# 뺀다. 새 선정률류 측정값을 추가하면 여기도 등록해야 한다 — 안 하면 같은 문제가 재발한다.
-# 상권_분기_인용됨도 같은 모양이다 — 분기를 인용 안 하는 게 설계상 정상이라 False 가
-# 흔하고, True 가 좋은 것도 아니다(#209 설계 'B'). 통과/실패 축이 아니라 사람이 표에서
-# 읽을 빈도 숫자라 여기 넣는다. 상권_분기_날조_없음은 넣지 않는다 — 인용했는데 값이
-# 틀린 건 진짜 결함이다.
-MEASURE_ONLY = {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}
+# 전항목(출하 판정) 집계에서 뺄 측정 전용 키 — 정의와 이유는 devtools/grade.py::MEASURE_ONLY.
+MEASURE_ONLY = grade.MEASURE_ONLY
 
 
 def _width(text: str) -> int:

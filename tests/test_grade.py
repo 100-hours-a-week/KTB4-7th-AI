@@ -15,7 +15,6 @@ from app.prompts import insight as insight_prompt
 from app.prompts import solution as solution_prompt
 from app.services import insight_focus
 from devtools import grade
-from devtools.bench import MEASURE_ONLY
 from devtools.contract_check import EXAMPLES
 
 SOL_METRICS = EXAMPLES["solutions"]["metrics"]
@@ -270,8 +269,8 @@ def test_정상_인사이트는_모든_항목을_통과한다():
     # 세 축만 쓴다) False 가 흔하다. 처음엔 둘째 문장을 hourlySales 전용으로
     # 바꿔 픽스처를 측정값에 맞춰 비틀었는데, 그러면 측정용 bool 이 하나 더
     # 생길 때마다 "정상 예시"를 또 비틀어야 한다 — 뿌리는 필터였다. 그래서
-    # 둘째 문장은 원래대로 두고, 필터에서 devtools/bench.py 의 MEASURE_ONLY
-    # (전항목 집계에서도 빼는 키 집합)를 그대로 재사용해 측정 전용 키를 뺀다.
+    # 둘째 문장은 원래대로 두고, 필터에서 grade.MEASURE_ONLY(전항목 집계에서도
+    # 빼는 키 집합)를 그대로 재사용해 측정 전용 키를 뺀다.
     result = _insight(
         "커피 카테고리 매출이 메뉴 매출의 41.7%를 차지하고 있습니다.",
         "아메리카노가 메뉴 매출의 28.2%를 차지합니다.",
@@ -279,7 +278,9 @@ def test_정상_인사이트는_모든_항목을_통과한다():
     )
 
     failed = [
-        k for k, v in result.items() if isinstance(v, bool) and not v and k not in MEASURE_ONLY
+        k
+        for k, v in result.items()
+        if isinstance(v, bool) and not v and k not in grade.MEASURE_ONLY
     ]
     assert failed == [], f"오탐: {failed}"
 
