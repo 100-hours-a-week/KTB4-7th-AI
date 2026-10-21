@@ -65,3 +65,27 @@ def test_채점_결과에서_카드_본문은_항목으로_세지_않는다():
 
 def test_파싱_실패는_error_를_항목으로_세지_않는다():
     assert _checks({"parsed": False, "error": "JSONDecodeError: ..."}) == {"parsed": False}
+
+
+def test_솔루션_케이스가_모든_근거_축을_덮는다():
+    """축을 추가하고 케이스를 안 고치면 그 축은 영원히 측정되지 않는다.
+
+    2026-10-21 에 실제로 그 상태였다 — weatherContext(#155)·menuRankings(#181)·
+    businessHours(#183) 가 케이스 셋 어디에도 없어서 0~6 차 측정이 전부 축 3 개짜리
+    입력으로 돌았다. "솔루션에 날씨가 안 나온다" 를 벤치로 잡을 수 없었던 이유다 —
+    입력에 없으면 카드도 안 나오니 통과율은 멀쩡해 보인다.
+
+    Metrics 에 축을 더하면 이 테스트가 깨진다. 그때 케이스를 같이 추가한다.
+    """
+    from app.schemas.common import Metrics
+    from devtools.bench import SOLUTION_CASES
+
+    # 카드 생성에 실제로 쓰이는 지표만 센다.
+    #   reviewSummary      — v3 범위, 아직 안 쓴다
+    #   conditionPatterns  — 받기만 하고 프롬프트·점수식에 연결 전이다(#194). 연결하면
+    #                        tests/test_condition_patterns.py 의 "아직 연결되지 않았다"
+    #                        테스트가 먼저 깨진다 — 그때 여기 제외 목록에서도 뺀다.
+    axes = set(Metrics.model_fields) - {"reviewSummary", "conditionPatterns"}
+    covered = {key for _, metrics in SOLUTION_CASES for key, value in metrics.items() if value}
+
+    assert not (axes - covered), f"케이스가 덮지 않는 지표: {sorted(axes - covered)}"
