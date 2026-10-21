@@ -4,7 +4,7 @@
 배정을 코드로 옮긴 이유라, 여기서 가장 중요한 건 "겹치지 않는다" 하나다.
 """
 
-from app.services.solution_focus import MAX_CARDS, assign
+from app.services.solution_focus import MAX_CARDS, assign, derive
 
 METRICS = {
     "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
@@ -441,3 +441,28 @@ def test_축이_다섯이면_날씨가_밀린다():
 
     assert len(focus) == MAX_CARDS
     assert not any("weatherContext" in card for card in focus)
+
+
+def test_파생_배율도_영업시간_밖을_뺀다():
+    """derive() 가 peak_ratios 에 businessHours 를 안 넘겨 배율만 안 걸러졌다.
+
+    행은 걸러지는데 배율만 안 걸러지면 더 나쁘다 — 모델에게 23 시 행은 안 보이는데
+    "52.5 배" 라는 숫자만 주어지고, 그 값은 hourlyPeakRatio 에 실재해 UNGROUNDED_NUMBER
+    로도 COMPUTED_RATIO 로도 안 걸린다. 2026-10-21 A40 8 차 실측에서 20 건 중 2 건이
+    "평일 18시 매출이 23시에 비해 52.5배" 로 나갔다.
+
+    기존 test_영업시간_밖_매출은_비교에서_뺀다 는 _hourly_score 만 봐서 못 잡았다.
+    """
+    metrics = {
+        "hourlyProfile": [
+            {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+            {"dayType": "WEEKDAY", "hour": 23, "amount": 4000},
+        ],
+        "businessHours": {"WEEKDAY": {"opensAt": "08:00", "closesAt": "22:00"}},
+    }
+
+    ratio = derive(metrics)["hourlyPeakRatio"][0]
+
+    assert ratio["lowHour"] == 8, "마감(22시) 뒤인 23시가 최저로 잡혔다"
+    assert ratio["ratio"] == 7.0

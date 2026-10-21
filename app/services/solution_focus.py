@@ -156,7 +156,11 @@ def derive(metrics: dict) -> dict:
     devtools/bench.py 가 채점 전에 같이 부른다 — 안 그러면 "지표에 있는 배율" 을
     채점기가 날조로 센다.
     """
-    ratios = peak_ratios(metrics.get("hourlyProfile") or [])
+    # businessHours 를 넘기지 않으면 peak_ratios 의 기본값(None)으로 떨어져 영업시간
+    # 필터가 통째로 건너뛰어진다 — 행은 걸러지는데 배율만 안 걸러져서, 모델에게 23 시
+    # 행은 안 보이는데 "52.5 배" 라는 숫자만 주어진다. 그 값은 hourlyPeakRatio 에 실재해
+    # UNGROUNDED_NUMBER·COMPUTED_RATIO 둘 다 안 걸린다(2026-10-21 A40 8 차에서 재현).
+    ratios = peak_ratios(metrics.get("hourlyProfile") or [], metrics.get("businessHours"))
     return {**metrics, "hourlyPeakRatio": ratios} if ratios else metrics
 
 
