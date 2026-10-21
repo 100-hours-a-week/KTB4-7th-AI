@@ -5,7 +5,7 @@
 여기서 가장 중요한 건 "문장마다 하나씩, 겹치지 않게" 다.
 """
 
-from app.services.insight_focus import assign
+from app.services.insight_focus import assign, district_comparison
 
 METRICS = {
     "salesSummary": {
@@ -138,42 +138,45 @@ DISTRICT = {
     "peakFootTrafficHourBand": "11-14",
 }
 
-# 다른 세 축이 전부 약한 metrics. "상권이 거의 매달 1위"가 되는 걸 막으려고 고정 보충
-# 점수(0.3)로 바꿨다(PR #161 리뷰, 헥터) — solution_focus._FLAT_METRICS 와 같은 역할이다.
-_FLAT_METRICS = {
-    "salesSummary": {
-        "totalSales": 1000000,
-        "menuSales": 950000,
-        "orderCount": 120,
-        "averageOrderValue": 7917,
-        "vsPrevPeriod": 0.01,
-    },
-}
+
+def test_매장_매출이_상권_평균보다_크면_ABOVE():
+    assert district_comparison(10_000_000, 9_413_000) == "ABOVE"
 
 
-def test_다른_축이_전부_약하면_상권이_1순위가_된다():
-    """고정 보충 점수(0.3)가 "다른 축이 전부 약할 때만 보충"으로 동작하는지 확인한다."""
-    focus = assign({**_FLAT_METRICS, "districtBenchmark": DISTRICT}, max_count=1)
-
-    assert "districtBenchmark" in focus[0]
+def test_매장_매출이_상권_평균보다_작으면_BELOW():
+    assert district_comparison(7_920_000, 9_413_000) == "BELOW"
 
 
-def test_다른_축이_뚜렷하면_상권이_밀린다():
-    """표준 METRICS(categorySales 0.417)는 고정 보충 점수(0.3)보다 커서 상권이 못 든다."""
-    focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=1)
-
-    assert "districtBenchmark" not in focus[0]
+def test_매장_매출이_상권_평균과_같으면_EQUAL():
+    assert district_comparison(9_413_000, 9_413_000) == "EQUAL"
 
 
-def test_표본이_너무_적은_상권은_배정되지_않는다():
-    """cafeStoreCount 가 1~2 곳이면 평균이 의미가 없어 뺀다(#157)."""
+def test_매출요약이_선정되면_상권_평균매출이_같이_묻는다():
+    focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=4)
+
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert summary_focus["districtAvgMonthlySalesPerCafe"] == 9413000
+    assert summary_focus["vsDistrictAvg"] in ("ABOVE", "BELOW", "EQUAL")
+
+
+def test_표본이_너무_적은_상권은_매출요약에_안_묻는다():
+    """cafeStoreCount 가 1~2 곳이면 평균이 의미가 없다(#157)."""
     district = {**DISTRICT, "cafeStoreCount": 2}
-    focus = assign({**_FLAT_METRICS, "districtBenchmark": district}, max_count=4)
+    focus = assign({**METRICS, "districtBenchmark": district}, max_count=4)
 
-    assert not any("districtBenchmark" in item for item in focus)
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert "districtAvgMonthlySalesPerCafe" not in summary_focus
 
 
-def test_상권_필드가_없으면_배정되지_않는다():
+def test_상권_필드가_없으면_매출요약에_안_묻는다():
     focus = assign(METRICS, max_count=4)
 
-    assert not any("districtBenchmark" in item for item in focus)
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert "districtAvgMonthlySalesPerCafe" not in summary_focus
+
+
+def test_독립_상권_축은_더_이상_없다():
+    """districtBenchmark 를 그 자체로 담은 focus 블록이 나오면 안 된다(#209)."""
+    focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=4)
+
+    assert not any(set(item) == {"districtBenchmark"} for item in focus)

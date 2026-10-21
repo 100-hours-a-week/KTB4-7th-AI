@@ -22,6 +22,16 @@
 문제(가중치 1.0일 때 거의 항상 1순위)와 같은 실패 모드다. 날씨와 같은 처방을 썼다 —
 게이트(표본 수)는 그대로 두고, 점수를 격차 비례값이 아니라 고정 보충값(
 _DISTRICT_SUPPLEMENT_SCORE)으로 바꿨다. "다른 세 축이 전부 약할 때만" 상권이 들어온다.
+
+2026-10-21(#209, PR #207·#208 실측): districtBenchmark 를 전용 근거 축에서 완전히
+뺐다. 인사이트는 상권이 들어오기 전부터 이미 6 개 축이 경쟁 중이었는데, 고정 보충값
+0.3 으로는 여전히 자주 밀렸다(#208 "전부있음" 실측: districtBenchmark 0.300 이 7 개
+중 5 위). 전용 축 대신 salesSummary(평균매출 비교)·hourlySales(피크 시간대)에
+조건부로 끼워 넣는다 — districtBenchmark 라는 중첩 객체는 더 이상 모델에게 안 보이고,
+대신 평평한 필드(districtAvgMonthlySalesPerCafe·vsDistrictAvg·peakSalesHourBand·
+peakFootTrafficHourBand)로 쪼개져 두 축에 나뉜다. 비교 방향(vsDistrictAvg)은 코드가
+미리 계산한다 — solution_focus.peak_ratios() 와 같은 이유로, 두 숫자 다 지표에 있어
+UNGROUNDED_NUMBER 로 못 잡는 "방향 반전" 오류를 막는다.
 """
 
 # 잠정 가중치 — 증감률은 절대값이 작아서(0.042) 격차 점수와 자릿수를 맞춘다.
@@ -31,10 +41,6 @@ _SHARE_CHANGE_WEIGHT = 2.0
 # 표본이 1~2 곳인 상권은 평균 자체가 의미가 없다(#157). BE 가 자기 필터링 기준과
 # 크로스체크할 수 있게 상수로 분리해 둔다 — 잠정값이다.
 _MIN_CAFE_STORE_COUNT = 3
-
-# solution_focus._WEATHER_SUPPLEMENT_SCORE 와 같은 역할·같은 값이다(2026-10-16, PR #161
-# 리뷰). "다른 세 축이 전부 약할 때만" 상권이 카드를 차지하게 하는 상한이다 — 잠정값이다.
-_DISTRICT_SUPPLEMENT_SCORE = 0.3
 
 # 프롬프트에 보여줄 행 수 — 잠정값. 상·하위 몇 행, 비중 상위 몇 종.
 # hourlySales 는 24 시간 × 2 dayType, salesTrend 는 한 달치가 올 수 있다. 한 문장이
@@ -99,20 +105,30 @@ def _share_score(points: list[dict]) -> float:
     return min(max(top_share, top_change), 1.0)
 
 
-def _district_score(district: dict | None) -> float:
+def district_comparison(total_sales: int, district_avg: int) -> str:
+    """상권 평균 대비 매장 매출의 방향을 코드가 미리 계산한다.
+
+    두 숫자 다 지표에 실재해 UNGROUNDED_NUMBER 게이트로는 못 잡는 오류다 — 모델이
+    직접 비교하다 방향을 뒤집어 말할 수 있다. solution_focus.peak_ratios() 가 "어느
+    두 시각 사이 배수인지"를 코드가 계산해 넘기는 것과 같은 이유다.
+    """
+    if total_sales > district_avg:
+        return "ABOVE"
+    if total_sales < district_avg:
+        return "BELOW"
+    return "EQUAL"
+
+
+def _district_gate(district: dict | None) -> bool:
     """표본이 너무 적은 상권(1~2 곳)은 평균이 의미가 없어 후보에서 뺀다(#157).
 
-    격차 크기로 점수를 매기지 않는다 — "매장이 상권 평균보다 작다"는 사실 자체가 달마다
-    거의 안 바뀌어(기준도 분기 단위) 그러면 상권이 매달 1위를 차지한다(PR #161 리뷰,
-    헥터). 게이트(표본 수·평균 유효성)만 보고, 통과하면 날씨와 같은 고정 보충값을 준다.
+    salesSummary·hourlySales 두 번들링 지점이 이 게이트를 공유한다.
     """
     if not district:
-        return -1.0
+        return False
     if (district.get("cafeStoreCount") or 0) < _MIN_CAFE_STORE_COUNT:
-        return -1.0
-    if (district.get("districtAvgMonthlySalesPerCafe") or 0) <= 0:
-        return -1.0
-    return _DISTRICT_SUPPLEMENT_SCORE
+        return False
+    return (district.get("districtAvgMonthlySalesPerCafe") or 0) > 0
 
 
 def assign(metrics: dict, max_count: int) -> list[dict]:
@@ -122,8 +138,17 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     개수를 줄이는 편이 낫다. 호출부는 app/services/insight.py::generate 다.
     """
     summary = metrics.get("salesSummary") or {}
+    district = metrics.get("districtBenchmark")
+
+    summary_focus: dict = {"salesSummary": summary}
+    if _district_gate(district):
+        summary_focus["districtAvgMonthlySalesPerCafe"] = district["districtAvgMonthlySalesPerCafe"]
+        summary_focus["vsDistrictAvg"] = district_comparison(
+            summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"]
+        )
+
     candidates: list[tuple[dict, float]] = [
-        ({"salesSummary": summary}, _summary_score(summary) if summary else -1.0),
+        (summary_focus, _summary_score(summary) if summary else -1.0),
     ]
     # 점수는 받은 행 전부로 내고, 프롬프트에 넣는 행만 줄인다.
     series_axes = (("salesTrend", "date"), ("weekdaySales", "dayOfWeek"), ("hourlySales", "hour"))
@@ -134,9 +159,6 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     for key in ("categorySales", "menuRankings"):
         points = metrics.get(key) or []
         candidates.append(({key: _share_rows(points)}, _share_score(points) if points else -1.0))
-
-    district = metrics.get("districtBenchmark")
-    candidates.append(({"districtBenchmark": district}, _district_score(district)))
 
     usable = [(focus, score) for focus, score in candidates if score >= 0.0]
     usable.sort(key=lambda pair: pair[1], reverse=True)
