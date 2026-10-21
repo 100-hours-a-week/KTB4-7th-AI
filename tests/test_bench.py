@@ -158,5 +158,6 @@ def test_checks가_None을_bool로_뭉개지_않는다():
 
 def test_measure_only_키가_실제_선정률_키와_같다():
     """MEASURE_ONLY 가 등록을 빠뜨리면 Important #2 가 조용히 무력화된다 — 실제
-    선정률 키 이름과 어긋나지 않는지 고정해 둔다."""
-    assert MEASURE_ONLY == {"salesSummary_선정률", "hourlySales_선정률"}
+    선정률·인용빈도 키 이름과 어긋나지 않는지 고정해 둔다. 상권_분기_인용됨도 선정률과
+    같은 이유로 여기 있다 — 통과/실패 축이 아니라 사람이 읽을 빈도 숫자다(#209 설계 'B')."""
+    assert MEASURE_ONLY == {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}

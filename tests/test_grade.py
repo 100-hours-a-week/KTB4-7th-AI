@@ -567,3 +567,33 @@ def test_시간대축이_선정_안_되면_hourlySales_선정률이_거짓이다
     result = _district_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
 
     assert result["hourlySales_선정률"] is False
+
+
+def test_분기를_인용하지_않으면_인용됨이_거짓이고_날조는_측정_대상이_아니다():
+    result = _insight("커피 카테고리 매출이 메뉴 매출의 41.7%를 차지하고 있습니다.")
+
+    assert result["상권_분기_인용됨"] is False
+    assert result["상권_분기_날조_없음"] is None
+
+
+def test_실제_분기와_같은_값을_인용하면_날조가_아니다():
+    """basisQuarter 는 focus 블록에 안 보내지만(#209), 지표 어딘가엔 여전히 있어
+    접지 검사로는 못 잡는다 — 그래도 '날조'는 아니라는 걸 구분한다."""
+    result = _insight("2026Q3 기준 상권 평균은 9,413,000원입니다.")
+
+    assert result["상권_분기_인용됨"] is True
+    assert result["상권_분기_날조_없음"] is True
+
+
+def test_실제_분기와_다른_값을_인용하면_날조다():
+    result = _insight("2027Q1 기준 상권 평균은 9,413,000원입니다.")
+
+    assert result["상권_분기_인용됨"] is True
+    assert result["상권_분기_날조_없음"] is False
+
+
+def test_년_분기_표기도_잡는다():
+    result = _insight("2026년 3분기 기준 상권 평균은 9,413,000원입니다.")
+
+    assert result["상권_분기_인용됨"] is True
+    assert result["상권_분기_날조_없음"] is True

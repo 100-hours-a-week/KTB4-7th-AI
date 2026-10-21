@@ -232,6 +232,23 @@ def _district_avg_reflected(body: str, metrics: dict) -> bool | None:
     return _direction_correct(body, comparison, avg)
 
 
+# "2026Q3"·"2026년 3분기" 두 표기 다 잡는다. basisQuarter 는 focus 블록에 안 보내기로
+# 했지만(#209), _metric_numbers 가 문자열에서 3자리 이상을 뽑아 "2026" 이 이미 허용
+# 집합에 있어 UNGROUNDED_NUMBER 로는 못 잡는다 — 모델이 어디선가 주워 인용해도 통과한다.
+_QUARTER_MENTION = re.compile(r"(\d{4})\s*(?:Q([1-4])|년\s*([1-4])\s*분기)")
+
+
+def _quarter_leak(body: str, metrics: dict) -> bool | None:
+    """분기를 인용했으면 그 값이 실제 basisQuarter 와 같은지. 인용 안 했으면 None."""
+    match = _QUARTER_MENTION.search(body)
+    if not match:
+        return None
+    quarter = match.group(2) or match.group(3)
+    cited = f"{match.group(1)}Q{quarter}"
+    real = (metrics.get("districtBenchmark") or {}).get("basisQuarter")
+    return cited == real
+
+
 def _band_mentioned(body: str, band: str) -> bool:
     start, end = band.split("-")
     numbers = _numbers_in(body)
@@ -610,6 +627,9 @@ def grade_insight(raw: str, metrics: dict) -> dict:
     result["hourlySales_선정률"] = _axis_selected(body, metrics, "hourlySales")
     result["상권_평균매출_반영"] = _district_avg_reflected(body, metrics)
     result["상권_피크밴드_반영"] = _district_band_reflected(body, metrics)
+    grounded = _quarter_leak(body, metrics)
+    result["상권_분기_인용됨"] = grounded is not None
+    result["상권_분기_날조_없음"] = grounded
 
     result["insights"] = insights
     return result
