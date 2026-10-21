@@ -102,6 +102,128 @@ SOLUTION_CASES = [
             ],
         },
     ),
+    # 아래 셋은 2026-10-21 에 추가했다. 그 전까지 케이스 셋 어디에도 weatherContext·
+    # menuRankings·businessHours 가 없어서, 10 월에 넣은 축들이 0~6 차 측정에 한 번도
+    # 포함되지 않았다(#155·#181·#183). "솔루션에 날씨가 안 나온다" 를 벤치로 잡을 수
+    # 없었던 이유다 — 입력에 없으면 카드도 안 나온다.
+    (
+        # 날씨가 뽑히는지 본다. _weather_score 는 isNotable 이면 고정 0.3 이고 다른 축은
+        # 1.0 까지 가므로, 다른 축이 조금만 뚜렷해도 밀린다. 그 동작을 숫자로 남긴다.
+        "날씨있음",
+        {
+            "salesSummary": {"netSales": 1102000, "vsPrevPeriod": -0.04},
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 11, "amount": 88000},
+                {"dayType": "WEEKDAY", "hour": 14, "amount": 72000},
+                {"dayType": "WEEKDAY", "hour": 18, "amount": 96000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.38, "vsPrevPeriod": 0.02},
+                {"name": "논커피", "share": 0.34, "vsPrevPeriod": -0.03},
+                {"name": "베이커리", "share": 0.28, "vsPrevPeriod": 0.01},
+            ],
+            "weatherContext": {
+                "basisDateTime": "2026-10-21 08:00",
+                "skyText": "비",
+                "minTempC": 9,
+                "maxTempC": 15,
+                "maxPop": 0.8,
+                "rainHours": [12, 13, 14],
+                "precipitationMm": 7.5,
+                "isNotable": True,
+            },
+        },
+    ),
+    (
+        # _menu_score 는 변화폭으로 점수를 내는데 "잠정값이다. 아직 실측이 없다" 고
+        # 적혀 있다(app/services/solution_focus.py). 실제로 어떤 카드가 나오는지 본다.
+        "메뉴변화큼",
+        {
+            "salesSummary": {"netSales": 1980000, "vsPrevPeriod": 0.02},
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 10, "amount": 120000},
+                {"dayType": "WEEKDAY", "hour": 13, "amount": 180000},
+                {"dayType": "WEEKDAY", "hour": 17, "amount": 140000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.41, "vsPrevPeriod": 0.01},
+                {"name": "차", "share": 0.33, "vsPrevPeriod": -0.02},
+                {"name": "디저트", "share": 0.26, "vsPrevPeriod": 0.03},
+            ],
+            "menuRankings": [
+                {
+                    "rank": 1,
+                    "menuName": "아이스 아메리카노",
+                    "menuSales": 4200000,
+                    "quantity": 912,
+                    "ratio": 0.26,
+                    "vsPrevPeriod": -0.08,
+                },
+                {
+                    "rank": 7,
+                    "menuName": "유자차",
+                    "menuSales": 612000,
+                    "quantity": 120,
+                    "ratio": 0.04,
+                    "vsPrevPeriod": -0.52,
+                },
+            ],
+        },
+    ),
+    (
+        # 축 다섯이 한꺼번에 경쟁하는, 지금 운영 입력에 가장 가까운 모양이다.
+        # businessHours 는 축이 아니라 필터다 — 22 시 마감이라 23 시 행이 시간대 점수·
+        # 배수 계산에서 빠져야 한다(#183). 안 빠지면 "18 시가 23 시의 N 배" 가 나온다.
+        "전부있음",
+        {
+            "salesSummary": {"netSales": 1540000, "vsPrevPeriod": -0.11},
+            "predictedSalesToday": 1610000,
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+                {"dayType": "WEEKDAY", "hour": 12, "amount": 190000},
+                {"dayType": "WEEKDAY", "hour": 15, "amount": 64000},
+                {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+                {"dayType": "WEEKDAY", "hour": 23, "amount": 4000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.52, "vsPrevPeriod": -0.09},
+                {"name": "디저트", "share": 0.28, "vsPrevPeriod": 0.04},
+                {"name": "논커피", "share": 0.20, "vsPrevPeriod": -0.02},
+            ],
+            "menuRankings": [
+                {
+                    "rank": 1,
+                    "menuName": "아이스 아메리카노",
+                    "menuSales": 3980000,
+                    "quantity": 864,
+                    "ratio": 0.25,
+                    "vsPrevPeriod": -0.14,
+                },
+                {
+                    "rank": 4,
+                    "menuName": "바닐라 라떼",
+                    "menuSales": 1240000,
+                    "quantity": 248,
+                    "ratio": 0.08,
+                    "vsPrevPeriod": 0.21,
+                },
+            ],
+            "businessHours": {
+                "WEEKDAY": {"opensAt": "08:00", "closesAt": "22:00"},
+                "WEEKEND": {"opensAt": "09:00", "closesAt": "21:00"},
+                "closedDaysOfWeek": ["MON"],
+            },
+            "weatherContext": {
+                "basisDateTime": "2026-10-21 08:00",
+                "skyText": "흐림",
+                "minTempC": 12,
+                "maxTempC": 19,
+                "maxPop": 0.6,
+                "rainHours": [15, 16],
+                "isNotable": True,
+            },
+        },
+    ),
 ]
 
 INSIGHT_CASES = [

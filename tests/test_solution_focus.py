@@ -384,3 +384,60 @@ def test_정의되지_않은_dayType은_거르지_않는다():
     kept = _hourly_rows(rows, HOURS)
 
     assert [r["dayType"] for r in kept] == ["WEEKEND"]
+
+
+# ── 축 경쟁 (2026-10-21, 이슈 #206) ──────────────────────────────────
+# 축이 늘어날 때마다 카드는 3 장 그대로라, 새 축이 들어오면 기존 축 하나가 조용히
+# 밀린다. 그걸 아무도 검증하지 않아서 #181(menuRankings) 이 날씨를 밀어낸 걸
+# 2026-10-21 에야 알았다. 여기서 경쟁 결과를 숫자로 고정한다.
+
+_FLAT_DAY = {
+    "salesSummary": {"netSales": 1102000, "vsPrevPeriod": -0.04},
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 11, "amount": 88000},
+        {"dayType": "WEEKDAY", "hour": 14, "amount": 72000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 96000},
+    ],
+    "categoryBreakdown": [
+        {"name": "커피", "share": 0.38, "vsPrevPeriod": 0.02},
+        {"name": "논커피", "share": 0.34, "vsPrevPeriod": -0.03},
+    ],
+    "weatherContext": {"skyText": "비", "maxPop": 0.8, "isNotable": True},
+}
+
+
+def test_다른_축이_전부_약하면_날씨가_들어온다():
+    """ "보충" 설계의 의도된 쪽. 격차도 쏠림도 증감도 약한 날에만 날씨가 자리를 얻는다."""
+    focus = assign(_FLAT_DAY)
+
+    assert any("weatherContext" in card for card in focus)
+
+
+def test_축이_다섯이면_날씨가_밀린다():
+    """**현재 동작이고, 고칠지는 아직 결정 안 됐다**(이슈 #206 범위 밖).
+
+    날씨만 상한이 0.3(_WEATHER_SUPPLEMENT_SCORE) 고정이고 나머지는 1.0 까지 간다.
+    축이 넷일 때는 "다른 셋이 약한 날" 이 가끔 있었는데, #181 로 다섯이 되면서
+    그 자리가 사실상 사라졌다. 이 테스트가 깨지면 그 결정이 내려진 것이다.
+    """
+    busy_day = {
+        **_FLAT_DAY,
+        "hourlyProfile": [
+            {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        ],
+        "menuRankings": [
+            {
+                "rank": 1,
+                "menuName": "아이스 아메리카노",
+                "menuSales": 3980000,
+                "quantity": 864,
+                "ratio": 0.25,
+                "vsPrevPeriod": -0.21,
+            },
+        ],
+    }
+    focus = assign(busy_day)
+
+    assert len(focus) == MAX_CARDS
+    assert not any("weatherContext" in card for card in focus)
