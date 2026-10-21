@@ -153,12 +153,16 @@ def _axis_selected(body: str, metrics: dict, key: str) -> bool:
     assign() 의 6 축 점수식을 복제하지 않는다(여긴 app 을 import 하지 않는다는
     전제라 과하다, 모듈 머리말 참고) — 대신 "이 축 숫자가 문장에 등장했는지"로
     선정 여부를 근사한다. _metric_paths/_evidence_group 과 같은 방식이다.
+
+    인덱스는 지표 전체로 만든다. 그 축만으로 만들면 _evidence_group 의 모호성
+    필터("여러 지표에 걸치는 숫자는 판단에 쓰지 않는다")가 꺼져서, 다른 축과 값이
+    겹치는 숫자(실측: salesSummary.orderCount 923 == menuRankings[].quantity 923)
+    하나로 숙주가 선정된 것처럼 오판한다 — 그러면 상권_평균매출_반영이 None 이어야
+    할 요청에서 거짓 결함으로 집계된다(#209 최종 리뷰 Important #3).
     """
-    axis = metrics.get(key) or {}
-    if not axis:
+    if not metrics.get(key):
         return False
-    index = _metric_paths({key: axis})
-    return bool(_evidence_group(body, index))
+    return key in _evidence_group(body, _metric_paths(metrics))
 
 
 _DIRECTION_WORDS = {

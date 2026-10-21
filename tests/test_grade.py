@@ -434,6 +434,23 @@ def test_매출요약이_선정_안_되면_선정률이_거짓이다():
     assert result["salesSummary_선정률"] is False
 
 
+def test_다른_축과_값이_겹치는_숫자로는_숙주가_선정됐다고_보지_않는다():
+    """#209 최종 리뷰 Important #3 재현 — salesSummary.orderCount(923)와
+    menuRankings[].quantity(923)가 같은 값이다. menuRankings 얘기만 하는 문장으로
+    salesSummary 가 선정된 것처럼 오판하면, None 이어야 할 상권_평균매출_반영이
+    거짓 결함(False)으로 집계된다 — 출하 판정 롤업에 들어가는 항목이다."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "menuRankings": [
+            {"menuName": "아메리카노", "quantity": 923, "menuSales": 2_000_000, "ratio": 0.282}
+        ],
+    }
+    result = _district_insight("아메리카노가 923잔 팔렸습니다.", metrics=metrics)
+
+    assert result["salesSummary_선정률"] is False
+    assert result["상권_평균매출_반영"] is None
+
+
 def test_매출요약이_선정되고_상권_평균을_방향까지_맞게_인용하면_반영으로_통과한다():
     """totalSales(792만)가 districtAvgMonthlySalesPerCafe(941.3만)보다 작으므로
     BELOW다 — "낮습니다"가 맞는 방향이다."""
