@@ -14,6 +14,10 @@
 상수를 한곳에 모아 두었으니 합의되면 숫자만 바꾸면 된다.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 MAX_CARDS = 3
 
 # 잠정 가중치 — 서로 다른 성격의 지표를 한 축으로 줄 세우려고 쓴다. 기획 확정 전까지는
@@ -250,7 +254,7 @@ def _hourly_focus(metrics: dict, hourly: list[dict]) -> dict:
     return focus
 
 
-def assign(metrics: dict) -> list[dict]:
+def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
     """카드별 근거 지표를 돌려준다. 앞에서부터 rankNo 1·2·3 에 대응한다.
 
     `salesSummary` 와 `predictedSalesToday` 는 한 축으로 묶는다 — 둘 다 "오늘 전체 매출"
@@ -307,4 +311,40 @@ def assign(metrics: dict) -> list[dict]:
     ]
     usable = [(focus, score) for focus, score in candidates if score >= 0.0]
     usable.sort(key=lambda pair: pair[1], reverse=True)
-    return [focus for focus, _ in usable[:MAX_CARDS]]
+    picked = [focus for focus, _ in usable[:MAX_CARDS]]
+    _log_selection(candidates, usable, picked, store_id)
+    return picked
+
+
+def _axis(focus: dict) -> str:
+    """focus 블록의 첫 키가 축 이름이다 — 모든 생성 지점이 축을 먼저 넣는다.
+
+    _hourly_focus 가 businessHours·hourlyPeakRatio 를, total_focus 가
+    predictedSalesToday 를 뒤에 더하지만 축 키는 항상 앞이다(dict 는 삽입 순서를 지킨다).
+    """
+    return next(iter(focus), "?")
+
+
+def _log_selection(
+    candidates: list[tuple[dict, float]],
+    usable: list[tuple[dict, float]],
+    picked: list[dict],
+    store_id: int | None,
+) -> None:
+    """어느 축이 후보였고 어느 축이 뽑혔는지 남긴다.
+
+    "솔루션에 날씨가 안 나온다" 는 보고가 왔을 때 **BE 가 안 보낸 것**과 **보냈는데
+    점수에서 진 것**이 사장님 화면에는 똑같이 보인다(2026-10-21). 그래서 "입력없음" 을
+    "탈락" 과 따로 센다 — 이 둘을 가르려고 남기는 로그다.
+
+    **지표 값은 남기지 않는다.** 축 이름과 점수뿐이다 — 매출액 같은 영업 정보가 로그로
+    새면 안 된다(Sentry _strip_sensitive_data 와 같은 기준, docs/DEPLOY.md).
+    """
+    chosen = {id(focus) for focus in picked}
+    logger.info(
+        "솔루션 근거 축 storeId=%s 선정=[%s] 탈락=[%s] 입력없음=[%s]",
+        "-" if store_id is None else store_id,
+        ", ".join(f"{_axis(f)} {sc:.2f}" for f, sc in usable if id(f) in chosen),
+        ", ".join(f"{_axis(f)} {sc:.2f}" for f, sc in usable if id(f) not in chosen),
+        ", ".join(_axis(f) for f, sc in candidates if sc < 0.0),
+    )

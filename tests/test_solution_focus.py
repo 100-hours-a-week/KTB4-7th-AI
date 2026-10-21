@@ -466,3 +466,45 @@ def test_파생_배율도_영업시간_밖을_뺀다():
 
     assert ratio["lowHour"] == 8, "마감(22시) 뒤인 23시가 최저로 잡혔다"
     assert ratio["ratio"] == 7.0
+
+
+# ── 선발 로그 (2026-10-21, 이슈 #215) ────────────────────────────────
+# "솔루션에 날씨가 안 나온다" 는 보고가 왔을 때 BE 가 안 보낸 것과 보냈는데 점수에서
+# 진 것이 사장님 화면에는 똑같이 보인다. 로그가 그 둘을 가른다.
+
+
+def test_로그가_탈락과_입력없음을_나눈다(caplog):
+    metrics = {
+        "salesSummary": {"netSales": 1540000, "vsPrevPeriod": -0.11},
+        "hourlyProfile": [
+            {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+            {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        ],
+        "categoryBreakdown": [{"name": "커피", "share": 0.52, "vsPrevPeriod": -0.09}],
+        # 날씨는 왔지만 isNotable 이 false — 후보에서 빠진다(입력없음 쪽)
+        "weatherContext": {"skyText": "맑음", "maxPop": 0.1, "isNotable": False},
+        # 메뉴는 아예 안 왔다 — 역시 입력없음
+    }
+    with caplog.at_level("INFO", logger="app.services.solution_focus"):
+        assign(metrics, store_id=1024)
+
+    line = next(r.getMessage() for r in caplog.records if "솔루션 근거 축" in r.getMessage())
+    assert "storeId=1024" in line
+    assert "weatherContext" in line.split("입력없음=")[1]
+    assert "hourlyProfile" in line.split("선정=")[1].split("탈락=")[0]
+
+
+def test_로그에_지표_값은_안_남는다(caplog):
+    """매출액 같은 영업 정보가 로그로 새면 안 된다."""
+    metrics = {
+        "salesSummary": {"netSales": 1540000, "vsPrevPeriod": -0.11},
+        "hourlyProfile": [{"dayType": "WEEKDAY", "hour": 18, "amount": 210000}],
+        "categoryBreakdown": [{"name": "커피", "share": 0.52, "vsPrevPeriod": -0.09}],
+    }
+    with caplog.at_level("INFO", logger="app.services.solution_focus"):
+        assign(metrics, store_id=1024)
+
+    line = next(r.getMessage() for r in caplog.records if "솔루션 근거 축" in r.getMessage())
+    assert "1540000" not in line
+    assert "210000" not in line
+    assert "커피" not in line

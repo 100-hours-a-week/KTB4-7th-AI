@@ -417,7 +417,7 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
     metrics = derive_metrics(metrics)
     # 카드마다 쓸 근거 지표를 코드가 배정한다 — 모델이 고르게 두면 같은 지표로 두 장을
     # 만든다(실측 10 번 중 4 번). app/services/solution_focus.py 참고.
-    focus = assign_focus(metrics)
+    focus = assign_focus(metrics, req.storeId)
     period = req.metrics.salesSummary.period
     base_prompt = solution_prompt.build(focus, req.targetDate, day_of_week, is_weekend, period)
 
