@@ -198,6 +198,9 @@ def _direction_correct(body: str, comparison: str, anchor: str) -> bool:
     방향 어휘가 있을 때만 실패시킨다(설계 'C').
 
     anchor 가 들어간 구(쉼표·마침표로 나눈 절)에서만 반대 방향 어휘를 찾는다.
+    anchor 는 숫자 토큰으로 대조한다 — 생문자열 substring 으로 찾으면 주문
+    "114건" 이 든 절에서 밴드 anchor "11" 이 걸려 오판한다(#209 최종 리뷰
+    deferred #4). _band_mentioned 가 쓰는 _numbers_in 과 같은 방식이다.
     본문 전체를 보면 anchor 와 무관한 문장의 반대 어휘에도 오염된다 — 처음엔
     이 함수가 본문 전체를 봤는데, "총 매출은... 상권 평균보다 높습니다, 토요일
     매출이... 가장 낮습니다" 처럼 상권과 무관한 문장의 "낮습니다"가 ABOVE 판정을
@@ -209,7 +212,9 @@ def _direction_correct(body: str, comparison: str, anchor: str) -> bool:
     if not opposite:
         return True
     for clause in _split_clauses(body):
-        if anchor in clause and any(word in clause for word in _DIRECTION_WORDS[opposite]):
+        if anchor in _numbers_in(clause) and any(
+            word in clause for word in _DIRECTION_WORDS[opposite]
+        ):
             return False
     return True
 
@@ -259,12 +264,22 @@ def _band_mentioned(body: str, band: str) -> bool:
     return start in numbers and end in numbers
 
 
-def _band_direction_correct(body: str, comparison: str, band: str) -> bool:
-    """밴드 쪽 호출부 — anchor 로 그 밴드의 시작 시각을 쓴다(매출·유동인구 두
-    비교가 한 문장에 같이 있을 때 서로의 반대 어휘에 오염되지 않게, `_direction_correct`
-    참고)."""
-    start, _ = band.split("-")
-    return _direction_correct(body, comparison, start)
+def _band_direction_correct(body: str, comparison: str, band: str, other_band: str) -> bool:
+    """밴드 쪽 호출부 — anchor 로 두 밴드의 배타적 숫자(대칭차)를 쓴다.
+
+    매출·유동인구 두 비교가 한 문장에 같이 있어 서로의 반대 어휘에 오염되지 않게
+    절 단위로 좁히는데(`_direction_correct` 참고), 밴드 시작 시각을 anchor 로 쓰면
+    그 좁히기가 안 된다 — 서울 상권 밴드는 연속 버킷이라 인접 밴드가 경계 숫자를
+    공유하는 게 기본값이다("11-14" 의 끝과 "14-17" 의 시작이 같은 "14"). 실측:
+    "유동인구 피크 11-14시와 겹칩니다. 매출 피크 14-17시와는 겹치지 않습니다" 가
+    완전히 올바른데, 매출 밴드 anchor "14" 가 첫 절에도 걸려 결함으로 셌다
+    (#209 최종 리뷰 Important #1). 공유 숫자를 뺀 숫자로만 절을 고른다 — 두 밴드가
+    완전히 같으면 배타적 숫자가 없고, 그때는 비교 자체가 무의미해 검사를 건너뛴다.
+    """
+    exclusive = set(band.split("-")) - set(other_band.split("-"))
+    if not exclusive:
+        return True
+    return all(_direction_correct(body, comparison, anchor) for anchor in exclusive)
 
 
 def _district_band_reflected(body: str, metrics: dict) -> bool | None:
@@ -296,9 +311,9 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
         return True
     sales_comparison = "SAME" if _in_band(peak_hour, sales_band) else "DIFFERENT"
     traffic_comparison = "SAME" if _in_band(peak_hour, traffic_band) else "DIFFERENT"
-    return _band_direction_correct(body, sales_comparison, sales_band) and _band_direction_correct(
-        body, traffic_comparison, traffic_band
-    )
+    return _band_direction_correct(
+        body, sales_comparison, sales_band, traffic_band
+    ) and _band_direction_correct(body, traffic_comparison, traffic_band, sales_band)
 
 
 _DOW_KO = {
