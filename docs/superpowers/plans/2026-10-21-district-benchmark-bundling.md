@@ -252,9 +252,9 @@ districtAvgMonthlySalesPerCafe·vsDistrictAvg 를 salesSummary candidate 에 끼
 - Consumes: Task 1의 `_district_gate(district: dict | None) -> bool`, `assign()`
   안의 `district` 지역변수.
 - Produces: `_store_peak_hour(points: list[dict]) -> int | None`,
-  `_in_band(hour: int | None, band: str) -> bool` — Task 4의 `상권_피크밴드_반영`
-  측정이 같은 계산을 참고한다(직접 재사용은 안 함, grade.py 는 app 비import
-  전제라 복제한다).
+  `_in_band(hour: int, band: str) -> bool` — Task 4의 `상권_매출피크밴드_반영`/
+  `상권_유동인구피크밴드_반영` 측정이 같은 계산을 참고한다(직접 재사용은 안 함,
+  grade.py 는 app 비import 전제라 복제한다).
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -306,12 +306,31 @@ def test_표본이_너무_적은_상권은_시간대_축에_안_묻는다():
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert "peakSalesHourBand" not in hourly_focus
+
+
+def test_영업중인_행이_없으면_피크_비교_필드를_안_넣는다():
+    """매출이 전부 0 이면(영업 전·휴무) 우리 매장 피크를 계산할 수 없다 — 이때
+    DIFFERENT로 단정하지 않고 비교 필드 자체를 뺀다(별도 검토, 2026-10-21(5)).
+    밴드 원본 값은 상권 자체의 사실이라 그대로 남긴다."""
+    closed = {
+        **HOURLY_METRICS,
+        "hourlySales": [
+            {"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0},
+            {"dayType": "WEEKDAY", "hour": 4, "menuSales": 0, "orderCount": 0},
+        ],
+    }
+    focus = assign({**closed, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert "vsDistrictSalesPeak" not in hourly_focus
+    assert "vsDistrictFootTrafficPeak" not in hourly_focus
 ```
 
 - [ ] **Step 2: 테스트 실패 확인**
 
 Run: `uv run pytest tests/test_insight_focus.py -v`
-Expected: 새 테스트 4개 FAIL(`peakSalesHourBand`/`vsDistrictSalesPeak` 키가 없음).
+Expected: 새 테스트 5개 FAIL(`peakSalesHourBand`/`vsDistrictSalesPeak` 키가 없음).
 나머지는 PASS.
 
 - [ ] **Step 3: `series_axes` 루프에 번들링 추가**
@@ -338,12 +357,11 @@ def _store_peak_hour(points: list[dict]) -> int | None:
     return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
 
 
-def _in_band(hour: int | None, band: str) -> bool:
+def _in_band(hour: int, band: str) -> bool:
     """우리 매장 피크 시간이 상권 밴드("HH-HH") 안에 드는지. 밴드 형식은 BE
-    DistrictBenchmarkService.VALID_HOUR_BANDS 가 고정 집합으로 보장한다.
+    DistrictBenchmarkService.VALID_HOUR_BANDS 가 고정 집합으로 보장한다. 호출부가
+    hour is None 인 경우를 먼저 걸러내므로 여기선 int 만 받는다.
     """
-    if hour is None:
-        return False
     start, end = (int(x) for x in band.split("-"))
     return start <= hour < end
 ```
@@ -354,17 +372,27 @@ def _in_band(hour: int | None, band: str) -> bool:
         points = metrics.get(key) or []
         focus = {key: _spread_rows(points, order_key)}
         if key == "hourlySales" and _district_gate(district):
-            peak_hour = _store_peak_hour(points)
             focus["peakSalesHourBand"] = district["peakSalesHourBand"]
             focus["peakFootTrafficHourBand"] = district["peakFootTrafficHourBand"]
-            focus["vsDistrictSalesPeak"] = (
-                "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
-            )
-            focus["vsDistrictFootTrafficPeak"] = (
-                "SAME" if _in_band(peak_hour, district["peakFootTrafficHourBand"]) else "DIFFERENT"
-            )
+            peak_hour = _store_peak_hour(points)
+            if peak_hour is not None:
+                focus["vsDistrictSalesPeak"] = (
+                    "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
+                )
+                focus["vsDistrictFootTrafficPeak"] = (
+                    "SAME" if _in_band(peak_hour, district["peakFootTrafficHourBand"]) else "DIFFERENT"
+                )
         candidates.append((focus, _spread(points) if points else -1.0))
 ```
+
+**왜 `peak_hour is None`이면 두 비교 필드를 아예 안 넣나.** `hourlySales`가
+후보로 뽑혔다고 해서 영업 중인 행이 꼭 있는 건 아니다 — `_spread`는 영업 중인
+행이 전부 0 이면(`len(amounts) < 2`) 0.0점을 주는데, 이 값도 다른 축이 전부
+음수면 선정될 수 있다. `_in_band(None, ...)`을 그냥 `False`로 처리해 `DIFFERENT`
+를 주면 "계산할 수 없음"과 "실제로 상권과 다름"을 같은 값으로 섞는다 — 데이터가
+없는데 "우리 매장은 상권과 다른 시간대"라고 단정하는 잘못된 인사이트가 된다
+(별도 검토, 2026-10-21(5) — Step 1의 `test_영업중인_행이_없으면_피크_비교_필드를_안_넣는다`
+참고).
 
 - [ ] **Step 4: 테스트 통과 확인**
 
@@ -440,9 +468,11 @@ peakSalesHourBand 는 반드시 "매출이 가장 많은 시간대"로, peakFoot
 vsDistrictSalesPeak·vsDistrictFootTrafficPeak 가 있으면 그 값을 그대로 따르고 직접
 비교하지 마세요 — SAME 은 우리 매장의 매출 피크 시간대가 그 밴드와 겹침, DIFFERENT 는
 안 겹침을 뜻합니다(vsDistrictSalesPeak 는 peakSalesHourBand, vsDistrictFootTrafficPeak
-는 peakFootTrafficHourBand 와 짝입니다). "상권이 좋아서/나빠서 매출이 ~했다"처럼
-상권 상태가 매출에 영향을 줬다고 주장하지 마세요 — 그런 인과를 뒷받침할 지표가
-없습니다.
+는 peakFootTrafficHourBand 와 짝입니다). 이 두 필드가 없으면 우리 매장의 피크
+시간을 계산할 수 없었다는 뜻이니, 밴드 값만 그대로 전달하고 우리 매장과
+비교해서 "같다/다르다"를 직접 판단해 말하지 마세요. "상권이 좋아서/나빠서
+매출이 ~했다"처럼 상권 상태가 매출에 영향을 줬다고 주장하지 마세요 — 그런
+인과를 뒷받침할 지표가 없습니다.
 ```
 
 - [ ] **Step 4: 모듈 docstring에 변경 이력 추가, VERSION 갱신**
@@ -490,6 +520,13 @@ vsDistrictFootTrafficPeak 평평한 필드를 가리키도록 SYSTEM 규칙을 �
 분모를 항상 전체 요청 수로 쓰는 전제도 고친다(안 고치면 조건부 항목이 실제보다
 낮게 보인다).
 
+**설계 리뷰 반영(별도 검토, 헥터 의견 아님)**: 밴드 반영률을 처음엔
+`상권_피크밴드_반영` 하나로 합쳐서 "두 밴드 중 하나라도 보이면 통과"로 짜뒀는데,
+설계 문서 문구("둘 다 안 보이면 실패", 즉 둘 다 필요)와 어긋나 있었다. 둘 다
+강제하면 "한 문장엔 근거 하나만"이라는 밀도 원칙과 충돌하므로, 합치는 대신
+`상권_매출피크밴드_반영`/`상권_유동인구피크밴드_반영` 두 개로 나눈다(아래
+Interfaces·Step 1·Step 3).
+
 **Files:**
 - Modify: `devtools/grade.py`
 - Modify: `devtools/bench.py` (`_checks`·`_rates`·`_report`)
@@ -500,14 +537,16 @@ vsDistrictFootTrafficPeak 평평한 필드를 가리키도록 SYSTEM 규칙을 �
   복사본), `grade._axis_selected(body: str, metrics: dict, key: str) -> bool`,
   `grade._comparison(total_sales: int, district_avg: int) -> str`(app 쪽
   `district_comparison` 복사본), `grade._store_peak_hour(points: list[dict]) ->
-  int | None`·`grade._in_band(hour: int | None, band: str) -> bool`(app 쪽 복사본),
+  int | None`·`grade._in_band(hour: int, band: str) -> bool`(app 쪽 복사본),
   `grade._direction_correct(body: str, comparison: str) -> bool`,
   `grade._district_avg_reflected(body: str, metrics: dict) -> bool | None`,
-  `grade._district_band_reflected(body: str, metrics: dict) -> bool | None`.
+  `grade._band_reflected(body: str, metrics: dict, band_key: str) -> bool | None`
+  (`band_key`는 `"peakSalesHourBand"` 또는 `"peakFootTrafficHourBand"`).
   `grade_insight()` 결과 dict에 `"salesSummary_선정률"`·`"hourlySales_선정률"`
-  (둘 다 bool)·`"상권_평균매출_반영"`·`"상권_피크밴드_반영"`(둘 다 bool | None) 키
-  추가. `bench._checks`가 `None` 값을 그대로 보존(`bool()`로 뭉개지 않음),
-  `bench._rates`가 `None`을 그 항목의 분모에서 뺀다.
+  (둘 다 bool)·`"상권_평균매출_반영"`·`"상권_매출피크밴드_반영"`·
+  `"상권_유동인구피크밴드_반영"`(셋 다 bool | None) 키 추가. `bench._checks`가
+  `None` 값을 그대로 보존(`bool()`로 뭉개지 않음), `bench._rates`가 `None`을 그
+  항목의 분모에서 뺀다.
 
 - [ ] **Step 1: 실패하는 테스트 작성 — `tests/test_grade.py`**
 
@@ -580,14 +619,18 @@ def test_매출요약이_선정_안_되면_선정률이_거짓이다():
 def test_매출요약이_선정되고_상권_평균을_방향까지_맞게_인용하면_반영으로_통과한다():
     """totalSales(792만)가 districtAvgMonthlySalesPerCafe(941.3만)보다 작으므로
     BELOW다 — "낮습니다"가 맞는 방향이다."""
-    result = _district_insight("총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 낮습니다.")
+    result = _district_insight(
+        "총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 낮습니다."
+    )
 
     assert result["상권_평균매출_반영"] is True
 
 
 def test_상권_평균_수치는_맞는데_방향이_반대면_걸린다():
     """숫자는 지표에 있는 값이라 UNGROUNDED_NUMBER 로는 못 잡는 오류다(설계 'C')."""
-    result = _district_insight("총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 높습니다.")
+    result = _district_insight(
+        "총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 높습니다."
+    )
 
     assert result["상권_평균매출_반영"] is False
 
@@ -605,24 +648,50 @@ def test_매출요약이_선정_안_되면_상권_평균매출_반영은_측정_
     assert result["상권_평균매출_반영"] is None
 
 
-def test_시간대축이_선정되고_피크밴드를_인용하면_반영으로_통과한다():
+def test_매출피크밴드가_인용되면_반영으로_통과한다():
     """우리 매장 피크(14시)는 peakSalesHourBand(14-17) 안에 든다 — SAME 이다.
     방향 어휘가 없는 문장이라 "반대로 서술"도 아니므로 통과한다."""
     result = _district_insight("오후 2시(14시)부터 17시까지 매출이 가장 높습니다.")
 
-    assert result["상권_피크밴드_반영"] is True
+    assert result["상권_매출피크밴드_반영"] is True
 
 
-def test_피크밴드_방향이_반대로_서술되면_걸린다():
+def test_매출피크밴드_방향이_반대로_서술되면_걸린다():
     result = _district_insight("오후 2시(14시)부터 17시까지는 상권 매출 피크와 겹치지 않습니다.")
 
-    assert result["상권_피크밴드_반영"] is False
+    assert result["상권_매출피크밴드_반영"] is False
 
 
-def test_시간대축이_선정_안_되면_상권_피크밴드_반영은_측정_대상이_아니다():
-    result = _district_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
+def test_유동인구피크밴드가_인용되면_반영으로_통과한다():
+    """우리 매장 피크(14시)는 peakFootTrafficHourBand(11-14) 밖이다 — DIFFERENT다.
+    방향 어휘가 없으니 "반대로 서술"도 아니라 통과한다."""
+    result = _district_insight("오전 11시부터 오후 2시(14시)까지 유동인구가 가장 많습니다.")
 
-    assert result["상권_피크밴드_반영"] is None
+    assert result["상권_유동인구피크밴드_반영"] is True
+
+
+def test_밴드가_인용_안_되면_그_밴드_반영은_측정_대상이_아니다():
+    """hourlySales 가 선정돼도 그 밴드 숫자를 안 인용했으면 결함이 아니다 — 한
+    문장엔 근거 하나만 쓰는 게 이 파일의 원칙이라, 다른 밴드를 썼을 수도 있다."""
+    result = _district_insight("이 시간대 매출은 500,000원으로 가장 높습니다.")
+
+    assert result["상권_매출피크밴드_반영"] is None
+    assert result["상권_유동인구피크밴드_반영"] is None
+
+
+def test_우리_매장_피크를_계산할_수_없으면_밴드_인용만으로도_통과한다():
+    """비교 필드(vsDistrictSalesPeak 등)가 없을 상황이다 — 영업 중인 행이
+    없으면(_store_peak_hour 가 None) 방향을 요구하지 않고 밴드 인용만으로 통과시킨다
+    (별도 검토, 2026-10-21(5))."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "hourlySales": [{"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0}],
+    }
+
+    assert grade._store_peak_hour(metrics["hourlySales"]) is None
+    result = _district_insight("상권의 매출은 14시부터 17시까지가 피크입니다.", metrics=metrics)
+
+    assert result["상권_매출피크밴드_반영"] is True
 
 
 def test_시간대축이_선정되면_hourlySales_선정률이_참이다():
@@ -698,9 +767,7 @@ def _store_peak_hour(points: list[dict]) -> int | None:
     return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
 
 
-def _in_band(hour: int | None, band: str) -> bool:
-    if hour is None:
-        return False
+def _in_band(hour: int, band: str) -> bool:
     start, end = (int(x) for x in band.split("-"))
     return start <= hour < end
 
@@ -726,7 +793,13 @@ _DIRECTION_WORDS = {
     "SAME": ("겹칩니다", "일치합니다"),
     "DIFFERENT": ("겹치지 않", "다른 시간대", "불일치"),
 }
-_OPPOSITE = {"ABOVE": "BELOW", "BELOW": "ABOVE", "EQUAL": None, "SAME": "DIFFERENT", "DIFFERENT": "SAME"}
+_OPPOSITE = {
+    "ABOVE": "BELOW",
+    "BELOW": "ABOVE",
+    "EQUAL": None,
+    "SAME": "DIFFERENT",
+    "DIFFERENT": "SAME",
+}
 
 
 def _direction_correct(body: str, comparison: str) -> bool:
@@ -757,7 +830,9 @@ def _district_avg_reflected(body: str, metrics: dict) -> bool | None:
     if avg not in _numbers_in(body):
         return False
     summary = metrics.get("salesSummary") or {}
-    comparison = _comparison(summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"])
+    comparison = _comparison(
+        summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"]
+    )
     return _direction_correct(body, comparison)
 
 
@@ -767,28 +842,31 @@ def _band_mentioned(body: str, band: str) -> bool:
     return start in numbers and end in numbers
 
 
-def _district_band_reflected(body: str, metrics: dict) -> bool | None:
-    """위와 같은 조건부 측정이다 — hourlySales 쪽(#209 "A").
+def _band_reflected(body: str, metrics: dict, band_key: str) -> bool | None:
+    """밴드별로 따로 재는 조건부 측정이다 — hourlySales 쪽(#209 "A").
 
-    peakSalesHourBand/peakFootTrafficHourBand 중 언급된 쪽만 방향(vsDistrictSalesPeak/
-    vsDistrictFootTrafficPeak)이 반대로 서술됐는지 본다.
+    band_key 는 "peakSalesHourBand" 또는 "peakFootTrafficHourBand" 다. 하나로
+    합치지 않는다 — "둘 중 하나라도 안 보이면 실패"로 합치면 모델이 한 문장에
+    두 밴드를 억지로 같이 말해야 해서 "문장마다 근거 하나" 원칙과 충돌한다
+    (별도 검토, 2026-10-21(5)).
+
+    게이트 조건으로 hourlySales_선정률(_axis_selected)을 재사용하지 않는다 —
+    밴드 숫자가 직접 인용됐는지가 더 좁고 정확한 조건이다.
     """
     district = metrics.get("districtBenchmark")
     if not _district_gate(district):
         return None
-    if not _axis_selected(body, metrics, "hourlySales"):
+    band = district[band_key]
+    if not _band_mentioned(body, band):
         return None
     peak_hour = _store_peak_hour(metrics.get("hourlySales") or [])
-    bands = {
-        "peakSalesHourBand": "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT",
-        "peakFootTrafficHourBand": (
-            "SAME" if _in_band(peak_hour, district["peakFootTrafficHourBand"]) else "DIFFERENT"
-        ),
-    }
-    mentioned = [key for key in bands if _band_mentioned(body, district[key])]
-    if not mentioned:
-        return False
-    return all(_direction_correct(body, bands[key]) for key in mentioned)
+    if peak_hour is None:
+        # 우리 매장 피크를 계산할 수 없었던 달이다(app 쪽과 같은 이유로
+        # vsDistrictSalesPeak/vsDistrictFootTrafficPeak 가 안 보내진다) — 비교를
+        # 요구하지 않고 밴드 인용만으로 통과시킨다.
+        return True
+    comparison = "SAME" if _in_band(peak_hour, band) else "DIFFERENT"
+    return _direction_correct(body, comparison)
 ```
 
 `grade_insight()` 함수 안, `result["상권_인과_주장_없음"] = ...` 줄 바로 뒤에 추가:
@@ -797,7 +875,8 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     result["salesSummary_선정률"] = _axis_selected(body, metrics, "salesSummary")
     result["hourlySales_선정률"] = _axis_selected(body, metrics, "hourlySales")
     result["상권_평균매출_반영"] = _district_avg_reflected(body, metrics)
-    result["상권_피크밴드_반영"] = _district_band_reflected(body, metrics)
+    result["상권_매출피크밴드_반영"] = _band_reflected(body, metrics, "peakSalesHourBand")
+    result["상권_유동인구피크밴드_반영"] = _band_reflected(body, metrics, "peakFootTrafficHourBand")
 ```
 
 - [ ] **Step 4: `tests/test_grade.py` 통과 확인**
@@ -849,7 +928,9 @@ def _checks(result: dict) -> dict[str, bool | None]:
 ```
 
 ```python
-def _rates(rows: list[dict]) -> tuple[list[str], dict[str, tuple[float | None, float | None]], float, float]:
+def _rates(
+    rows: list[dict],
+) -> tuple[list[str], dict[str, tuple[float | None, float | None]], float, float]:
     """항목별 (모델, 서비스) 통과율과 전항목 통과율.
 
     분모는 보통 전체 요청 수다 — 행에 없는 항목(500·파싱 실패)은 결함으로 센다,
@@ -905,9 +986,7 @@ def _rates(rows: list[dict]) -> tuple[list[str], dict[str, tuple[float | None, f
 `failed_keys` 계산 줄도 `None` 안전하게 바꾼다:
 
 ```python
-    failed_keys = [
-        key for key in keys if per_key[key][1] is not None and per_key[key][1] < 1.0
-    ]
+failed_keys = [key for key in keys if per_key[key][1] is not None and per_key[key][1] < 1.0]
 ```
 
 - [ ] **Step 8: 전체 테스트 통과 확인**
@@ -923,9 +1002,11 @@ git add devtools/grade.py devtools/bench.py tests/test_grade.py tests/test_bench
 git commit -m "feat: 상권 숙주 선정률과 반영률을 분리해 채점기·집계에 추가한다
 
 salesSummary_선정률·hourlySales_선정률(분모: 전체 요청)과 상권_평균매출_반영·
-상권_피크밴드_반영(분모: 게이트 통과 + 숙주 선정된 요청만, 수치뿐 아니라 비교
-방향까지 확인)을 나눈다. bench.py._rates 가 None 을 분모에서 빼도록 고쳤다 —
-안 고치면 '선정 안 됨'이 '결함'으로 잡혀 실제보다 낮게 보인다(#209 설계 'A')."
+상권_매출피크밴드_반영·상권_유동인구피크밴드_반영(분모: 게이트 통과 + 해당 값이
+문장에 인용된 요청만, 수치뿐 아니라 비교 방향까지 확인)을 나눈다. 두 밴드를
+하나로 합치지 않는다 — 문장마다 근거 하나 원칙과 충돌한다. bench.py._rates 가
+None 을 분모에서 빼도록 고쳤다 — 안 고치면 '선정 안 됨'이 '결함'으로 잡혀
+실제보다 낮게 보인다(#209 설계 'A')."
 ```
 
 ---
@@ -1097,9 +1178,9 @@ Expected: `districtBenchmark` 객체가 요청 예시에 그대로 나온다(요
 - `app/prompts/insight.py`: districtBenchmark 중첩 객체 대신 평평한 필드명을
   가리키도록 규칙 갱신. VERSION → 2026-10-21.
 - `devtools/grade.py`: 측정 전용 항목 추가(차단 아님) — `salesSummary_선정률`·
-  `hourlySales_선정률`(분모: 전체 요청), `상권_평균매출_반영`·`상권_피크밴드_반영`
-  (분모: 게이트 통과 + 숙주 선정된 요청만, 조건 미충족 시 `None`)(A), `상권_분기_인용됨`·
-  `상권_분기_날조_없음`(조건부, B).
+  `hourlySales_선정률`(분모: 전체 요청), `상권_평균매출_반영`·`상권_매출피크밴드_반영`·
+  `상권_유동인구피크밴드_반영`(분모: 게이트 통과 + 해당 값이 문장에 인용된 요청만,
+  조건 미충족 시 `None`)(A), `상권_분기_인용됨`·`상권_분기_날조_없음`(조건부, B).
 - `devtools/bench.py`: `_checks`·`_rates`·`_report`가 `None`(조건부 항목의 "해당
   없음")을 분모에서 빼도록 수정.
 
@@ -1108,9 +1189,10 @@ Expected: `districtBenchmark` 객체가 요청 예시에 그대로 나온다(요
 - `uv run ruff check --fix . && uv run ruff format .` — 통과
 
 ### 다음 한 걸음
-- `devtools/bench.py`의 #208 "상권있음"·"전부있음" 케이스로 `--n 20` 실측 — 네
+- `devtools/bench.py`의 #208 "상권있음"·"전부있음" 케이스로 `--n 20` 실측 — 다섯
   선정률·반영률(salesSummary_선정률/hourlySales_선정률/상권_평균매출_반영/
-  상권_피크밴드_반영)과 `상권_분기_인용됨`/`상권_분기_날조_없음` 비율을 확인한다.
+  상권_매출피크밴드_반영/상권_유동인구피크밴드_반영)과 `상권_분기_인용됨`/
+  `상권_분기_날조_없음` 비율을 확인한다.
 - 측정 결과가 낮으면 salesSummary 숙주 교체·점수 조정 재검토(설계 문서 "A").
 - basisQuarter 누수가 유의미하면 차단 규칙 도입 검토(설계 문서 "B").
 - solution의 weatherContext는 이번 범위 밖 — 7차 측정(#207 케이스 포함) 이후 별도
@@ -1126,6 +1208,11 @@ Expected: `districtBenchmark` 객체가 요청 예시에 그대로 나온다(요
   채점기)에 복사해 뒀다. 한쪽만 고치면 어긋난다 —
   `tests/test_grade.py::test_채점기의_상권_게이트가_서비스와_같다`·
   `test_채점기의_비교_방향이_서비스와_같다`가 잡는다.
+- `_store_peak_hour`가 `None`을 돌려줄 수 있는 경우(영업 중인 행이 하나도 없는
+  달)를 `_in_band(None, ...)` 같은 식으로 그냥 `False`로 처리하면 "계산 불가"가
+  "실제로 다름"(`DIFFERENT`)으로 둔갑한다 — 한 번 이렇게 짰다가 고쳤다(별도 검토,
+  2026-10-21(5)). `peak_hour is None`이면 비교 필드 자체를 안 보내는 쪽으로
+  둔다.
 ```
 
 - [ ] **Step 4: 커밋**
@@ -1160,3 +1247,10 @@ git commit -m "docs: STATE.md에 상권 번들링 작업 내용을 반영한다(
   전제(매장 쪽 대응 데이터 없음) 때문에 폐기하고, "우리 매장 피크 vs 상권 밴드"로
   재설계 — Task 2. (3) `hourlySales` 선정률 인용 오류 정정 — 설계 문서 트레이드오프
   절. (4) `hourlySales_선정률`·반영률의 비교 방향까지 검증 — Task 4.
+- **별도 검토 반영 확인(헥터 의견 아님)**: (1) 매장 피크를 계산할 수 없을 때
+  `DIFFERENT`로 단정하던 걸 고쳐 비교 필드 자체를 뺀다 — Task 2 Step 1·3
+  (`test_영업중인_행이_없으면_피크_비교_필드를_안_넣는다`), 채점기 쪽은 Task 4
+  Step 1·3(`test_우리_매장_피크를_계산할_수_없으면_밴드_인용만으로도_통과한다`).
+  (2) `상권_피크밴드_반영`을 "둘 중 하나라도 보이면 통과"로 짰던 게 설계 문구("둘
+  다 필요")와 어긋났던 걸, 하나로 합치지 않고 `상권_매출피크밴드_반영`/
+  `상권_유동인구피크밴드_반영`으로 나눠 모호함을 없앴다 — Task 4 전체.

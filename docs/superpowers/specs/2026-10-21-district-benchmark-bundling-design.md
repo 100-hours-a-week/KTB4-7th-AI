@@ -26,6 +26,14 @@
   "언급됐는지"뿐 아니라 "비교 방향이 맞는지"까지 넣었고, `hourlySales_선정률`을
   `salesSummary_선정률`과 짝을 맞춰 추가했고, B도 A와 같은 조건부 분모 방식
   (`상권_분기_인용됨`/`상권_분기_날조_없음`, 인용 안 했으면 `None`)으로 통일했다.
+- 2026-10-21(5): 별도 검토(헥터 의견 아님)로 두 가지를 더 고쳤다. (1) 영업 중인
+  시간대가 하나도 없으면(`menuSales`가 전부 0) `_store_peak_hour`가 `None`을
+  돌려주는데, 그걸 그대로 "안 겹침"(`DIFFERENT`)으로 단정하고 있었다 — "계산할 수
+  없음"과 "실제로 다름"은 다른 상태라, 피크를 못 구하면 `vsDistrictSalesPeak`/
+  `vsDistrictFootTrafficPeak` 필드 자체를 아예 안 보내기로 바꿨다(아래 핵심 설계
+  2번). (2) `상권_피크밴드_반영`의 설계 문구("둘 중 하나라도 안 보이면 실패", 즉
+  둘 다 필요)와 실제 짜 둔 채점 로직("하나라도 보이면 통과")이 어긋나 있었다 —
+  하나로 합치지 않고 밴드별로 따로 재는 쪽으로 바꿔 모호함을 없앴다(아래 "A").
 
 ## Context
 
@@ -156,29 +164,41 @@ def _store_peak_hour(points: list[dict]) -> int | None:
     return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
 
 
-def _in_band(hour: int | None, band: str) -> bool:
-    if hour is None:
-        return False
+def _in_band(hour: int, band: str) -> bool:
     start, end = (int(x) for x in band.split("-"))
     return start <= hour < end
 
 
 focus = {"hourlySales": _spread_rows(points, "hour")}
 if _district_gate(district):
-    peak_hour = _store_peak_hour(points)
     focus["peakSalesHourBand"] = district["peakSalesHourBand"]
     focus["peakFootTrafficHourBand"] = district["peakFootTrafficHourBand"]
-    focus["vsDistrictSalesPeak"] = "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
-    focus["vsDistrictFootTrafficPeak"] = (
-        "SAME" if _in_band(peak_hour, district["peakFootTrafficHourBand"]) else "DIFFERENT"
-    )
+    peak_hour = _store_peak_hour(points)
+    if peak_hour is not None:
+        focus["vsDistrictSalesPeak"] = (
+            "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
+        )
+        focus["vsDistrictFootTrafficPeak"] = (
+            "SAME" if _in_band(peak_hour, district["peakFootTrafficHourBand"]) else "DIFFERENT"
+        )
 candidates.append((focus, _spread(points) if points else -1.0))
 ```
 
+**왜 `peak_hour is None`이면 두 필드를 아예 안 보내나(별도 검토, 2026-10-21(5)).**
+`hourlySales`가 후보로 뽑혔다고 해서 영업 중인 행이 꼭 있는 건 아니다 — `_spread`
+는 영업 중인 행이 전부 0이면(`len(amounts) < 2`) 0.0점을 주는데, 이 값도 다른
+축이 전부 음수면 선정될 수 있다. 이때 `_store_peak_hour`는 `None`을 돌려주는데,
+`_in_band(None, ...)`을 `False`로 처리해 그대로 `DIFFERENT`를 주면 "계산할 수
+없음"과 "실제로 상권과 다름"을 같은 값으로 섞는다 — 데이터가 없는데 "우리
+매장은 상권과 다른 시간대"라고 단정하는 잘못된 인사이트가 된다. 그래서 피크를
+못 구하면 비교 필드 자체를 안 보낸다(밴드 원본 값은 그대로 보낸다 — 상권
+자체의 사실이라 우리 매장 피크와 무관하게 유효하다).
+
 `vsDistrictSalesPeak`/`vsDistrictFootTrafficPeak`는 원 밴드 값을 대신하지 않는다
 — 구체적 시간대를 말할 근거는 그대로 두고, "우리 매출 피크가 그 밴드 안에
-드는지"라는 추가 사실만 코드가 보장해 준다. 두 필드 다 `SAME`/`DIFFERENT`면
-"우리 매장은 상권 매출 피크와 겹치지만 유동인구 피크와는 다르다"처럼 실행
+드는지"라는 추가 사실만 코드가 보장해 준다(단, 피크를 계산할 수 있을 때만). 두
+필드 다 `SAME`/`DIFFERENT`면 "우리 매장은 상권 매출 피크와 겹치지만 유동인구
+피크와는 다르다"처럼 실행
 포인트로 쓸 수 있다.
 
 ### 게이트 함수 (기존 `_district_score`의 게이트 부분만 재사용)
@@ -225,6 +245,10 @@ PR #161 결정 그대로).
 직접 비교·계산하지 말라고 명시한다(`SAME`=우리 매장의 매출 피크 시간대가 그
 밴드와 겹침, `DIFFERENT`=안 겹침) — `vsDistrictSalesPeak`는 `peakSalesHourBand`와,
 `vsDistrictFootTrafficPeak`는 `peakFootTrafficHourBand`와 짝이라는 것도 명시한다.
+**두 필드가 없으면(우리 매장의 피크 시간을 계산할 수 없었던 경우) 밴드 값만
+그대로 전달하고, 우리 매장과 비교해 "같다/다르다"를 직접 판단해 말하지 말라고도
+명시한다** — 비교 필드를 안 보낸 건 "계산 불가"를 뜻하지, 모델이 대신 추정해도
+된다는 뜻이 아니다(별도 검토, 2026-10-21(5)).
 
 `VERSION` 상수를 오늘 날짜로 올린다.
 
@@ -256,19 +280,31 @@ PR #161 결정 그대로).
   문장에 안 보이면 실패 — **값이 보여도 비교 방향(`vsDistrictAvg`)이 반대로
   서술되면 실패로 센다.** "언급됐는지"만 보면 숫자는 맞는데 방향이 틀린 오귀속을
   놓친다.
-- `상권_피크밴드_반영`: 분모 = district 게이트 통과 + **`hourlySales`가 선정된
-  요청만**. `peakSalesHourBand`/`peakFootTrafficHourBand` 중 하나라도 문장에 안
-  보이면 실패 — 마찬가지로 **`vsDistrictSalesPeak`/`vsDistrictFootTrafficPeak`가
-  있는데 반대 방향 어휘("안 겹칩니다" 등)로 서술되면 실패로 센다.**
+- `상권_매출피크밴드_반영`/`상권_유동인구피크밴드_반영`: 분모 = district 게이트
+  통과 + **그 밴드(`peakSalesHourBand`/`peakFootTrafficHourBand`)가 문장에 실제로
+  인용된 요청만**(둘을 하나로 합치지 않는다 — 아래 참고. `hourlySales_선정률`과
+  별개 지표라 이 둘의 게이트로 재사용하지 않는다 — 밴드 숫자가 직접 인용됐는지가
+  더 좁고 정확한 조건이다). 밴드가 인용됐다면 `vsDistrictSalesPeak`/
+  `vsDistrictFootTrafficPeak` 방향이 반대로 서술되지 않았는지까지 본다. 비교
+  필드가 없는 경우(우리 매장 피크를 계산 못 한 달, 위 핵심 설계 2번 참고)는
+  밴드 값만 맞게 인용했으면 통과로 센다 — 없는 비교를 억지로 요구하지 않는다.
+
+**왜 하나(`상권_피크밴드_반영`)로 합치지 않나(별도 검토, 2026-10-21(5)).** 처음
+초안은 "두 밴드 중 하나라도 안 보이면 실패"로 적었는데, 실제로 짠 채점 로직은
+"하나라도 보이면 통과"였다 — 설계 문구와 구현이 어긋나 있었다. 둘 다 보여야
+한다는 쪽으로 구현을 맞추면 "한 문장엔 근거 하나만"이라는 이 파일 전체의 밀도
+원칙과 충돌한다(모델이 한 문장에 두 밴드를 억지로 같이 말하게 강제하는 셈이다).
+그래서 합치는 대신 밴드별로 따로 재기로 했다 — `salesSummary_선정률`/
+`hourlySales_선정률`을 나눈 것과 같은 이유다.
 
 `devtools/grade.py::_rates`는 분모를 항상 전체 요청 수로 쓴다 — 조건부 항목을
 그대로 그 집계에 끼워 넣으면 실제보다 낮게 보인다(`카드_개수_일치`가 3장을
 하드코딩해 시간대없음 케이스를 결함으로 세던 사고, #178과 같은 모양). 그래서
-`상권_평균매출_반영`·`상권_피크밴드_반영`은 `_rates` 공통 분모를 쓰지 않고 이
-항목만 조건부 분모로 따로 집계한다(구현은 `None` 반환 + `devtools/bench.py` 쪽
-분모 처리로 아래 "테스트 계획" 참고).
+`상권_평균매출_반영`·`상권_매출피크밴드_반영`·`상권_유동인구피크밴드_반영`은
+`_rates` 공통 분모를 쓰지 않고 이 항목만 조건부 분모로 따로 집계한다(구현은
+`None` 반환 + `devtools/bench.py` 쪽 분모 처리로 아래 "테스트 계획" 참고).
 
-실제로 `--n 20`으로 돌려서 이 네 비율(선정률 2개 + 반영률 2개)의 실측값을
+실제로 `--n 20`으로 돌려서 이 다섯 비율(선정률 2개 + 반영률 3개)의 실측값을
 확인하는 건 머지 후 다음 단계다. 측정 결과가 낮으면 그때 숙주 교체나 점수 조정을
 다시 연다.
 
@@ -356,6 +392,10 @@ basisQuarter를 어느 focus 블록에도 안 넣기로 했지만(위 "다루지
   `vsDistrictFootTrafficPeak`가 들어있는지
 - `vsDistrictSalesPeak`/`vsDistrictFootTrafficPeak`가 우리 매장 매출 피크 시간이
   각 밴드 안에 들면 `SAME`, 안 들면 `DIFFERENT`로 정확한지(경계값 포함)
+- 영업 중(`menuSales > 0`)인 행이 하나도 없어 피크를 못 구하면(`_store_peak_hour`가
+  `None`), `peakSalesHourBand`/`peakFootTrafficHourBand`는 그대로 들어있지만
+  `vsDistrictSalesPeak`/`vsDistrictFootTrafficPeak`는 focus에 **안 들어있는지**
+  (별도 검토, 2026-10-21(5) — "계산 불가"를 `DIFFERENT`로 단정하지 않는지 확인)
 - `cafeStoreCount < 3`이거나 `districtAvgMonthlySalesPerCafe <= 0`이면 두 번들
   모두에서 상권 필드가 빠지는지(게이트 재사용 확인)
 - `districtBenchmark`가 없으면 기존처럼 두 축이 상권 필드 없이 동작하는지(회귀 없음)
@@ -370,19 +410,21 @@ basisQuarter를 어느 focus 블록에도 안 넣기로 했지만(위 "다루지
   (조건 미충족 시 `None` — "테스트 계획" 아래 `devtools/bench.py` 분모 처리 참고).
   `districtAvgMonthlySalesPerCafe` 값이 문장에 실제로 보이고, `vsDistrictAvg`
   방향이 맞는지까지 확인(위 "A" 참고)
-- `상권_피크밴드_반영`: 분모 = district 게이트 통과 + `hourlySales` 선정된 요청만
-  (조건 미충족 시 `None`). `peakSalesHourBand`/`peakFootTrafficHourBand` 중
-  하나라도 문장에 보이고, `vsDistrictSalesPeak`/`vsDistrictFootTrafficPeak`
-  방향이 맞는지까지 확인(위 핵심 설계 2번 참고)
+- `상권_매출피크밴드_반영`/`상권_유동인구피크밴드_반영`: 분모 = district 게이트
+  통과 + 그 밴드가 문장에 인용된 요청만(조건 미충족 시 `None`, 둘을 하나로 합치지
+  않는 이유는 위 "A" 참고). 인용됐다면 `vsDistrictSalesPeak`/
+  `vsDistrictFootTrafficPeak`가 있을 때만 방향이 맞는지도 확인 — 비교 필드가
+  없으면(계산 불가) 밴드 인용만으로 통과
 - `상권_분기_인용됨`(분모 = 전체 요청) / `상권_분기_날조_없음`(분모 = 분기를
   실제로 인용한 요청만, 미인용이면 `None`) — 분기 패턴을 인용한 문장 검출 + 요청의
   실제 `basisQuarter`와 일치/불일치 구분(위 "B" 참고)
 
-`devtools/bench.py`: 위 네 조건부 항목(`상권_평균매출_반영`·`상권_피크밴드_반영`·
-`상권_분기_날조_없음`)이 `None`을 반환할 수 있게 되면서, `_checks`가 `None`을
-그대로 보존하고(`bool()`로 뭉개지 않음) `_rates`가 그 항목만 `None`인 행을 분모에서
-빼도록 고친다 — 안 고치면 "해당 없음"이 "결함"으로 잡혀 전체 분모 기준 비율이
-실제보다 낮게 보인다(이번 구현 범위에 포함, 설계 리뷰 — 헥터·사용자 모두 지적).
+`devtools/bench.py`: 위 네 조건부 항목(`상권_평균매출_반영`·`상권_매출피크밴드_반영`·
+`상권_유동인구피크밴드_반영`·`상권_분기_날조_없음`)이 `None`을 반환할 수 있게
+되면서, `_checks`가 `None`을 그대로 보존하고(`bool()`로 뭉개지 않음) `_rates`가
+그 항목만 `None`인 행을 분모에서 빼도록 고친다 — 안 고치면 "해당 없음"이
+"결함"으로 잡혀 전체 분모 기준 비율이 실제보다 낮게 보인다(이번 구현 범위에
+포함, 설계 리뷰에서 지적).
 
 `devtools/contract_check.py`: 픽스처 구조 변경 없음(districtBenchmark는 여전히
 `InsightMetrics` 최상위 필드) — 수정 불필요.
@@ -393,8 +435,8 @@ basisQuarter를 어느 focus 블록에도 안 넣기로 했지만(위 "다루지
 ## 다음 단계 (이번 구현 범위 밖)
 
 - **A 측정**: `salesSummary_선정률`/`hourlySales_선정률`과 `상권_평균매출_반영`/
-  `상권_피크밴드_반영`을 #208 케이스로 측정. 결과가 낮으면 숙주 교체·점수 조정
-  재논의.
+  `상권_매출피크밴드_반영`/`상권_유동인구피크밴드_반영`을 #208 케이스로 측정.
+  결과가 낮으면 숙주 교체·점수 조정 재논의.
 - **B 측정 결과 반영**: `상권_분기_인용됨`/`상권_분기_날조_없음` 비율을 보고 차단
   규칙 도입 여부 결정.
 - solution의 `weatherContext` 재검토(#206/#207에서 헥터가 확인한 "밀림" 현상) — 7차
