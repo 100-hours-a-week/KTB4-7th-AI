@@ -182,9 +182,7 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
 
     summary_focus: dict = {"salesSummary": summary}
     if _district_gate(district):
-        summary_focus["districtAvgMonthlySalesPerCafe"] = district[
-            "districtAvgMonthlySalesPerCafe"
-        ]
+        summary_focus["districtAvgMonthlySalesPerCafe"] = district["districtAvgMonthlySalesPerCafe"]
         summary_focus["vsDistrictAvg"] = district_comparison(
             summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"]
         )
