@@ -177,15 +177,36 @@ _OPPOSITE = {
 }
 
 
-def _direction_correct(body: str, comparison: str) -> bool:
+# "9,413,000" 같은 천 단위 구분 쉼표는 절 경계가 아니라 숫자의 일부다 — 그대로
+# "[,.\n]" 로 나누면 절마다 숫자가 조각나 anchor(예: "9413000")가 어느 절에도
+# 통째로 안 남는다(#209 리뷰 Important #1 수정 중 실측으로 발견).
+_THOUSANDS_COMMA = re.compile(r"(?<=\d),(?=\d)")
+
+
+def _split_clauses(body: str) -> list[str]:
+    return re.split(r"[,.\n]", _THOUSANDS_COMMA.sub("", body))
+
+
+def _direction_correct(body: str, comparison: str, anchor: str) -> bool:
     """방향 어휘가 실제 계산 결과와 반대로 쓰였는지만 본다 — 간단한 어휘 대조다
     (완전한 자연어 이해는 아니다, 1 차는 검출 시도 수준). 올바른 어휘가 없어도
     (수치만 언급) 통과시킨다 — 의견 없는 문장을 결함으로 몰지 않는다. 반대
     방향 어휘가 있을 때만 실패시킨다(설계 'C').
+
+    anchor 가 들어간 구(쉼표·마침표로 나눈 절)에서만 반대 방향 어휘를 찾는다.
+    본문 전체를 보면 anchor 와 무관한 문장의 반대 어휘에도 오염된다 — 처음엔
+    이 함수가 본문 전체를 봤는데, "총 매출은... 상권 평균보다 높습니다, 토요일
+    매출이... 가장 낮습니다" 처럼 상권과 무관한 문장의 "낮습니다"가 ABOVE 판정을
+    반대로 오판하는 사고가 실제로 났다(#209 리뷰 Important #1). 밴드 두 개가
+    한 문장에 같이 있을 때 서로의 반대 어휘에 오염되는 것과 같은 실패 모양이라
+    평균 쪽에도 똑같이 절 단위 스캔을 적용한다.
     """
     opposite = _OPPOSITE[comparison]
-    if opposite and any(word in body for word in _DIRECTION_WORDS[opposite]):
-        return False
+    if not opposite:
+        return True
+    for clause in _split_clauses(body):
+        if anchor in clause and any(word in clause for word in _DIRECTION_WORDS[opposite]):
+            return False
     return True
 
 
@@ -194,7 +215,7 @@ def _district_avg_reflected(body: str, metrics: dict) -> bool | None:
 
     둘 중 하나라도 아니면 None — "선정 안 됨"은 결함이 아니다. devtools/bench.py
     가 None 을 분모에서 뺀다(설계 리뷰 — 안 빼면 실제보다 낮게 보인다). 값이
-    보여도 방향이 반대면 실패로 센다(설계 'C').
+    보여도 방향이 반대면 실패로 센다(설계 'C') — anchor 는 상권 평균 숫자다.
     """
     district = metrics.get("districtBenchmark")
     if not _district_gate(district):
@@ -208,7 +229,7 @@ def _district_avg_reflected(body: str, metrics: dict) -> bool | None:
     comparison = _comparison(
         summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"]
     )
-    return _direction_correct(body, comparison)
+    return _direction_correct(body, comparison, avg)
 
 
 def _band_mentioned(body: str, band: str) -> bool:
@@ -218,20 +239,11 @@ def _band_mentioned(body: str, band: str) -> bool:
 
 
 def _band_direction_correct(body: str, comparison: str, band: str) -> bool:
-    """밴드별 방향 어휘 대조 — 그 밴드의 시작 시각이 들어간 구(쉼표·마침표로 나눈
-    절)에서만 반대 방향 어휘를 찾는다. `_direction_correct`처럼 본문 전체를 보면,
-    매출·유동인구 두 비교가 한 문장에 같이 있을 때 서로의 반대 어휘에 오염된다
-    (예: "매출 피크와 겹치지만, 유동인구 피크와는 다른 시간대" — 전체를 보면
-    "다른 시간대"가 매출 쪽 SAME 판정까지 반대로 오판한다).
-    """
-    opposite = _OPPOSITE[comparison]
-    if not opposite:
-        return True
+    """밴드 쪽 호출부 — anchor 로 그 밴드의 시작 시각을 쓴다(매출·유동인구 두
+    비교가 한 문장에 같이 있을 때 서로의 반대 어휘에 오염되지 않게, `_direction_correct`
+    참고)."""
     start, _ = band.split("-")
-    for clause in re.split(r"[,.\n]", body):
-        if start in clause and any(word in clause for word in _DIRECTION_WORDS[opposite]):
-            return False
-    return True
+    return _direction_correct(body, comparison, start)
 
 
 def _district_band_reflected(body: str, metrics: dict) -> bool | None:

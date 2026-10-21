@@ -15,6 +15,7 @@ from app.prompts import insight as insight_prompt
 from app.prompts import solution as solution_prompt
 from app.services import insight_focus
 from devtools import grade
+from devtools.bench import MEASURE_ONLY
 from devtools.contract_check import EXAMPLES
 
 SOL_METRICS = EXAMPLES["solutions"]["metrics"]
@@ -263,23 +264,23 @@ def _insight(*sentences) -> dict:
 
 
 def test_정상_인사이트는_모든_항목을_통과한다():
-    # 2026-10-21(#209): hourlySales_선정률이 추가되면서 둘째 문장(원래
-    # menuRankings 인용, 측정 대상 아님)을 hourlySales 전용 문장으로 바꿨다 —
-    # 안 바꾸면 이 "정상" 응답조차 hourlySales 를 한 번도 선정하지 않아
-    # hourlySales_선정률 이 False 가 되고(실제로 그렇다, 결함은 아니다), 아래
-    # "모든 항목 통과" 전제가 깨진다. 셋째 문장(salesSummary+상권 번들)에 섞지
-    # 않는다 — "문장마다 근거 하나" 는 축 사이(salesSummary vs hourlySales)
-    # 원칙이라 한 문장에 두 축을 합치면 그 원칙을 거스르는 예시가 된다.
-    # "높습니다" 를 쓰지 않는다 — _direction_correct(vsDistrictAvg 용)는 본문
-    # 전체를 보므로, 이 문장의 "높다" 가 셋째 문장의 BELOW 판정과 반대 어휘로
-    # 오염돼 상권_평균매출_반영 이 False 로 깨진다(직접 실행해서 확인했다).
+    # 2026-10-21(#209 리뷰): salesSummary_선정률·hourlySales_선정률 은 규칙 위반이
+    # 아니라 "그 축이 선정됐는지" 를 재는 측정값이다 — 3 문장 안에 6 축이 다
+    # 선정되지 않는 게 정상이라(여기선 categorySales·menuRankings·salesSummary
+    # 세 축만 쓴다) False 가 흔하다. 처음엔 둘째 문장을 hourlySales 전용으로
+    # 바꿔 픽스처를 측정값에 맞춰 비틀었는데, 그러면 측정용 bool 이 하나 더
+    # 생길 때마다 "정상 예시"를 또 비틀어야 한다 — 뿌리는 필터였다. 그래서
+    # 둘째 문장은 원래대로 두고, 필터에서 devtools/bench.py 의 MEASURE_ONLY
+    # (전항목 집계에서도 빼는 키 집합)를 그대로 재사용해 측정 전용 키를 뺀다.
     result = _insight(
         "커피 카테고리 매출이 메뉴 매출의 41.7%를 차지하고 있습니다.",
-        "낮 12시 매출이 420,000원으로 하루 중 가장 많습니다.",
+        "아메리카노가 메뉴 매출의 28.2%를 차지합니다.",
         "총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 낮습니다.",
     )
 
-    failed = [k for k, v in result.items() if isinstance(v, bool) and not v]
+    failed = [
+        k for k, v in result.items() if isinstance(v, bool) and not v and k not in MEASURE_ONLY
+    ]
     assert failed == [], f"오탐: {failed}"
 
 
@@ -373,6 +374,10 @@ def test_채점기의_상권_게이트가_서비스와_같다():
         None,
         {},
         {"cafeStoreCount": 2, "districtAvgMonthlySalesPerCafe": 9413000},
+        # 임계값(_MIN_CAFE_STORE_COUNT) 자체 — app 쪽 임계값이 3→4 로 바뀌어도
+        # 다른 케이스들은 전부 같은 답을 내서 드리프트를 못 잡는다(#209 리뷰
+        # Important #3). 경계값을 넣어야 그 변화가 보인다.
+        {"cafeStoreCount": 3, "districtAvgMonthlySalesPerCafe": 9413000},
         {"cafeStoreCount": 133, "districtAvgMonthlySalesPerCafe": 0},
         {"cafeStoreCount": 133, "districtAvgMonthlySalesPerCafe": 9413000},
     ]
@@ -386,6 +391,34 @@ def test_채점기의_비교_방향이_서비스와_같다():
         assert grade._comparison(total_sales, district_avg) == insight_focus.district_comparison(
             total_sales, district_avg
         )
+
+
+def test_채점기의_매장_피크_시간이_서비스와_같다():
+    """app 을 import 하지 않으려고 복사해 둔 함수다(devtools/grade.py::_store_peak_hour
+    참고) — parity 테스트가 없으면 어긋나도 아무도 못 잡는다(#209 리뷰 Important #3)."""
+    cases: list[list[dict]] = [
+        [],
+        [{"hour": 9, "menuSales": 0, "orderCount": 0}],
+        [
+            {"hour": 9, "menuSales": 100, "orderCount": 10},
+            {"hour": 14, "menuSales": 100, "orderCount": 20},
+        ],
+        [
+            {"hour": 9, "menuSales": 50, "orderCount": 5},
+            {"hour": 14, "menuSales": 200, "orderCount": 30},
+            {"hour": 20, "menuSales": 10, "orderCount": 2},
+        ],
+    ]
+    for points in cases:
+        assert grade._store_peak_hour(points) == insight_focus._store_peak_hour(points)
+
+
+def test_채점기의_밴드_경계가_서비스와_같다():
+    """`_in_band`(`start <= hour < end`) 의 `<` vs `<=` 경계 하나가 SAME/DIFFERENT 를
+    바로 뒤집는다 — 경계값(start·end)을 꼭 넣어 대조한다(#209 리뷰 Important #3)."""
+    cases = [(14, "14-17"), (17, "14-17"), (13, "14-17"), (16, "14-17")]
+    for hour, band in cases:
+        assert grade._in_band(hour, band) == insight_focus._in_band(hour, band)
 
 
 def test_매출요약이_선정되면_선정률이_참이다():
@@ -414,6 +447,41 @@ def test_상권_평균_수치는_맞는데_방향이_반대면_걸린다():
     """숫자는 지표에 있는 값이라 UNGROUNDED_NUMBER 로는 못 잡는 오류다(설계 'C')."""
     result = _district_insight(
         "총 매출은 전기 대비 4.2% 증가했으며 상권 평균 9,413,000원보다 높습니다."
+    )
+
+    assert result["상권_평균매출_반영"] is False
+
+
+def test_상권_평균_방향_판정은_무관한_문장의_반대_어휘에_오염되지_않는다():
+    """#209 리뷰 Important #1 재현 — totalSales(1200만) > districtAvg(941.3만)로
+    ABOVE 다. 둘째 문장(weekdaySales 관찰)의 "낮습니다"는 상권과 무관한데, 본문
+    전체를 보면 그 "낮"(BELOW 어휘)이 ABOVE 판정을 반대로 오염시킨다 — anchor(상권
+    평균 숫자)가 든 절만 보게 고쳐서 더 이상 오염되지 않는다."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "salesSummary": {**_DISTRICT_METRICS["salesSummary"], "totalSales": 12_000_000},
+    }
+    result = _district_insight(
+        "총 매출은 12,000,000원으로 상권 평균 9,413,000원보다 높습니다.",
+        "토요일 메뉴 매출이 310,000원으로 요일 중 가장 낮습니다.",
+        metrics=metrics,
+    )
+
+    assert result["상권_평균매출_반영"] is True
+
+
+def test_상권_평균_방향_판정은_절_단위로도_실제_반전은_여전히_잡는다():
+    """절 단위로 좁혀도 anchor 가 든 절 안에서 방향이 실제로 반대면 여전히 걸려야
+    한다 — 절 분할이 너무 좁아져 방향 반전을 놓치면 측정값이 실제보다 높게 보인다
+    (#209 리뷰 Important #1, 양방향 테스트 요구)."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "salesSummary": {**_DISTRICT_METRICS["salesSummary"], "totalSales": 12_000_000},
+    }
+    result = _district_insight(
+        "총 매출은 12,000,000원으로 상권 평균 9,413,000원보다 낮습니다.",
+        "토요일 메뉴 매출이 310,000원으로 요일 중 가장 높습니다.",
+        metrics=metrics,
     )
 
     assert result["상권_평균매출_반영"] is False

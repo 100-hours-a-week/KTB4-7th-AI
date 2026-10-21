@@ -426,6 +426,13 @@ async def _recording_complete(*args, **kwargs) -> str:
 
 SKIP_KEYS = {"cards", "insights", "error"}
 
+# salesSummary_선정률·hourlySales_선정률은 규칙 위반이 아니라 "이번 요청에서 그 축이
+# 선정됐는지" 를 재는 값이다 — 3 문장 안에 6 축이 다 선정되지 않는 게 정상이라 False 가
+# 흔하다. 출하 판정(전항목)에 그대로 넣으면 상시 0% 가 나온다(#209 리뷰 Important #2,
+# #178 카드_개수_일치 사고와 같은 모양) — per_key 표에는 그대로 찍되 전항목 집계에서만
+# 뺀다. 새 선정률류 측정값을 추가하면 여기도 등록해야 한다 — 안 하면 같은 문제가 재발한다.
+MEASURE_ONLY = {"salesSummary_선정률", "hourlySales_선정률"}
+
 
 def _width(text: str) -> int:
     """한글은 터미널에서 두 칸을 쓴다 — len() 으로 맞추면 표가 어긋난다."""
@@ -525,8 +532,12 @@ def _rates(
         return True if value is None else bool(value)
 
     per_key = {key: (_rate("model", key), _rate("service", key)) for key in keys}
-    all_model = sum(1 for r in rows if all(_effective(r["model"], k) for k in keys)) / total
-    all_service = sum(1 for r in rows if all(_effective(r["service"], k) for k in keys)) / total
+    # 선정률은 표에는 찍지만(위 per_key) 전항목(출하 판정) 에서는 뺀다 — MEASURE_ONLY 참고.
+    rollup_keys = [key for key in keys if key not in MEASURE_ONLY]
+    all_model = sum(1 for r in rows if all(_effective(r["model"], k) for k in rollup_keys)) / total
+    all_service = (
+        sum(1 for r in rows if all(_effective(r["service"], k) for k in rollup_keys)) / total
+    )
     return list(keys), per_key, all_model, all_service
 
 
@@ -578,7 +589,9 @@ def _report(name: str, rows: list[dict]) -> None:
     if failed_keys:
         print("\n  걸린 응답 (항목별 첫 건):")
     for key in failed_keys:
-        row = next((r for r in rows if not r["service"].get(key) and r.get("sample")), None)
+        # `not r["service"].get(key)` 는 None(측정 대상 아님)도 True 로 치는 함정이다 —
+        # 결함이 아닌 응답을 "걸린 응답"으로 찍는다. False 인 행만 찾는다.
+        row = next((r for r in rows if r["service"].get(key) is False and r.get("sample")), None)
         if row is None:
             continue  # 응답 자체가 없는 경우(500·파싱 실패)는 위에 이미 찍었다
         body = json.dumps(row["sample"], ensure_ascii=False)

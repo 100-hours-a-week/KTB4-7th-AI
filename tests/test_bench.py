@@ -5,7 +5,7 @@
 검증되지만, 분모를 어떻게 세는지는 코드로 막을 수 있다.
 """
 
-from devtools.bench import _checks, _rates
+from devtools.bench import MEASURE_ONLY, _checks, _rates
 
 
 def _row(status: int, model: dict, service: dict) -> dict:
@@ -125,3 +125,38 @@ def test_조건부_항목의_None은_분모에서_빠진다():
     assert per_key["상권_평균매출_반영"] == (1.0, 0.0), "None 인 행은 분모에서 빠져야 한다"
     assert all_model == 1.0, "None 은 결함이 아니라 전항목 집계에서 통과로 센다"
     assert all_service == 0.5, "False 는 여전히 결함이다 — None 과 다르게 센다"
+
+
+def test_선정률은_전항목_집계에서_빠진다():
+    """선정률(salesSummary_선정률·hourlySales_선정률)은 규칙 위반이 아니라 "이번
+    요청에서 그 축이 선정됐는지" 를 재는 측정값이다 — 3 문장 안에 6 축이 다
+    선정되지 않는 게 정상이라 False 가 흔하다. 그대로 전항목(출하 판정)에 넣으면
+    상시 0% 가 된다(#209 리뷰 Important #2, #178 카드_개수_일치 사고와 같은 모양).
+    per_key 표에는 그대로 찍되 전항목 집계에서만 뺀다."""
+    rows = [
+        _row(
+            200,
+            {"parsed": True, "hourlySales_선정률": False, "상권_평균매출_반영": None},
+            {"parsed": True, "hourlySales_선정률": False, "상권_평균매출_반영": None},
+        ),
+    ]
+    _, per_key, all_model, all_service = _rates(rows)
+
+    assert per_key["hourlySales_선정률"] == (0.0, 0.0), "표에는 선정률 그대로 찍는다"
+    assert (all_model, all_service) == (1.0, 1.0), "선정률은 전항목 집계에서 뺀다"
+
+
+def test_checks가_None을_bool로_뭉개지_않는다():
+    """브리프 산출물 — bool(None) 으로 뭉개면 _rates 의 None 처리가 전부 무력화된다
+    (#209 리뷰 Important #4). _row() 로 dict 를 직접 만드는 다른 테스트들은 _checks
+    를 우회하므로, 이 동작만 따로 고정해 둔다."""
+    assert _checks({"parsed": True, "상권_평균매출_반영": None}) == {
+        "parsed": True,
+        "상권_평균매출_반영": None,
+    }
+
+
+def test_measure_only_키가_실제_선정률_키와_같다():
+    """MEASURE_ONLY 가 등록을 빠뜨리면 Important #2 가 조용히 무력화된다 — 실제
+    선정률 키 이름과 어긋나지 않는지 고정해 둔다."""
+    assert MEASURE_ONLY == {"salesSummary_선정률", "hourlySales_선정률"}
