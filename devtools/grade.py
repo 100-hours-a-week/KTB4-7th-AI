@@ -165,12 +165,18 @@ def _axis_selected(body: str, metrics: dict, key: str) -> bool:
     return key in _evidence_group(body, _metric_paths(metrics))
 
 
+# 완전 활용형이 아니라 정규식으로 둔다(#209 최종 리뷰 deferred #6) — 프롬프트는
+# "겹침"/"안 겹침" 어간형으로 가르치는데 "겹칩니다"만 찾으면 "겹치는 시간대입니다"
+# 같은 변형의 반전을 못 잡는다. 그런데 "겹치"를 그냥 어간으로 쓰면 DIFFERENT의
+# 정답 문구 "겹치지 않습니다"에도 포함돼 있어 SAME으로 오매칭된다 — 부정 접미
+# "지 않"이 뒤따르면 SAME이 아니라고 미리 걸러낸다(음성 lookahead). "일치"도
+# DIFFERENT의 "불일치"에 포함되므로 같은 이유로 "불" 접두를 제외한다.
 _DIRECTION_WORDS = {
-    "ABOVE": ("높", "웃돌", "상회"),
-    "BELOW": ("낮", "밑돌", "하회"),
-    "EQUAL": ("같습니다", "동일"),
-    "SAME": ("겹칩니다", "일치합니다"),
-    "DIFFERENT": ("겹치지 않", "다른 시간대", "불일치"),
+    "ABOVE": (re.compile("높"), re.compile("웃돌"), re.compile("상회")),
+    "BELOW": (re.compile("낮"), re.compile("밑돌"), re.compile("하회")),
+    "EQUAL": (re.compile("같습니다"), re.compile("동일")),
+    "SAME": (re.compile(r"겹치(?!지\s*않)"), re.compile(r"(?<!불)일치")),
+    "DIFFERENT": (re.compile(r"겹치지\s*않"), re.compile(r"다른\s*시간대"), re.compile("불일치")),
 }
 _OPPOSITE = {
     "ABOVE": "BELOW",
@@ -207,13 +213,18 @@ def _direction_correct(body: str, comparison: str, anchor: str) -> bool:
     반대로 오판하는 사고가 실제로 났다(#209 리뷰 Important #1). 밴드 두 개가
     한 문장에 같이 있을 때 서로의 반대 어휘에 오염되는 것과 같은 실패 모양이라
     평균 쪽에도 똑같이 절 단위 스캔을 적용한다.
+
+    SAME 어간("겹치")은 DIFFERENT 의 정답 문구("겹치지 않습니다")에도 포함돼
+    단순 substring 대조로는 구분이 안 된다 — _DIRECTION_WORDS 쪽에서 부정
+    접미("지 않")가 뒤따르면 SAME 이 아니라고 정규식으로 미리 걸러낸다(#209
+    최종 리뷰 deferred #6, "일치"/"불일치"도 같은 이유).
     """
     opposite = _OPPOSITE[comparison]
     if not opposite:
         return True
     for clause in _split_clauses(body):
         if anchor in _numbers_in(clause) and any(
-            word in clause for word in _DIRECTION_WORDS[opposite]
+            pattern.search(clause) for pattern in _DIRECTION_WORDS[opposite]
         ):
             return False
     return True
