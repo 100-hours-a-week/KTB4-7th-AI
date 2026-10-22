@@ -574,3 +574,67 @@ def test_isNotable이_아니면_특보_기온이어도_후보에서_빠진다():
     focus = assign({**_BUSY_DAY, "weatherContext": cold})
 
     assert not any("weatherContext" in card for card in focus)
+
+
+# ── 기상특보 (2026-10-22, 이슈 #226) ─────────────────────────────────
+# BE 가 기상청 API허브 특보현황을 붙여 alerts 를 보낸다. 풍속·적설이 계약에 없어
+# 우리가 판정할 수 없던 태풍·대설이 이걸로 들어온다.
+
+
+def test_특보가_발효_중이면_1순위가_된다():
+    """기온은 평범한데 강풍주의보만 떠 있는 날 — 지금 필드로는 판정할 수 없던 경우다."""
+    wx = {**_MILD, "alerts": ["강풍주의보"]}
+    focus = assign({**_BUSY_DAY, "weatherContext": wx})
+
+    assert "weatherContext" in focus[0]
+
+
+def test_특보가_없으면_보충_자리에_머문다():
+    """alerts: [] 는 "조회했는데 발효 특보 없음" 이다."""
+    wx = {**_MILD, "alerts": []}
+    focus = assign({**_BUSY_DAY, "weatherContext": wx})
+
+    assert not any("weatherContext" in card for card in focus)
+
+
+def test_조회_실패는_특보_없음과_같게_다루되_값은_구분된다():
+    """alerts 가 없으면(키 생략) "모름" 이다 — 특보로 치지 않는 건 [] 와 같다.
+
+    둘을 같은 기본값으로 합치지 않는 이유는 스키마 주석에 있다 — 섞으면 나중에
+    "모르는데 없다고 말한" 사고를 못 가린다.
+    """
+    from app.schemas.common import WeatherContext
+
+    unknown = WeatherContext(
+        basisDateTime="2026-10-22 08:00",
+        skyText="흐림",
+        minTempC=9,
+        maxTempC=19,
+        maxPop=0.6,
+        rainHours=[],
+        isNotable=True,
+    )
+    none_found = WeatherContext(
+        basisDateTime="2026-10-22 08:00",
+        skyText="흐림",
+        minTempC=9,
+        maxTempC=19,
+        maxPop=0.6,
+        rainHours=[],
+        isNotable=True,
+        alerts=[],
+    )
+
+    assert unknown.alerts is None
+    assert none_found.alerts == []
+    for wx in (unknown, none_found):
+        focus = assign({**_BUSY_DAY, "weatherContext": wx.model_dump()})
+        assert not any("weatherContext" in card for card in focus)
+
+
+def test_isNotable이_아니면_특보가_있어도_후보에서_빠진다():
+    """BE 판정이 우선이다 — 다만 BE 는 특보가 있으면 isNotable=true 로 보내기로 했다."""
+    wx = {**_MILD, "alerts": ["강풍주의보"], "isNotable": False}
+    focus = assign({**_BUSY_DAY, "weatherContext": wx})
+
+    assert not any("weatherContext" in card for card in focus)

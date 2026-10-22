@@ -48,7 +48,7 @@ def strip_fence(raw: str) -> str:
 # 2026-10-15 는 districtBenchmark(여섯째 근거 축, #157)가 들어오며 "행정동 평균일 뿐
 # 매장 개별 실적이 아니고, 상권 상태로 매출 인과를 주장하지 말라"는 규칙이 추가됐다 —
 # `상권_인과_주장_없음`을 새로 잰다. 기존 항목은 손대지 않았다.
-TARGET_SOLUTION_VERSION = "2026-10-20"
+TARGET_SOLUTION_VERSION = "2026-10-22"
 TARGET_INSIGHT_VERSION = "2026-10-15"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)

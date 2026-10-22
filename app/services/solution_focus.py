@@ -248,12 +248,18 @@ def _weather_score(weather: dict | None) -> float:
     한파·폭염은 **기상청 주의보 기준**으로 가른다 — 우리가 고른 숫자가 아니다.
     그 날엔 "오늘 뭘 할까" 의 답이 날씨라서 다른 축보다 앞선다.
 
-    **태풍·대설은 판정할 수 없다.** 풍속도 적설도 계약에 없다(WeatherContext 는
-    basisDateTime·skyText·minTempC·maxTempC·maxPop·rainHours·precipitationMm·isNotable).
-    BE 에 특보 발효 여부를 받는 쪽이 원시값으로 재구성하는 것보다 정확하다 — 요청해 둘 것.
+    2026-10-22: BE 가 기상청 API허브 특보현황을 붙여 alerts 를 보내기로 했다(#226).
+    풍속·적설이 계약에 없어 우리가 판정할 수 없던 **태풍·대설이 이걸로 들어온다.** BE 가
+    매장 권역·상위 권역의 발효 중인 것만 추려 보내므로 우리는 비었는지만 본다 — 특보명을
+    해석하거나 주의보/경보를 가르지 않는다(지금은 전부 같은 1 순위다).
+
+    alerts 가 None 이면 "조회 실패라 모름" 이고 [] 면 "조회했는데 없음" 이다. 둘 다
+    특보가 아니라고 보는 건 같지만, 섞으면 나중에 "모르는데 없다고 말한" 사고를 못 가린다.
     """
     if not weather or not weather.get("isNotable"):
         return -1.0
+    if weather.get("alerts"):
+        return _WEATHER_ALERT_SCORE
     low, high = weather.get("minTempC"), weather.get("maxTempC")
     if (low is not None and low <= _COLD_WAVE_MIN_TEMP) or (
         high is not None and high >= _HEAT_WAVE_MAX_TEMP
