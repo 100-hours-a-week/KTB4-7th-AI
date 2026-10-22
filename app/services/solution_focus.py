@@ -375,11 +375,28 @@ def _weather_score(weather: dict | None) -> float:
     강수별 메뉴 판매)로 이미 입력이 오는데 점수식에 연결돼 있지 않다(이슈 #194) —
     비는 그쪽에서 다루는 게 맞다.
 
-    **태풍·대설은 여전히 판정할 수 없다.** 풍속도 적설도 계약에 없다. BE 에 특보 발효
-    여부를 받는 쪽이 정확하다 — PR #227(weatherContext.alerts)로 진행 중이다.
+    2026-10-27: BE 가 기상청 API허브 특보현황을 붙여 `alerts` 를 보낸다(BE PR #595·#596·
+    #597·#599 머지). 풍속도 적설도 계약에 없어 우리가 판정할 수 없던 **태풍·대설이 이걸로
+    들어온다.** BE 가 매장 권역·상위 권역의 발효 중인 것만(예비특보·해제·미발효·해상 제외)
+    추려 중복 제거해 보내므로 우리는 **비었는지만 본다** — 특보명을 해석하거나 주의보/경보를
+    가르지 않는다. 날씨 축은 1.0 이면 이미 1 순위라 더 올라갈 자리가 없다.
+
+    **`alerts` 는 isNotable 게이트 안쪽에서 본다.** BE 는 "특보가 있으면 isNotable=true" 를
+    보장하므로(BE PR #597 표) 보통은 차이가 없다. 다만 그 보장이 깨지면 태풍경보 날을
+    조용히 버린다 — alerts 를 게이트보다 먼저 보면 공짜로 막히지만, 그건 "BE 판정이
+    우선이고 우리가 isNotable 을 덮어쓰지 않는다" 는 기존 결정을 뒤집는 것이라 혼자
+    바꾸지 않았다. `test_isNotable이_아니면_특보가_있어도_후보에서_빠진다` 가 현재 순서를
+    고정하고 있다. 바꿀지는 리뷰에서 정한다.
+
+    None 과 [] 를 나눈다. None 은 "조회 실패라 모름"(BE 는 `KMA_ALERT_AREA_UNMAPPED` 같은
+    조회 오류에 필드를 생략한다), [] 는 "조회했는데 발효 특보 없음" 이다. 둘 다 특보로 보지
+    않는 건 같지만, 섞으면 "모르는데 없다고 말한" 사고를 못 가린다 — BE 도 "호출부는 조회
+    실패를 '특보 없음' 으로 해석하면 안 된다" 고 명시했다.
     """
     if not weather or not weather.get("isNotable"):
         return -1.0
+    if weather.get("alerts"):
+        return _WEATHER_ALERT_SCORE
     low, high = weather.get("minTempC"), weather.get("maxTempC")
     if (low is not None and low <= _COLD_WAVE_MIN_TEMP) or (
         high is not None and high >= _HEAT_WAVE_MAX_TEMP

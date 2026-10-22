@@ -76,7 +76,7 @@ def strip_fence(raw: str) -> str:
 # 모델이 "동일하다"로 답해도 방향 오류를 못 잡는다.
 # 2026-10-24(2) 는 외부 리뷰로 "동일함"이 "포함됨"으로 다시 바뀐 변경이다 —
 # `_DIRECTION_WORDS["SAME"]`에 "포함" 패턴을 추가했다. "동일" 패턴은 그대로 둔다.
-TARGET_SOLUTION_VERSION = "2026-10-20"
+TARGET_SOLUTION_VERSION = "2026-10-27"
 TARGET_INSIGHT_VERSION = "2026-10-24"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
