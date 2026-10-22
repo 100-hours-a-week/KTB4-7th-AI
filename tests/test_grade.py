@@ -292,6 +292,23 @@ def test_비율을_반올림하면_걸린다():
     assert result["비율_반올림_없음"] is False
 
 
+def test_다른_수치의_백분율이_반올림값과_부분일치해도_안_걸린다():
+    """0.018 은 반올림하면 "2%" 다. 본문에 무관한 수치 "1.2%" 가 있으면, "1.2%" 의 끝
+    두 글자가 생문자열로 "2%" 와 겹쳐 반올림 위반으로 오판했다(2026-10-22 실측에서
+    실제로 재현 — 카테고리 증감률 1.2% 를 쓴 문장이 salesSummary 반올림 위반으로
+    잘못 걸렸다). 백분율을 숫자 토큰 단위로 끊어서 대조해야 한다."""
+    metrics = {
+        **INS_METRICS,
+        "salesSummary": {**INS_METRICS["salesSummary"], "vsPrevPeriod": 0.018},
+    }
+    result = grade.grade_insight(
+        json.dumps({"insights": ["커피 매출은 전기 대비 1.2% 증가했습니다."]}, ensure_ascii=False),
+        metrics,
+    )
+
+    assert result["비율_반올림_없음"] is True
+
+
 def test_ratio_분모를_총매출로_말하면_걸린다():
     """ratio 의 분모는 menuSales 다. 총매출 기준이면 39.4% 라 틀린 문장이 된다."""
     result = _insight("커피가 전체의 41.7%를 차지합니다.")
@@ -303,6 +320,27 @@ def test_인사이트도_요일_환각을_잡는다():
     result = _insight("금요일 12시 메뉴 매출이 420,000원으로 높습니다.")
 
     assert result["요일_환각_없음"] is False
+
+
+def test_요일이_세글자_약어로_와도_환각으로_안_걸린다():
+    """weekdaySales[].dayOfWeek 가 "SATURDAY" 대신 "SAT" 같은 세글자 약어로 올 수
+    있다(app/services/solution.py::_WEEKDAY_CODES 와 같은 표기, devtools/bench.py
+    인사이트 케이스가 이 표기를 쓴다). _DOW_KO 가 영문 전체 이름만 키로 가지고
+    있으면 "SAT" 가 안 매칭돼 허용 목록이 비고, AI 가 데이터에 있는 그대로
+    "토요일"이라고 정확히 써도 환각으로 오판한다(2026-10-22 실측에서 실제로
+    재현 — PR #219)."""
+    metrics = {
+        **INS_METRICS,
+        "weekdaySales": [{"dayOfWeek": "SAT", "menuSales": 1560000, "orderCount": 182}],
+    }
+    result = grade.grade_insight(
+        json.dumps(
+            {"insights": ["토요일 매출이 1,560,000원으로 가장 높습니다."]}, ensure_ascii=False
+        ),
+        metrics,
+    )
+
+    assert result["요일_환각_없음"] is True
 
 
 def test_처방형으로_끝나면_걸린다():

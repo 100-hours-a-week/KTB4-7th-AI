@@ -85,6 +85,11 @@ _RATIO_WORD = re.compile(
 # 화면에 보여줄 금액·비율. 실행 지시용 작은 수(21시, 1명)와 구분하려고 자릿수·단위를 본다.
 _DISPLAY_NUM = re.compile(r"[\d,]{4,}\s*원|\d+\.?\d*\s*%")
 
+# 백분율 토큰 전체(숫자+%)를 끊어서 뽑는다. 생문자열 substring 대조("2%" in "1.2%")는
+# "1.2%"(카테고리 증감률 같은 무관한 값)의 끝 두 글자가 "2%"(salesSummary 반올림값)와
+# 겹쳐 오탐한다(2026-10-22 실측에서 재현, PR #219) — 토큰 단위로 끊어야 한다.
+_PERCENT = re.compile(r"(\d+(?:\.\d+)?)%")
+
 # 행동의 "얼마나" — 지표에 없는 값이라 지어낸 것이다. 마진을 모르는데 할인율을,
 # 인건비 대비 생산성을 모르는데 인원을 말할 근거가 없다(2026-10-07). 시각은 지표에
 # hour 로 있으므로 _ungrounded 가 따로 본다.
@@ -365,14 +370,27 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     ) and _band_direction_correct(body, traffic_comparisons, traffic_band, sales_band)
 
 
+# weekdaySales[].dayOfWeek 표기가 영문 전체 이름("SATURDAY")인지 세글자 약어
+# ("SAT", app/services/solution.py::_WEEKDAY_CODES 와 같은 표기)인지 계약상
+# 고정돼 있지 않다 — devtools/contract_check.py 예시는 전체 이름을 쓰지만
+# devtools/bench.py 인사이트 케이스는 약어를 쓴다. 약어 키가 없으면 "SAT" 가
+# 전혀 매칭이 안 돼 허용 목록이 비고, AI 가 데이터 그대로 "토요일"이라고 정확히
+# 써도 환각으로 오판한다(2026-10-22 실측에서 재현, PR #219) — 둘 다 받는다.
 _DOW_KO = {
     "MONDAY": "월요일",
+    "MON": "월요일",
     "TUESDAY": "화요일",
+    "TUE": "화요일",
     "WEDNESDAY": "수요일",
+    "WED": "수요일",
     "THURSDAY": "목요일",
+    "THU": "목요일",
     "FRIDAY": "금요일",
+    "FRI": "금요일",
     "SATURDAY": "토요일",
+    "SAT": "토요일",
     "SUNDAY": "일요일",
+    "SUN": "일요일",
 }
 
 
@@ -694,7 +712,8 @@ def grade_insight(raw: str, metrics: dict) -> dict:
     if changed is not None:
         exact = f"{abs(changed) * 100:g}"
         rounded = f"{round(abs(changed) * 100):g}"
-        if exact != rounded and f"{rounded}%" in body and f"{exact}%" not in body:
+        percents = _PERCENT.findall(body)
+        if exact != rounded and rounded in percents and exact not in percents:
             ok = False
     result["비율_반올림_없음"] = ok
 
