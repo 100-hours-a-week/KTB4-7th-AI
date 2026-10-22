@@ -412,22 +412,34 @@ def test_채점기의_비교_방향이_서비스와_같다():
 
 def test_채점기의_매장_피크_시간이_서비스와_같다():
     """app 을 import 하지 않으려고 복사해 둔 함수다(devtools/grade.py::_store_peak_hour
-    참고) — parity 테스트가 없으면 어긋나도 아무도 못 잡는다(#209 리뷰 Important #3)."""
-    cases: list[list[dict]] = [
-        [],
-        [{"hour": 9, "menuSales": 0, "orderCount": 0}],
-        [
-            {"hour": 9, "menuSales": 100, "orderCount": 10},
-            {"hour": 14, "menuSales": 100, "orderCount": 20},
-        ],
-        [
-            {"hour": 9, "menuSales": 50, "orderCount": 5},
-            {"hour": 14, "menuSales": 200, "orderCount": 30},
-            {"hour": 20, "menuSales": 10, "orderCount": 2},
-        ],
+    참고) — parity 테스트가 없으면 어긋나도 아무도 못 잡는다(#209 리뷰 Important #3).
+
+    2026-10-22(#209 최종 리뷰 Important #5): dayType 별로 따로 계산하도록 바뀌어
+    day_type 인자가 추가됐다 — 평일·주말이 섞인 케이스를 넣어 섞이지 않는지도 본다.
+    """
+    cases: list[tuple[list[dict], str]] = [
+        ([], "WEEKDAY"),
+        ([{"dayType": "WEEKDAY", "hour": 9, "menuSales": 0, "orderCount": 0}], "WEEKDAY"),
+        (
+            [
+                {"dayType": "WEEKDAY", "hour": 9, "menuSales": 100, "orderCount": 10},
+                {"dayType": "WEEKDAY", "hour": 14, "menuSales": 100, "orderCount": 20},
+            ],
+            "WEEKDAY",
+        ),
+        (
+            [
+                {"dayType": "WEEKDAY", "hour": 9, "menuSales": 50, "orderCount": 5},
+                {"dayType": "WEEKEND", "hour": 14, "menuSales": 200, "orderCount": 30},
+                {"dayType": "WEEKEND", "hour": 20, "menuSales": 10, "orderCount": 2},
+            ],
+            "WEEKEND",
+        ),
     ]
-    for points in cases:
-        assert grade._store_peak_hour(points) == insight_focus._store_peak_hour(points)
+    for points, day_type in cases:
+        assert grade._store_peak_hour(points, day_type) == insight_focus._store_peak_hour(
+            points, day_type
+        )
 
 
 def test_채점기의_밴드_경계가_서비스와_같다():
@@ -565,6 +577,46 @@ def test_둘_다_설명해도_한쪽_방향이_틀리면_걸린다():
     assert result["상권_피크밴드_반영"] is False
 
 
+def test_평일_주말_피크가_같은_방향이면_방향_반전을_여전히_잡는다():
+    """평일(14시)·주말(16시) 둘 다 매출 밴드(14-17) 안(SAME)이라 방향이 하나로
+    모인다(#209 최종 리뷰 Important #5) — 이때는 기존처럼 반전을 잡아야 한다."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "hourlySales": [
+            {"dayType": "WEEKDAY", "hour": 14, "menuSales": 500000, "orderCount": 60},
+            {"dayType": "WEEKEND", "hour": 16, "menuSales": 700000, "orderCount": 70},
+        ],
+    }
+    result = _district_insight(
+        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지 않고, "
+        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와 일치합니다.",
+        metrics=metrics,
+    )
+
+    assert result["상권_피크밴드_반영"] is False
+
+
+def test_평일_주말_피크_방향이_다르면_본문만으로_못_갈라_판정을_보류한다():
+    """평일 피크(11시)는 매출 밴드(14-17) 밖(DIFFERENT), 주말 피크(15시)는 안(SAME)
+    이다 — 문장이 어느 dayType 을 말하는지 본문 텍스트만으로 구분할 근거가 없으니,
+    어느 쪽 어휘를 써도 결함으로 몰지 않는다(#209 최종 리뷰 Important #5). 밴드
+    인용 자체는 둘 다 돼 있으니 전체 판정은 True 로 통과한다."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "hourlySales": [
+            {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
+            {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
+        ],
+    }
+    result = _district_insight(
+        "매출이 가장 높은 시간대는 상권 매출 피크 14-17시와 겹치고, "
+        "상권 유동인구 피크 11-14시와는 겹치지 않습니다.",
+        metrics=metrics,
+    )
+
+    assert result["상권_피크밴드_반영"] is True
+
+
 def test_밴드를_리터럴_형식으로_인용해도_공유_숫자에_오염되지_않는다():
     """peakSalesHourBand("14-17")의 시작과 peakFootTrafficHourBand("11-14")의
     끝이 같은 "14"다 — anchor로 밴드 시작 시각 하나만 쓰면 서로의 반대 어휘에
@@ -650,15 +702,16 @@ def test_밴드_포맷이_깨지면_상권_피크밴드_반영은_측정_대상�
 
 
 def test_우리_매장_피크를_계산할_수_없으면_밴드_인용만으로도_통과한다():
-    """비교 필드(vsDistrictSalesPeak 등)가 없을 상황이다 — 영업 중인 행이
-    없으면(_store_peak_hour 가 None) 방향을 요구하지 않고 둘 다 인용됐는지만 본다
-    (별도 검토, 2026-10-21(5))."""
+    """비교 필드(vsDistrictSalesPeakWeekday 등)가 없을 상황이다 — 평일·주말 둘 다
+    영업 중인 행이 없으면(_store_peak_hour 가 둘 다 None) 방향을 요구하지 않고
+    둘 다 인용됐는지만 본다(별도 검토, 2026-10-21(5))."""
     metrics = {
         **_DISTRICT_METRICS,
         "hourlySales": [{"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0}],
     }
 
-    assert grade._store_peak_hour(metrics["hourlySales"]) is None
+    assert grade._store_peak_hour(metrics["hourlySales"], "WEEKDAY") is None
+    assert grade._store_peak_hour(metrics["hourlySales"], "WEEKEND") is None
     result = _district_insight(
         "상권의 매출은 14시부터 17시까지, 유동인구는 11시부터 14시까지가 피크입니다.",
         metrics=metrics,

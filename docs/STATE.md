@@ -4,6 +4,34 @@
 브랜치: `feat/209-district-benchmark-bundling-impl` (아래 날짜 절들은 각각 별개
 브랜치에서 진행돼 머지됐다).
 
+### 2026-10-22 추가 — PR #219 머지 전 재검토: `_store_peak_hour` dayType 분리
+
+리뷰(①)로 재확인된 "알려진 남은 이슈"(아래 2026-10-21 절의 Important #5)를 머지
+전에 바로 고쳤다 — 선택지 (a)/(b)/(c) 중 (b)에 해당하는 "dayType 별로 비교 필드를
+쪼갠다"를 택했다.
+
+- `app/services/insight_focus.py::_store_peak_hour(points, day_type)`에 `day_type`
+  인자가 추가됐다(이전엔 WEEKDAY/WEEKEND를 섞어 전역 최대 하나만 뽑았다). `assign()`
+  이 `_DAY_TYPES = ("WEEKDAY", "WEEKEND")`를 순회해 `vsDistrictSalesPeakWeekday`·
+  `vsDistrictSalesPeakWeekend`·`vsDistrictFootTrafficPeakWeekday`·
+  `vsDistrictFootTrafficPeakWeekend` 네 필드로 쪼갠다 — 그 dayType에 영업 중인
+  행이 없으면(`_store_peak_hour`가 `None`) 그 dayType 필드만 뺀다(기존 "계산 불가를
+  DIFFERENT로 단정하지 않는다" 원칙과 동일).
+- `app/prompts/insight.py`: 네 필드명과 "Weekday/Weekend 접미가 평일/주말 기준"
+  이라는 설명으로 규칙 갱신. VERSION → 2026-10-22.
+- `devtools/grade.py::_store_peak_hour`도 같은 시그니처로 맞췄다(parity). dayType별
+  두 피크가 **다른** 방향을 가리키면(평일 SAME·주말 DIFFERENT처럼) 본문 텍스트만
+  으로는 모델이 어느 dayType을 말하는지 가를 근거가 없어 `_band_direction_correct`
+  가 그 경우엔 방향 검사를 건너뛴다(둘 다 같은 방향일 때는 기존처럼 반전을 잡는다)
+  — `_band_mentioned`(인용 여부)는 안 건드렸다. `TARGET_INSIGHT_VERSION` →
+  2026-10-22.
+- 새 테스트: `tests/test_insight_focus.py::test_평일_주말_피크가_다른_밴드에_들면_dayType별로_다른_비교값을_받는다`·
+  `test_한쪽_dayType만_영업중이면_그_dayType만_비교값을_받는다`,
+  `tests/test_grade.py::test_평일_주말_피크가_같은_방향이면_방향_반전을_여전히_잡는다`·
+  `test_평일_주말_피크_방향이_다르면_본문만으로_못_갈라_판정을_보류한다`.
+- `uv run pytest -q` — 494 passed. `uv run ruff check . && uv run ruff format --check .`
+  — clean.
+
 ## 2026-10-21 — 상권(districtBenchmark) 인사이트 번들링 (Issue #209)
 
 전용 경쟁 축(고정 보충값 0.3)을 없애고 salesSummary(평균매출 비교)·hourlySales(피크
@@ -83,7 +111,7 @@
   셋째 문장만 상권 평균을 인용하도록 바꿨다.
 
 ### 마지막으로 통과한 것
-- `uv run pytest -q` — **490 passed**
+- `uv run pytest -q` — **494 passed** (2026-10-22 dayType 분리 포함)
 - `uv run ruff check --fix . && uv run ruff format .` — 통과, 추가 수정 없음
 - `uv run python -m devtools.contract_check --example sales-insights` —
   `districtBenchmark` 객체가 요청 예시에 그대로 나온다(요청 계약은 안 바뀌었다 —
@@ -105,24 +133,10 @@
   "A"의 "측정값의 한계" 참고).
 - solution의 weatherContext는 이번 범위 밖 — 7차 측정(#207 케이스 포함) 이후 별도
   판단.
-- `_store_peak_hour`가 `dayType`을 구분하지 않고 전역 최대 한 행의 시각을
-  "우리 매장 피크"로 쓴다 — WEEKDAY 15시·WEEKEND 12시처럼 요일 유형별 피크가
-  다르면, 코드가 고른 피크(예: WEEKEND 12시)와 모델이 실제로 읽는 행(예:
-  `_spread_rows`가 보여주는 WEEKDAY 15시)이 어긋날 수 있다(최종 리뷰 Important
-  #5). 채점기도 같은 함수를 복제해서 서비스·채점기는 일치하는데 **모델만**
-  일관되게 어긋나 `상권_피크밴드_반영`이 모델 실패가 아닌 이유로 낮게 나올 수
-  있다. 플랜·설계 문서(PR #210)가 지금 구현을 그대로 지정했고 `dayType`은
-  논의되지 않았다 — 구현 이탈이 아니라 플랜 결함이라 이번 웨이브에서는 고치지
-  않았다. 선택지: (a) 시각별 `menuSales` 합으로 피크를 계산(dayType 혼합 제거,
-  다만 그 시각이 `_spread_rows` 가 보여주는 행에 없을 수 있음) (b) 기준
-  `dayType`을 프롬프트에 같이 넘김(지표 밀도 증가 비용) (c) 유지 + 실측
-  해석 시 감안. `--n 20` 실측 전에 제나·헥터가 결정 필요.
 
 ### 미해결 결정
 - 노션 API 정의서의 districtBenchmark 확정 여부(PR #161부터 이어진 미해결 건) — 이번
   작업은 요청 계약을 안 건드려서 무관하지만, 리뷰 때 다시 확인 필요.
-- `_store_peak_hour`의 `dayType` 혼합(위 "다음 한 걸음" 참고) — 고칠지, 프롬프트에
-  `dayType`을 추가할지, 그대로 두고 실측 해석에 반영할지.
 
 ### 함정
 - `devtools/grade.py`는 `app` 패키지를 import하지 않는다(Colab 이식성) — 그래서
@@ -177,6 +191,16 @@
   경우를 구분 못 한다. 실제 선정 결과를 보고 싶으면 `insight_focus.assign()`을
   직접 호출해야 한다(`devtools/bench.py`가 `solution_focus`에 이미 그렇게 하는
   전례가 있다) — 이번 구현 범위에는 안 넣었다.
+- (2026-10-22 닫힘) `_store_peak_hour`가 처음엔 `dayType`을 구분하지 않고 전역
+  최대 한 행의 시각을 "우리 매장 피크"로 썼다 — WEEKDAY 15시·WEEKEND 12시처럼
+  요일 유형별 피크가 다르면, 코드가 고른 피크와 모델이 실제로 읽는 행이 어긋날
+  수 있었다(최종 리뷰 Important #5). `day_type` 인자를 추가해 평일·주말 피크를
+  따로 계산하고 비교 필드도 Weekday/Weekend 접미로 쪼개 고쳤다 — 선택지 (a)/(b)/
+  (c) 중 (b)를 택했다. 평일·주말 두 피크가 **다른** 방향을 가리키면
+  `devtools/grade.py::_district_band_reflected`가 본문만으로는 어느 dayType을
+  말하는지 못 가려 그 방향 검사를 건너뛴다(밴드 인용 자체는 여전히 요구) — 이
+  자체도 새로운 "측정 못 가르는 사각" 이지만, 둘 다 같은 방향일 때는 기존처럼
+  반전을 여전히 잡는다.
 
 ### 다음 측정에서 읽는 법 — `상권_피크밴드_반영`의 알려진 편향
 
@@ -188,13 +212,14 @@
 | anchor substring 오매칭("114건"→"11") | 측정값이 낮게 | 닫힘 — 숫자 토큰 비교 |
 | SAME/DIFFERENT 어간형 미탐 | 측정값이 높게 | 닫힘 — 정규식 음성 lookahead |
 | 밴드 포맷 깨짐 시 500 | 크래시(측정 불가) | 닫힘 — `_band_gate`로 조용히 탈락 |
+| `_store_peak_hour`의 `dayType` 혼합 | 측정값이 낮게 | 닫힘(2026-10-22) — dayType별 분리 |
 
 **남은** 편향(실측 숫자를 읽을 때 감안):
 
 | 편향 | 방향 | 비고 |
 |---|---|---|
-| `_store_peak_hour`의 `dayType` 혼합 | 측정값이 낮게 | Important #5, 미해결 — 위 참고 |
 | `_band_mentioned`의 밴드 간 숫자 공유 | 측정값이 높게 | 인용 여부만 느슨, 방향은 이미 고침 |
+| 평일·주말 피크 방향이 갈리면 방향 검사 보류 | 측정값이 높게(관대) | 2026-10-22 신규 — 본문만으로 dayType을 못 가름 |
 
 낮게/높게 두 편향이 섞여 있어 순효과를 예측할 수 없다 — 실측 숫자가 예상과
 다르면 바로 "모델이 못한다"로 해석하지 말고 이 표를 먼저 본다.

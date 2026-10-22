@@ -55,11 +55,18 @@ vsDistrictFootTrafficPeak 는 hourlySales 문장에 조건부로 묶여 들어�
 (vsDistrictSalesPeak·vsDistrictFootTrafficPeak)는 코드가 미리 계산해 주므로
 모델에게는 "그대로 따르라"고만 지시한다 — 두 밴드 레이블을 바꿔 말할 위험(설계
 리뷰)도 레이블 고정 문구로 같이 막는다.
+
+2026-10-22(#209 최종 리뷰 Important #5, PR #219 머지 전 재검토): hourlySales 는
+dayType(평일/주말)별로 행을 따로 보여주는데 피크 비교는 그 구분 없이 단일값이라,
+모델이 실제로 말하는 dayType 과 코드가 계산한 비교 방향이 어긋날 수 있었다.
+vsDistrictSalesPeak·vsDistrictFootTrafficPeak 를 Weekday/Weekend 접미로
+쪼개(app/services/insight_focus.py 참고) dayType 마다 맞는 비교값을 받게
+했다.
 """
 
 import json
 
-VERSION = "2026-10-21"
+VERSION = "2026-10-22"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -82,14 +89,18 @@ districtAvgMonthlySalesPerCafe 는 매장이 속한 행정동의 커피·음료 
 ABOVE 는 상권 평균보다 높음, BELOW 는 낮음, EQUAL 은 같음을 뜻합니다.
 peakSalesHourBand 는 반드시 "매출이 가장 많은 시간대"로, peakFootTrafficHourBand 는
 반드시 "유동인구가 가장 많은 시간대"로만 서술하세요 — 두 레이블을 바꿔 쓰지 마세요.
-vsDistrictSalesPeak·vsDistrictFootTrafficPeak 가 있으면 그 값을 그대로 따르고 직접
-비교하지 마세요 — SAME 은 우리 매장의 매출 피크 시간대가 그 밴드와 겹침, DIFFERENT 는
-안 겹침을 뜻합니다(vsDistrictSalesPeak 는 peakSalesHourBand, vsDistrictFootTrafficPeak
-는 peakFootTrafficHourBand 와 짝입니다). 이 두 필드가 없으면 우리 매장의 피크
-시간을 계산할 수 없었다는 뜻이니, 밴드 값만 그대로 전달하고 우리 매장과
-비교해서 "같다/다르다"를 직접 판단해 말하지 마세요. "상권이 좋아서/나빠서
-매출이 ~했다"처럼 상권 상태가 매출에 영향을 줬다고 주장하지 마세요 — 그런
-인과를 뒷받침할 지표가 없습니다.
+vsDistrictSalesPeakWeekday·vsDistrictSalesPeakWeekend·vsDistrictFootTrafficPeakWeekday·
+vsDistrictFootTrafficPeakWeekend 가 있으면 그 값을 그대로 따르고 직접 비교하지
+마세요 — Weekday 접미는 평일, Weekend 접미는 주말 매출 피크 시간대를 기준으로
+계산한 값입니다. SAME 은 그 요일 유형의 매출 피크 시간대가 해당 밴드와 겹침,
+DIFFERENT 는 안 겹침을 뜻합니다(SalesPeak 는 peakSalesHourBand,
+FootTrafficPeak 는 peakFootTrafficHourBand 와 짝입니다). 평일과 주말의
+비교 결과가 다를 수 있으니, 평일 얘기를 할 땐 Weekday 값을, 주말 얘기를 할
+땐 Weekend 값을 쓰세요. 특정 필드가 없으면 그 요일 유형은 매출 피크 시간을
+계산할 수 없었다는 뜻이니, 그 요일 유형과 밴드를 비교해서 "같다/다르다"를
+직접 판단해 말하지 마세요. "상권이 좋아서/나빠서 매출이 ~했다"처럼 상권
+상태가 매출에 영향을 줬다고 주장하지 마세요 — 그런 인과를 뒷받침할 지표가
+없습니다.
 무엇을 하라는 제안은 하지 말고, 데이터에서 관찰되는 사실만 말하세요.
 설명 없이 JSON만 출력하세요."""
 

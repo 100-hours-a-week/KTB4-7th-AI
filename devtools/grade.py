@@ -57,8 +57,15 @@ def strip_fence(raw: str) -> str:
 # `상권_평균매출_반영`·`상권_피크밴드_반영`(분모: 게이트 통과 + 해당 값이 문장에
 # 인용된 요청만, 수치뿐 아니라 비교 방향까지 확인)을 새로 잰다. 기존 항목은
 # 손대지 않았다.
+# 2026-10-22 는 vsDistrictSalesPeak·vsDistrictFootTrafficPeak 를 dayType(평일/주말)
+# 별로 쪼갠 변경이다(#209 최종 리뷰 Important #5, PR #219 머지 전 재검토) — 평일·
+# 주말 피크가 다른 방향을 가리킬 수 있는데 이전엔 섞은 단일 피크로만 비교했다.
+# `상권_피크밴드_반영`의 방향 판정이 dayType 별 두 비교값 중 어느 쪽이 맞는지
+# 가린다 — 두 dayType 의 방향이 서로 다르면 본문만으로는 어느 쪽을 말하는지 구분
+# 못 해 판정을 보류한다(아래 `_district_band_reflected` 참고). 밴드 인용 여부
+# 검사(`_band_mentioned`)는 손대지 않았다.
 TARGET_SOLUTION_VERSION = "2026-10-20"
-TARGET_INSIGHT_VERSION = "2026-10-21"
+TARGET_INSIGHT_VERSION = "2026-10-22"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
@@ -151,9 +158,13 @@ def _comparison(total_sales: int, district_avg: int) -> str:
     return "EQUAL"
 
 
+# app/services/insight_focus.py::_DAY_TYPES 와 같은 값이어야 한다.
+_DAY_TYPES = ("WEEKDAY", "WEEKEND")
+
+
 # app/services/insight_focus.py::_store_peak_hour·_in_band 와 같은 로직이어야 한다.
-def _store_peak_hour(points: list[dict]) -> int | None:
-    selling = [p for p in points if (p.get("menuSales") or 0) > 0]
+def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
+    selling = [p for p in points if p.get("dayType") == day_type and (p.get("menuSales") or 0) > 0]
     if not selling:
         return None
     return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
@@ -292,7 +303,7 @@ def _band_mentioned(body: str, band: str) -> bool:
     return start in numbers and end in numbers
 
 
-def _band_direction_correct(body: str, comparison: str, band: str, other_band: str) -> bool:
+def _band_direction_correct(body: str, comparisons: set[str], band: str, other_band: str) -> bool:
     """밴드 쪽 호출부 — anchor 로 두 밴드의 배타적 숫자(대칭차)를 쓴다.
 
     매출·유동인구 두 비교가 한 문장에 같이 있어 서로의 반대 어휘에 오염되지 않게
@@ -303,10 +314,17 @@ def _band_direction_correct(body: str, comparison: str, band: str, other_band: s
     완전히 올바른데, 매출 밴드 anchor "14" 가 첫 절에도 걸려 결함으로 셌다
     (#209 최종 리뷰 Important #1). 공유 숫자를 뺀 숫자로만 절을 고른다 — 두 밴드가
     완전히 같으면 배타적 숫자가 없고, 그때는 비교 자체가 무의미해 검사를 건너뛴다.
+
+    comparisons 는 dayType(평일/주말) 별로 계산된 비교값의 집합이다(2026-10-22,
+    #209 최종 리뷰 Important #5) — 평일·주말 피크가 다른 방향을 가리키면 두 값이
+    섞여 들어온다. 이때 본문만으로는 모델이 어느 dayType 을 말하는지 구분할 수
+    없어, 어느 방향 어휘든 "그 dayType 기준으로는 맞을 수 있다"고 보고 검사를
+    건너뛴다 — 없는 근거로 결함을 만들지 않는다(`_direction_correct` 와 같은 원칙).
     """
     exclusive = set(band.split("-")) - set(other_band.split("-"))
-    if not exclusive:
+    if not exclusive or len(comparisons) != 1:
         return True
+    (comparison,) = comparisons
     return all(_direction_correct(body, comparison, anchor) for anchor in exclusive)
 
 
@@ -331,17 +349,20 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
         return None
     if not (sales_mentioned and traffic_mentioned):
         return False
-    peak_hour = _store_peak_hour(metrics.get("hourlySales") or [])
-    if peak_hour is None:
-        # 우리 매장 피크를 계산할 수 없었던 달이다(app 쪽과 같은 이유로
-        # vsDistrictSalesPeak/vsDistrictFootTrafficPeak 가 안 보내진다) — 비교를
-        # 요구하지 않고 둘 다 인용됐는지만으로 통과시킨다.
+    hourly = metrics.get("hourlySales") or []
+    peak_hours = [h for h in (_store_peak_hour(hourly, dt) for dt in _DAY_TYPES) if h is not None]
+    if not peak_hours:
+        # 평일·주말 둘 다 우리 매장 피크를 계산할 수 없었던 달이다(app 쪽과 같은
+        # 이유로 비교 필드가 안 보내진다) — 비교를 요구하지 않고 둘 다 인용됐는지만
+        # 본다.
         return True
-    sales_comparison = "SAME" if _in_band(peak_hour, sales_band) else "DIFFERENT"
-    traffic_comparison = "SAME" if _in_band(peak_hour, traffic_band) else "DIFFERENT"
+    sales_comparisons = {("SAME" if _in_band(h, sales_band) else "DIFFERENT") for h in peak_hours}
+    traffic_comparisons = {
+        ("SAME" if _in_band(h, traffic_band) else "DIFFERENT") for h in peak_hours
+    }
     return _band_direction_correct(
-        body, sales_comparison, sales_band, traffic_band
-    ) and _band_direction_correct(body, traffic_comparison, traffic_band, sales_band)
+        body, sales_comparisons, sales_band, traffic_band
+    ) and _band_direction_correct(body, traffic_comparisons, traffic_band, sales_band)
 
 
 _DOW_KO = {

@@ -39,6 +39,16 @@ peakFootTrafficHourBand 의 포맷을 검증하지 않아서, BE 가 그 문자�
 터져 상권 붙은 모든 인사이트 요청이 500 이 된다 — 이 번들링 변경 전에는 밴드
 문자열을 파싱 없이 그대로 프롬프트에 넘겨서 이 크래시 경로가 없었다. 게이트에서
 포맷이 안 맞으면 조용히 탈락시킨다 — 상권만 빠지고 인사이트는 정상 생성된다.
+
+2026-10-22(#209 최종 리뷰 Important #5, PR #219 머지 전 재검토): _store_peak_hour 가
+dayType 을 구분하지 않고 전역 최대 한 행의 시각을 "우리 매장 피크"로 썼다.
+hourlySales 의 다른 모든 구성(_spread_rows)은 dayType 별로 따로 행을 고르는데,
+비교 방향(vsDistrictSalesPeak 등)만 평일·주말을 섞은 단일 피크로 계산되면,
+모델이 실제로 묘사하는 행(예: WEEKDAY 15 시)과 코드가 계산한 피크(예: WEEKEND
+12 시)가 달라 방향이 어긋날 수 있다. dayType 별로 피크를 따로 계산해 비교
+필드도 dayType 별로 쪼갰다(vsDistrictSalesPeakWeekday/Weekend,
+vsDistrictFootTrafficPeakWeekday/Weekend) — 어느 dayType 피크를 모델이
+말해도 그에 맞는 비교값을 받는다.
 """
 
 import re
@@ -162,9 +172,15 @@ def _band_gate(district: dict | None) -> bool:
     )
 
 
-def _store_peak_hour(points: list[dict]) -> int | None:
-    """영업 중(menuSales > 0)인 행 중 매출이 가장 높은 시간. 없으면 None."""
-    selling = _selling(points)
+# hourlySales 의 dayType 값 — BE 계약상 고정 2 종(2026-10-22).
+_DAY_TYPES = ("WEEKDAY", "WEEKEND")
+
+
+def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
+    """dayType 이 day_type 인, 영업 중(menuSales > 0)인 행 중 매출이 가장 높은 시간.
+    없으면 None.
+    """
+    selling = [p for p in _selling(points) if p.get("dayType") == day_type]
     if not selling:
         return None
     return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
@@ -206,12 +222,15 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
         if key == "hourlySales" and _district_gate(district) and _band_gate(district):
             focus["peakSalesHourBand"] = district["peakSalesHourBand"]
             focus["peakFootTrafficHourBand"] = district["peakFootTrafficHourBand"]
-            peak_hour = _store_peak_hour(points)
-            if peak_hour is not None:
-                focus["vsDistrictSalesPeak"] = (
+            for day_type in _DAY_TYPES:
+                peak_hour = _store_peak_hour(points, day_type)
+                if peak_hour is None:
+                    continue
+                label = day_type.capitalize()
+                focus[f"vsDistrictSalesPeak{label}"] = (
                     "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
                 )
-                focus["vsDistrictFootTrafficPeak"] = (
+                focus[f"vsDistrictFootTrafficPeak{label}"] = (
                     "SAME"
                     if _in_band(peak_hour, district["peakFootTrafficHourBand"])
                     else "DIFFERENT"

@@ -192,15 +192,15 @@ HOURLY_METRICS = {
 
 
 def test_시간대_축이_선정되면_상권_피크시간대가_같이_묻는다():
-    """우리 매장 매출 피크(11시)는 peakSalesHourBand(14-17)엔 안 들고
+    """우리 매장 매출 피크(평일 11시)는 peakSalesHourBand(14-17)엔 안 들고
     peakFootTrafficHourBand(11-14)엔 든다."""
     focus = assign({**HOURLY_METRICS, "districtBenchmark": DISTRICT}, max_count=4)
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert hourly_focus["peakSalesHourBand"] == "14-17"
     assert hourly_focus["peakFootTrafficHourBand"] == "11-14"
-    assert hourly_focus["vsDistrictSalesPeak"] == "DIFFERENT"
-    assert hourly_focus["vsDistrictFootTrafficPeak"] == "SAME"
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekday"] == "SAME"
 
 
 def test_우리_매출_피크가_상권_매출_피크와_겹치면_SAME():
@@ -208,7 +208,39 @@ def test_우리_매출_피크가_상권_매출_피크와_겹치면_SAME():
     focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
-    assert hourly_focus["vsDistrictSalesPeak"] == "SAME"
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "SAME"
+
+
+def test_평일_주말_피크가_다른_밴드에_들면_dayType별로_다른_비교값을_받는다():
+    """#209 최종 리뷰 Important #5 재현 — 평일 피크(11시)는 peakFootTrafficHourBand
+    (11-14)와 겹치고(SAME), 주말 피크(15시)는 peakSalesHourBand(14-17)와 겹친다
+    (SAME). dayType 을 안 구분하고 전역 최대 하나만 뽑으면(옛 구현) 주말 15시가
+    전역 피크가 돼 평일 피크(11시) 기준 비교가 통째로 사라졌다."""
+    hours = [
+        {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
+        {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
+    ]
+    focus = assign({**METRICS, "hourlySales": hours, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekday"] == "SAME"
+    assert hourly_focus["vsDistrictSalesPeakWeekend"] == "SAME"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekend"] == "DIFFERENT"
+
+
+def test_한쪽_dayType만_영업중이면_그_dayType만_비교값을_받는다():
+    """주말 행이 전부 0 원(휴무)이면 주말 비교 필드는 안 보내고 평일만 보낸다."""
+    hours = [
+        {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
+        {"dayType": "WEEKEND", "hour": 12, "menuSales": 0, "orderCount": 0},
+    ]
+    focus = assign({**METRICS, "hourlySales": hours, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert "vsDistrictSalesPeakWeekend" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekend" not in hourly_focus
 
 
 def test_상권_필드가_없으면_시간대_축에_안_묻는다():
@@ -217,8 +249,8 @@ def test_상권_필드가_없으면_시간대_축에_안_묻는다():
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert "peakSalesHourBand" not in hourly_focus
     assert "peakFootTrafficHourBand" not in hourly_focus
-    assert "vsDistrictSalesPeak" not in hourly_focus
-    assert "vsDistrictFootTrafficPeak" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
 
 
 def test_표본이_너무_적은_상권은_시간대_축에_안_묻는다():
@@ -239,7 +271,7 @@ def test_밴드_포맷이_깨지면_시간대_축에_안_묻고_500으로_안_�
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert "peakSalesHourBand" not in hourly_focus
-    assert "vsDistrictSalesPeak" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
 
 
 def test_밴드_포맷이_깨져도_매출요약의_상권_평균은_그대로_묻는다():
@@ -268,5 +300,5 @@ def test_영업중인_행이_없으면_피크_비교_필드를_안_넣는다():
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert hourly_focus["peakSalesHourBand"] == "14-17"
-    assert "vsDistrictSalesPeak" not in hourly_focus
-    assert "vsDistrictFootTrafficPeak" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
