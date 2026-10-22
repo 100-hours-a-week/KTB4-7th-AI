@@ -1,3 +1,4 @@
+import logging
 import re
 
 import anthropic
@@ -18,6 +19,8 @@ from app.core.config import (
     uses_local_llm_server,
 )
 from app.core.errors import ApiError
+
+logger = logging.getLogger(__name__)
 
 _clients: dict[str, object] = {}
 
@@ -161,6 +164,27 @@ async def _vllm_healthy() -> bool:
         return False
 
 
+def _log_fallback(reason: str) -> None:
+    """폴백이 실제로 발동했음을 남긴다.
+
+    2026-10-19 설계에 "폴백 발생 시 logger.warning" 이 적혀 있었는데 구현이 빠져
+    있었다(2026-10-20 제나 발견, 이슈 #220). 그래서 운영 전환용 env var 를 다 넣고
+    재배포까지 했는데도 **GPU 가 실제로 쓰이는지 아무도 확인하지 못했다** — GPU 가
+    죽어 Claude 로 넘어가도 조용히 넘어가고, 비용이 그쪽으로 새도 모른다.
+
+    WARNING 이다. 정상 동작이 아니라 "GPU 가 안 쓰이고 있다" 는 신호다.
+    **프롬프트·응답 본문은 남기지 않는다** — provider·모델·사유뿐이다.
+    """
+    logger.warning(
+        "LLM 폴백 primary=%s:%s → fallback=%s:%s 사유=%s",
+        settings.llm_provider,
+        settings.llm_model,
+        settings.llm_fallback_provider,
+        settings.llm_fallback_model,
+        reason,
+    )
+
+
 async def should_use_fallback() -> bool:
     """지금 이 호출을 primary 대신 LLM_FALLBACK_PROVIDER로 보내야 하면 True.
 
@@ -201,6 +225,7 @@ async def resolve_primary_or_fallback() -> tuple[str, str, bool]:
     complete()는 같은 결정을 내부에서 직접 한다 — 단발 호출이라 모델을 미리 안 만든다.
     """
     if await should_use_fallback():
+        _log_fallback("차단기 열림 — primary 를 건너뛴다")
         return settings.llm_fallback_provider, settings.llm_fallback_model, True
     return settings.llm_provider, settings.llm_model, False
 
@@ -316,6 +341,8 @@ async def complete(
     시도는 원래 timeout 그대로 쓴다.
     """
     use_fallback = await should_use_fallback()
+    if use_fallback:
+        _log_fallback("차단기 열림 — primary 를 건너뛴다")
     provider = settings.llm_fallback_provider if use_fallback else settings.llm_provider
     model = settings.llm_fallback_model if use_fallback else settings.llm_model
     attempt_timeout = timeout if use_fallback else _primary_timeout(timeout)
@@ -328,6 +355,7 @@ async def complete(
             # 가용성 문제가 아니면(영구 오류 등) 그대로 올린다 — 기존 동작과 동일.
             raise
         record_failure()
+        _log_fallback(f"primary 호출 실패 — {exc.code}")
         return await _complete_once(
             settings.llm_fallback_provider,
             settings.llm_fallback_model,

@@ -364,3 +364,83 @@ async def test_토큰을_이미_보낸_뒤_실패하면_전환하지_않는다(m
     assert "AI_TIMEOUT" in text
     assert text.rstrip().endswith("data: [DONE]")
     assert build_count == 1, "이미 토큰을 보낸 뒤라 fallback으로 다시 만들면 안 된다"
+
+
+# ── 폴백 로그 (2026-10-22, 이슈 #220) ────────────────────────────────
+# 2026-10-19 설계에 "폴백 발생 시 logger.warning" 이 적혀 있었는데 구현이 빠져
+# 있었다. 그래서 운영 전환용 env var 를 다 넣고 재배포까지 하고도 GPU 가 실제로
+# 쓰이는지 아무도 확인하지 못했다 — 죽어서 Claude 로 넘어가도 조용히 넘어간다.
+
+
+def _fallback_lines(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if "LLM 폴백" in r.getMessage()]
+
+
+async def test_primary_실패로_넘어가면_사유와_함께_남는다(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: _RaisingOpenAI(_provider_error(None)))
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        await llm.complete("sys", "user")
+
+    line = _fallback_lines(caplog)[0]
+    assert "openai:qwen-primary" in line
+    assert "anthropic:claude-fallback" in line
+    assert "primary 호출 실패" in line
+
+
+async def test_차단기가_열려_있으면_건너뛴_것으로_남는다(monkeypatch, caplog):
+    """primary 를 아예 안 부른 경우다 — "쓰다 넘어간 것" 과 구분돼야 한다."""
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+    for _ in range(3):
+        llm.record_failure()  # 임계치까지 실패시켜 차단기를 연다
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        await llm.complete("sys", "user")
+
+    assert "차단기 열림" in _fallback_lines(caplog)[0]
+
+
+async def test_폴백이_꺼져_있으면_로그도_안_남는다(monkeypatch, caplog):
+    """기본값 운영(anthropic 단독)에서는 이 로그가 아예 없어야 한다."""
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_model", "claude-sonnet-4-5")
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        await llm.complete("sys", "user")
+
+    assert _fallback_lines(caplog) == []
+
+
+async def test_로그에_프롬프트와_응답이_안_남는다(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: _RaisingOpenAI(_provider_error(None)))
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        await llm.complete("비밀-시스템-프롬프트", "비밀-사용자-입력")
+
+    line = _fallback_lines(caplog)[0]
+    assert "비밀-시스템-프롬프트" not in line
+    assert "비밀-사용자-입력" not in line
+    assert "fallback-ok" not in line
+
+
+async def test_챗봇_경로에서도_남는다(monkeypatch, caplog):
+    """app/api/chat.py 는 모델을 미리 만들어야 해서 별도 경로를 탄다."""
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    for _ in range(3):
+        llm.record_failure()
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        provider, model, used = await llm.resolve_primary_or_fallback()
+
+    assert (provider, model, used) == ("anthropic", "claude-fallback", True)
+    assert "차단기 열림" in _fallback_lines(caplog)[0]
