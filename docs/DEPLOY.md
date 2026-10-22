@@ -182,6 +182,30 @@ BE 재시도 정책이 504 를 재시도 대상으로 둔다. 실제로 그 경�
 
 500(생성 실패)은 모델 응답이 깨져야 나와서 환경변수로 재현할 수 없다.
 
+## GPU Pod 재배포 체크리스트
+
+RunPod A40 Pod를 새로 띄울 때(재고 부족으로 다른 Pod를 사는 경우 포함) 빠뜨리기 쉬운 것들.
+
+- [ ] `infra/vllm/serve.sh`·`watchdog.sh`로 vLLM 기동 (`VLLM_API_KEY` export 필요)
+- [ ] AI 컨테이너 쪽 env var 7개 갱신: `LLM_PROVIDER`·`LLM_BASE_URL`(새 Pod의 proxy
+  URL, `.../v1` 접미사 필수)·`LLM_MODEL`·`LLM_DISABLE_THINKING`·`LLM_FALLBACK_PROVIDER`·
+  `LLM_FALLBACK_MODEL`·`OPENAI_API_KEY`(Pod의 `VLLM_API_KEY`와 동일 값) — 클라우드팀에
+  전달 + "이 커밋 SHA 이후 이미지인지" 같이 확인(`docs/STATE.md` 2026-10-20 절 참고)
+- [ ] **관측(Grafana) 설정** (2026-10-22 추가) — RunPod Secrets에 `memme_cf_client_id`·
+  `memme_cf_client_secret` 등록 → Pod Environment Variables에
+  `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`(`{{ RUNPOD_SECRET_... }}` 참조) 추가 →
+  Container Start Command에서 기존 watchdog 실행 앞에
+  `MEMME_OBS_LOG_FILE=/root/vllm_serve.log bash /workspace/memme-obs/start-observability.sh;`
+  한 줄 추가. `RUNPOD_POD_ID`도 같이 넘긴다 — Pod 안에서는 컨테이너 init 환경에 자동으로
+  들어 있지만(`/proc/1/environ`) **SSH 로그인 쉘에는 안 물려받아져서** 수동 실행 시 빠지기
+  쉽다. 빠지면 Grafana에서 `pod_id`가 `unknown`으로 찍혀 Pod를 재생성해도 이전 Pod와
+  구분이 안 된다(클라우드팀 피드백, 2026-10-22). Container Start Command로 자동 기동할
+  때는 컨테이너 환경에서 그대로 읽히므로 문제없다 — SSH 수동 실행에서만 명시적으로
+  `RUNPOD_POD_ID=<pod id>`를 같이 넘기면 된다. 빠뜨리면 새 Pod는 Grafana에 아무것도 안 보인다 — 이번에 처음 그 상태로
+  한동안 운영했었다.
+- [ ] 재배포 후 실제 요청으로 확인(`uv run python -m devtools.llm_smoke`) — 설정이 틀려도
+  기동은 성공하므로 "떠 있다"와 "제대로 받는다"는 다른 확인이다(위 "주의" 절 참고)
+
 ## 이미지 배포
 
 ECR push 는 **돌고 있다**(#85, OIDC). 필요한 GitHub 레포 변수 4개
