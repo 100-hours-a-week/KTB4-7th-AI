@@ -134,6 +134,7 @@ async def _stream(
             ):
                 if not llm.is_capacity_error(exc):
                     llm.record_failure()
+                llm.log_fallback(f"primary 호출 실패 — {exc.code}")
                 tried_fallback = True
                 model = chat_graph.get_model(
                     tools, settings.llm_fallback_provider, settings.llm_fallback_model

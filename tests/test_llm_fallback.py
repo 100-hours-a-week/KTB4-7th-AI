@@ -313,7 +313,10 @@ async def test_연속_실패가_임계치에_닿으면_breaker가_열려_primary
 # 깔아두는데, 여기선 챗봇의 primary를 anthropic:claude-primary로 재설정한다.
 
 
-async def test_breaker가_열려있으면_primary_모델을_안_만들고_fallback으로_바로_간다(monkeypatch):
+async def test_breaker가_열려있으면_primary_모델을_안_만들고_fallback으로_바로_간다(
+    monkeypatch, caplog
+):
+    """GPU가 이미 다운인 걸 알고 있는 경우(breaker open) — 로그로 구분 가능해야 한다."""
     monkeypatch.setattr(settings, "llm_provider", "anthropic")
     monkeypatch.setattr(settings, "llm_model", "claude-primary")
     opened = CircuitBreaker(failure_threshold=1, cooldown_seconds=9999.0)
@@ -330,14 +333,20 @@ async def test_breaker가_열려있으면_primary_모델을_안_만들고_fallba
 
     monkeypatch.setattr(chat_graph, "get_model", spy_get_model)
 
-    res = await _post(REQUEST_BODY)
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
     assert "".join(_answer_chunks(res.text)) == "폴백 답변"
     assert built_with == [("anthropic", "claude-fallback")]
+    assert "차단기 열림" in _fallback_lines(caplog)[0]
 
 
-async def test_첫_토큰_전_실패면_fallback으로_전환해_에러_없이_끝난다(monkeypatch):
+async def test_첫_토큰_전_실패면_fallback으로_전환해_에러_없이_끝난다(monkeypatch, caplog):
+    """GPU가 이번 요청에서 처음 응답을 못한 경우(타임아웃 등 가용성 문제) — breaker가
+    아직 안 열려 있던 상태에서도 로그로 전환 사실이 남아야 한다(2026-10-22, 이슈 #224
+    리뷰 중 발견 — record_failure()만 부르고 로그가 안 남아 "LLM 폴백" 검색으로도
+    이 경로의 전환이 안 보이던 공백)."""
     monkeypatch.setattr(settings, "llm_provider", "anthropic")
     monkeypatch.setattr(settings, "llm_model", "claude-primary")
     monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
@@ -358,12 +367,16 @@ async def test_첫_토큰_전_실패면_fallback으로_전환해_에러_없이_�
 
     monkeypatch.setattr(chat_graph, "get_model", spy_get_model)
 
-    res = await _post(REQUEST_BODY)
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
     assert _error_events(res.text) == []
     assert "".join(_answer_chunks(res.text)) == "폴백 답변"
     assert built_with == [("anthropic", "claude-primary"), ("anthropic", "claude-fallback")]
+    line = _fallback_lines(caplog)[0]
+    assert "primary 호출 실패" in line
+    assert "AI_TIMEOUT" in line
 
 
 class _ContextLengthOpenAIError(openai.OpenAIError):
@@ -381,7 +394,7 @@ class _ContextLengthOpenAIError(openai.OpenAIError):
         )
 
 
-async def test_챗봇에서도_컨텍스트_초과는_fallback을_쓰고_breaker를_안_연다(monkeypatch):
+async def test_챗봇에서도_컨텍스트_초과는_fallback을_쓰고_breaker를_안_연다(monkeypatch, caplog):
     """app/api/chat.py의 _stream()은 llm.complete()와 별도 호출 경로라 똑같이 확인한다."""
     monkeypatch.setattr(settings, "llm_provider", "anthropic")
     monkeypatch.setattr(settings, "llm_model", "claude-primary")
@@ -397,12 +410,14 @@ async def test_챗봇에서도_컨텍스트_초과는_fallback을_쓰고_breaker
 
     monkeypatch.setattr(chat_graph, "get_model", spy_get_model)
 
-    res = await _post(REQUEST_BODY)
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
     assert _error_events(res.text) == []
     assert "".join(_answer_chunks(res.text)) == "폴백 답변"
     assert breaker.should_skip() is False, "컨텍스트 초과는 breaker를 열면 안 된다"
+    assert "primary 호출 실패" in _fallback_lines(caplog)[0]
 
 
 async def test_토큰을_이미_보낸_뒤_실패하면_전환하지_않는다(monkeypatch):
