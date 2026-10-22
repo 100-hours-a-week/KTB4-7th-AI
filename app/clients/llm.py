@@ -130,8 +130,30 @@ def _provider_status(exc: Exception) -> int | None:
     return None
 
 
+# vLLM이 --max-model-len(infra/vllm/serve.sh, 8192)을 넘는 프롬프트에 돌려주는 400의
+# 본문 문구. 2026-10-22 챗봇 전면 장애 — 히스토리가 쌓인 대화가 로컬 vLLM 컨텍스트를
+# 넘겨 400이 났는데, 400이 영구 오류로 묶여 있어 Claude(컨텍스트 훨씬 큼)로도 못 넘어가고
+# 그대로 실패했다. 모델명 오설정 등 "다시 불러도 안 되는" 다른 400과 성격이 달라 분리한다.
+_CONTEXT_LENGTH_ERROR = re.compile(r"maximum context length", re.IGNORECASE)
+
+
+def _is_context_length_error(cause: Exception) -> bool:
+    return _provider_status(cause) == 400 and bool(_CONTEXT_LENGTH_ERROR.search(str(cause)))
+
+
+def is_capacity_error(exc: ApiError) -> bool:
+    """breaker가 "GPU 가용성" 신호로 취급하면 안 되는 폴백 사유인가.
+
+    컨텍스트 초과는 이 요청이 크다는 뜻이지 GPU가 죽었다는 신호가 아니다. 이걸로
+    breaker 실패를 기록하면, 쌓인 대화 하나가 연속으로 임계치를 넘겨 breaker가 열리고
+    그 쿨다운 동안 무관한 짧은 요청까지 전부 Claude로 샌다(2026-10-22).
+    """
+    return _is_context_length_error(exc.__cause__)
+
+
 def is_fallback_eligible(exc: ApiError) -> bool:
-    """가용성 문제(연결실패·타임아웃·5xx)면 True — 그때만 fallback provider로 넘긴다.
+    """가용성 문제(연결실패·타임아웃·5xx)거나 컨텍스트 초과면 True — 그때만 fallback
+    provider로 넘긴다.
 
     exc.__cause__ 로 원본 SDK 예외를 본다(전부 `raise ... from exc`로 체인돼 있다).
     원인이 없으면(예: 지원 안 하는 LLM_PROVIDER 설정 오류) 가용성 문제가 아니므로 False.
@@ -142,6 +164,8 @@ def is_fallback_eligible(exc: ApiError) -> bool:
     if cause is None:
         return False
     if isinstance(cause, (anthropic.APITimeoutError, openai.APITimeoutError, TimeoutError)):
+        return True
+    if _is_context_length_error(cause):
         return True
     return _provider_status(cause) not in _PERMANENT_PROVIDER_STATUSES
 
@@ -354,7 +378,8 @@ async def complete(
             # 이미 fallback을 쓰고 있었거나(더 넘어갈 데 없음), 기능이 꺼져 있거나,
             # 가용성 문제가 아니면(영구 오류 등) 그대로 올린다 — 기존 동작과 동일.
             raise
-        record_failure()
+        if not is_capacity_error(exc):
+            record_failure()
         _log_fallback(f"primary 호출 실패 — {exc.code}")
         return await _complete_once(
             settings.llm_fallback_provider,

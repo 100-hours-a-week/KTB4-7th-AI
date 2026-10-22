@@ -42,10 +42,19 @@ from app.services.chat.tools import build_tools
 
 router = APIRouter(prefix="/internal/v1/ai", dependencies=[Depends(verify_internal_token)])
 
+# ChatRequest.history(app/schemas/chat.py)에 길이 제한이 없어 BE가 쌓인 대화를 그대로
+# 보내면 시스템 프롬프트 + 툴 스키마 7종 + 히스토리가 로컬 vLLM의 --max-model-len
+# (infra/vllm/serve.sh, 8192)을 넘긴다 — 2026-10-22 챗봇 전면 장애 원인. 정확한 토큰
+# 수가 아니라 메시지 개수로 자르는 근사치지만, Qwen 토크나이저 없이도 바로 적용 가능한
+# 보수적인 안전장치다. 넘겨도 fallback(llm.is_capacity_error)이 받아주지만, 그쪽은
+# GPU 활용을 포기하고 Claude로 새는 경로라 여기서 먼저 줄여 빈도를 낮춘다.
+MAX_HISTORY_MESSAGES = 12
+
 
 def _to_lc_messages(history: list[ChatMessage]) -> list:
     role_map = {"USER": HumanMessage, "ASSISTANT": AIMessage}
-    return [role_map[m.role](m.content) for m in history]
+    recent = history[-MAX_HISTORY_MESSAGES:]
+    return [role_map[m.role](m.content) for m in recent]
 
 
 def _sse(content: str, evidence: dict | None) -> str:
@@ -123,7 +132,8 @@ async def _stream(
                 and settings.llm_fallback_provider
                 and llm.is_fallback_eligible(exc)
             ):
-                llm.record_failure()
+                if not llm.is_capacity_error(exc):
+                    llm.record_failure()
                 tried_fallback = True
                 model = chat_graph.get_model(
                     tools, settings.llm_fallback_provider, settings.llm_fallback_model
