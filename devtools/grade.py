@@ -353,8 +353,7 @@ def _band_direction_correct(body: str, comparisons: set[str], band: str, other_b
 
 
 def _district_band_reflected(body: str, metrics: dict) -> bool | None:
-    """게이트를 통과하고, 서비스가 실제로 줬을 밴드가 하나라도 언급됐을 때만
-    유효한 측정이다.
+    """게이트를 통과하고, hourlySales 가 선정됐을 때만 유효한 측정이다.
 
     2026-10-23 부터 두 밴드는 독립적으로 포함 여부가 갈린다(app/services/
     insight_focus.py::_apply_band 참고) — 전부 SAME 이라 서비스가 애초에
@@ -364,12 +363,17 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     확인한다 — DIFFERENT라서 줬는데 모델이 방향을 틀리거나 안 언급하면 여전히
     결함이다.
 
-    한계(최종 리뷰, 2026-10-23): SAME이라 생략된 밴드를 모델이 그래도 멋대로
-    말하면 이 함수는 "언급됐다"고 보고 방향만 확인한다 — 애초에 안 준 숫자를
-    모델이 안다는 것 자체는 못 잡는다. `metrics`가 focus 블록이 아니라 전체
-    지표라 `UNGROUNDED_NUMBER`도 못 잡는다(그 숫자가 `districtBenchmark`엔
-    실제로 존재하니까). 이건 이 지표의 범위 밖이고, 실제 방지책은 프롬프트
-    쪽(주어진 필드만 언급하라는 지시)이다.
+    선정 판정(최종 리뷰, 2026-10-24 Important #1): 예전엔 "두 밴드 숫자 중
+    하나도 안 보이면 hourlySales 가 선정 안 된 것"으로 봤는데, 이 전제가
+    깨졌다 — 두 밴드가 둘 다 DIFFERENT라 서비스가 둘 다 줬는데 모델이 둘 다
+    빠뜨린 경우도 똑같이 "밴드가 안 보임"이라 None(측정 대상 아님)으로
+    새면서, 가장 심한 누락이 반영률 분모에서 빠졌다. `_district_avg_reflected`
+    가 이미 쓰는 `_axis_selected`(그 축 자체의 숫자가 문장에 있는지)를 OR로
+    더해 판정한다 — 밴드 숫자가 안 보여도 축 자체가 선정된 걸 알면 그때는
+    "선정 안 됨"이 아니라 진짜 누락(False)이다. 밴드 숫자만으로도 선정이
+    맞다(기존 경로 유지) — 피크를 못 구해 상권 밴드만 언급하는 문장(비교
+    필드가 없는 경우, 2026-10-21(5))은 `_axis_selected`가 False여도 여전히
+    선정으로 잡아야 하기 때문이다.
     """
     district = metrics.get("districtBenchmark")
     if not _district_gate(district) or not _band_gate(district):
@@ -378,7 +382,7 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     traffic_band = district["peakFootTrafficHourBand"]
     sales_mentioned = _band_mentioned(body, sales_band)
     traffic_mentioned = _band_mentioned(body, traffic_band)
-    if not sales_mentioned and not traffic_mentioned:
+    if not (sales_mentioned or traffic_mentioned or _axis_selected(body, metrics, "hourlySales")):
         return None  # 이번엔 hourlySales 가 선정 안 된 것으로 본다
 
     hourly = metrics.get("hourlySales") or []

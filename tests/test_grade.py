@@ -759,6 +759,26 @@ def test_한쪽_밴드만_DIFFERENT로_주어지면_그것만_언급해도_통�
     assert result["상권_피크밴드_반영"] is True
 
 
+def test_선정된_hourlySales가_두_밴드를_모두_누락하면_결함으로_잡는다():
+    """매장 피크(15시)가 두 밴드(11-14, 17-21) 모두와 달라(DIFFERENT) 서비스가
+    둘 다 줬을 텐데, 모델이 둘 다 언급 안 하면 결함(False)이어야 한다 —
+    hourlySales 자체는 선정됐으니(_axis_selected) "선정 안 됨"(None)으로
+    봐주면 안 된다(최종 리뷰 Important #1 — 기존엔 밴드 두 개 다 언급 안 되면
+    축 선정 여부와 무관하게 무조건 None을 돌렸다)."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "hourlySales": [{"dayType": "WEEKDAY", "hour": 15, "menuSales": 500000, "orderCount": 60}],
+        "districtBenchmark": {
+            **_DISTRICT_METRICS["districtBenchmark"],
+            "peakSalesHourBand": "11-14",
+            "peakFootTrafficHourBand": "17-21",
+        },
+    }
+    result = _district_insight("오후 3시(15시)에 매출이 가장 많습니다.", metrics=metrics)
+
+    assert result["상권_피크밴드_반영"] is False
+
+
 def test_시간대축이_선정_안_되면_상권_피크밴드_반영은_측정_대상이_아니다():
     """두 밴드 숫자 중 어느 것도 안 나왔으면 이번엔 hourlySales 가 선정 안 된 것으로
     본다 — 결함이 아니라 None 이어야 분모에서 빠진다."""
