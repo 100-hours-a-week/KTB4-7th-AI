@@ -266,11 +266,17 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
         focus = {key: _spread_rows(points, order_key)}
         if key == "hourlySales" and _district_gate(district) and _band_gate(district):
             _apply_band(
-                focus, points, "peakSalesHourBand", "vsDistrictSalesPeak",
+                focus,
+                points,
+                "peakSalesHourBand",
+                "vsDistrictSalesPeak",
                 district["peakSalesHourBand"],
             )
             _apply_band(
-                focus, points, "peakFootTrafficHourBand", "vsDistrictFootTrafficPeak",
+                focus,
+                points,
+                "peakFootTrafficHourBand",
+                "vsDistrictFootTrafficPeak",
                 district["peakFootTrafficHourBand"],
             )
         candidates.append((focus, _spread(points) if points else -1.0))
