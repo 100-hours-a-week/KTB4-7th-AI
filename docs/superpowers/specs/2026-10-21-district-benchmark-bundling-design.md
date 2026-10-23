@@ -54,6 +54,52 @@
   `salesSummary_선정률`/`hourlySales_선정률`이 실제 `assign()` 선정이 아니라
   생성된 문장에서 추정한 값이라는 한계는 문서화만 하고(아래 "A"), 실측 벤치마크에
   실제 선정 축을 같이 찍는 건 이번 범위 밖으로 미뤘다.
+- 2026-10-23: 사용자가 "매장과 상권의 매출 피크 시간대가 같다는 걸 굳이 말할
+  필요는 없다"고 지적했다 — "우리 카페 평일 매출 피크는 14시, 행정동 카페 업종
+  매출 피크도 11~14시"처럼 SAME인 비교는 "다른 가게처럼 바쁘다"는 당연한 사실만
+  남아 점주에게 전달할 가치가 거의 없다. 지금까지는 SAME/DIFFERENT 판정값만 모델에
+  주고 "그 밴드를 언급할지"는 모델 판단에 맡겼는데(2026-10-21(6)), 이걸 LLM
+  프롬프트가 아니라 **인사이트 후보 선정 단계(코드)**에서 거르기로 했다 — 아래
+  "3) SAME이면 밴드 생략" 참고. `salesSummary` + `districtAvgMonthlySalesPerCafe`
+  (위 "1)") 쪽은 게이트를 안 둔다 — 두 금액이 우연히 정확히 같을 일이 거의 없어
+  SAME 케이스가 실질적으로 존재하지 않는다(사용자 합의).
+
+  같은 턴에서 "상권 변화가 크면 독립 카드로 띄우자"(개업·폐업률 급등 등)는 별도
+  제안도 검토했다 — **이번 범위에서는 보류**한다. 이유 둘: (1) `test_독립_상권_축은_
+  더_이상_없다` 회귀 테스트가 바로 이 패턴(상권을 그 자체로 담은 focus)을 금지하고
+  있고, 이 테스트는 PR #161(#157)에서 "격차 기반 점수"가 "6개 경쟁 축을 이기고
+  매달 1위를 차지"하는 역효과로 걷어낸 자리를 지킨다 — 신호가 "격차"(거의 안
+  변함)가 아니라 "전분기 대비 변화량"(실제로 변함)이라 똑같은 실패는 아니지만,
+  신중하게 별도로 다룰 가치가 있다. (2) 그 신호(전분기 대비 개업·폐업 수,
+  유동인구 총량)는 지금 BE 계약에 없다 — `KTB4-7th-BE`의
+  `SeoulDistrictQuarterAggregationService.aggregate()`가 이미 파싱된
+  `OPBIZ_STOR_CO`(개업)·`CLSBIZ_STOR_CO`(폐업)·`TOT_FLPOP_CO`(유동인구 총량)를
+  그대로 버리고 있어(DB 컬럼도 없음) BE 쪼 작업이 먼저다. 아래 "다음 단계"에
+  별도 항목으로 적어 둔다.
+
+- 2026-10-24: PR #219 머지 전 외부 리뷰(사용자가 전달) 3건.
+  1. **(Important, 수정함)** `devtools/grade.py::_district_band_reflected`가
+     "두 밴드 숫자가 하나도 문장에 안 보이면 hourlySales 미선정"으로 가정하고
+     있었는데, 이 가정이 "3) SAME이면 밴드 생략"으로 이미 깨져 있었다 — 두
+     밴드가 둘 다 DIFFERENT라 서비스가 둘 다 줬는데 모델이 둘 다 빠뜨린
+     경우도 똑같이 "안 보임"이라 `None`(측정 대상 제외)으로 새어, 가장 심한
+     누락이 반영률 분모에서 빠졌다. `_district_avg_reflected`가 salesSummary
+     쪽에 이미 쓰던 `_axis_selected`(그 축 고유 숫자가 문장에 있는지로 선정을
+     근사)를 OR로 더해 고쳤다 — 밴드 숫자가 안 보여도 축 자체가 선정된 걸
+     알면 그때는 진짜 누락(`False`)이다(커밋 `c17f1ea`).
+  2. **(낮은 우선순위, 보류)** `_band_gate`가 `^\d{1,2}-\d{1,2}$` 형식만 보고
+     BE의 고정 6개 밴드(`00-06`~`21-24`) 값 자체인지는 안 본다 — BE 계약이
+     유지되는 한 즉시 장애는 아니다. 계약이 통보 없이 바뀐 전례(2026-10-21(5)
+     `_band_gate` 도입 배경)가 있어 가치는 있지만, 리뷰어도 "지금 당장 바꿀
+     필요까지는 없다"고 판단해 보류한다.
+  3. **(낮은 우선순위, 보류)** `_band_mentioned`가 시작·끝 숫자 두 개의 존재만
+     보고 "실제 상권 피크를 설명했는지"는 구분 못 한다 — 오탐 가능성은 있지만
+     재현 테스트로 실제 오탐이 나는지 먼저 확인해야 하는 사안이라 보류한다.
+  리뷰어 최종 의견: "1번은 수용, 2·3번은 현재 구조의 측정 한계에 가깝다 —
+  다만 벤치마크에 실제 `assign()` 선정 결과를 기록해 선정률·반영률 분모를
+  거기서 계산하면 "카드 미선택"과 "카드는 선택됐는데 누락"을 정확히 가를 수
+  있다"(위 "다음 단계"에 반영).
+
 - 2026-10-21(7): 위 두 가지(밴드 둘 다 반영 검사, 선정률 추정치 표기)를 "문서만
   고치고 구현 PR에서 빠뜨리면 안 된다"는 요청을 받아, 구현 계획 문서
   (`docs/superpowers/plans/2026-10-21-district-benchmark-bundling.md`)의 Global
@@ -238,6 +284,61 @@ candidates.append((focus, _spread(points) if points else -1.0))
 필드 다 `SAME`/`DIFFERENT`면 "우리 매장은 상권 매출 피크와 겹치지만 유동인구
 피크와는 다르다"처럼 실행
 포인트로 쓸 수 있다.
+
+### 3) SAME이면 밴드 생략 (2026-10-23 재검토)
+
+위 2)의 코드는 2026-10-22 작업(평일·주말 dayType 분리, `insight_focus.py` 머리말
+docstring 참고)을 거쳐
+`vsDistrictSalesPeakWeekday`/`...Weekend`·`vsDistrictFootTrafficPeakWeekday`/
+`...Weekend` 네 라벨로 쪼개졌고, 지금까지는 두 밴드 값을 **항상** focus에 넣고
+SAME/DIFFERENT 라벨만 같이 줬다. 이번엔 "SAME이면 그 밴드 자체를 안 준다"로
+바꾼다 — 두 밴드(매출/유동인구)는 독립적으로 판단한다(매출 피크는 다른데
+유동인구 피크는 같을 수 있고 그 반대도 가능).
+
+```python
+def _band_included(points: list[dict], band: str) -> bool:
+    """band(peakSalesHourBand 류)를 focus 에 넣을지.
+
+    존재하는 dayType(피크를 계산할 수 있는 dayType) 비교 중 하나라도 DIFFERENT면
+    포함한다. 전부 SAME이면(비교가 하나 이상 있을 때) 생략한다 — "우리 매장도
+    다른 가게처럼 바쁘다"는 당연한 사실만 남아 할 말이 거의 없다. 비교가 하나도
+    없으면(두 dayType 다 피크를 못 구함) 밴드 값은 상권 자체의 사실이라 그대로
+    포함한다(기존 2026-10-21(5) 결정과 동일).
+    """
+    comparisons = [
+        _in_band(hour, band)
+        for hour in (_store_peak_hour(points, day_type) for day_type in _DAY_TYPES)
+        if hour is not None
+    ]
+    return not comparisons or not all(comparisons)
+
+
+def _apply_band(
+    focus: dict, points: list[dict], band_field: str, label_prefix: str, band: str
+) -> None:
+    if not _band_included(points, band):
+        return
+    focus[band_field] = band
+    for day_type in _DAY_TYPES:
+        peak_hour = _store_peak_hour(points, day_type)
+        if peak_hour is None:
+            continue
+        focus[f"{label_prefix}{day_type.capitalize()}"] = (
+            "SAME" if _in_band(peak_hour, band) else "DIFFERENT"
+        )
+```
+
+`devtools/grade.py::_district_band_reflected`도 "서비스가 실제로 줬을 밴드만 언급을
+요구"하도록 같이 고친다 — 둘 다 SAME이라 안 줬을 밴드를 "안 언급했다"고 반영
+실패로 오판하면 안 된다. 언급된 밴드는(포함 예정 여부와 무관하게) 방향까지는
+여전히 확인한다 — DIFFERENT라서 줬는데 모델이 방향을 틀리면 그대로 결함이다.
+`_band_expected`(그레이더 쪼 복제본)가 `_band_included`와 같은 로직이어야
+한다는 걸 drift 테스트로 고정한다(기존 "채점기와 서비스가 같은 패턴을 쓰는지"
+테스트들과 같은 방식).
+
+`app/prompts/insight.py`의 SYSTEM도 "밴드가 하나만 오거나 둘 다 오거나 둘 다
+안 올 수 있다 — 주어진 필드만 언급하라"는 조건을 추가한다(기존 "두 개 다 숫자로
+그대로 인용하세요" 문구가 "항상 둘 다 온다"는 전제였다).
 
 ### 게이트 함수 (기존 `_district_score`의 게이트 부분만 재사용)
 
@@ -496,7 +597,20 @@ basisQuarter를 어느 focus 블록에도 안 넣기로 했지만(위 "다루지
   벌어지는지 — `devtools/bench.py`가 `insight_focus.assign()`을 직접 호출해
   "실제 선정 축"을 리포트에 같이 찍게 하면 바로 대조할 수 있다(위 "A"의
   "측정값의 한계" 참고. `solution_focus`를 이미 같은 방식으로 import하는 전례가
-  있다).
+  있다). 2026-10-24 외부 리뷰가 이 항목의 가치를 다시 짚었다 — `_axis_selected`
+  는 문장에 등장한 숫자로 선정을 추정하는 거라, "카드가 선택 안 돼서 상권
+  정보가 없는 경우"와 "카드는 선택됐는데 관련 숫자를 전부 생략한 경우"를
+  구분 못 한다(2026-10-24 (2) 참고). 실제 `assign()` 결과를 기록해야 이 둘을
+  정확히 가른다 — 이번 실험의 핵심 질문이라 포트폴리오·성능 개선 근거로
+  쓰려면 이 항목을 뒤로 미루지 않는 게 좋다.
+- **상권 변화 기반 독립 카드(2026-10-23 보류 결정)**: 개업·폐업률 급등, 점포 수
+  급감처럼 "변화가 클 때만" 상권을 독립 인사이트 후보로 띄우는 안. BE가 개업·
+  폐업 수(`OPBIZ_STOR_CO`/`CLSBIZ_STOR_CO`)·유동인구 총량(`TOT_FLPOP_CO`)과
+  전분기 비교값을 노출해야 가능하다 — 지금은 파싱만 되고 버려진다
+  (`SeoulDistrictQuarterAggregationService.aggregate()`). BE 필드 확장 후
+  별도 설계·별도 PR로 다룬다. `test_독립_상권_축은_더_이상_없다` 회귀 테스트도
+  그때 "SAME 상태엔 독립 축 금지, 단 significant-change 이벤트는 예외"로
+  다시 써야 한다.
 
 ### 측정 결과 판단 기준
 

@@ -5,7 +5,10 @@
 검증되지만, 분모를 어떻게 세는지는 코드로 막을 수 있다.
 """
 
-from devtools.bench import _checks, _rates
+import json
+
+from devtools import grade
+from devtools.bench import MEASURE_ONLY, _checks, _rates
 
 
 def _row(status: int, model: dict, service: dict) -> dict:
@@ -104,3 +107,71 @@ def test_솔루션_케이스가_모든_근거_축을_덮는다():
     covered = {key for _, metrics in SOLUTION_CASES for key, value in metrics.items() if value}
 
     assert not (axes - covered), f"케이스가 덮지 않는 지표: {sorted(axes - covered)}"
+
+
+def test_조건부_항목의_None은_분모에서_빠진다():
+    """선정 안 된 조건부 항목(None)을 결함으로 세면 실제보다 낮게 보인다(#209, 헥터)."""
+    rows = [
+        _row(
+            200,
+            {"parsed": True, "상권_평균매출_반영": None},
+            {"parsed": True, "상권_평균매출_반영": None},
+        ),
+        _row(
+            200,
+            {"parsed": True, "상권_평균매출_반영": True},
+            {"parsed": True, "상권_평균매출_반영": False},
+        ),
+    ]
+    _, per_key, all_model, all_service = _rates(rows)
+
+    assert per_key["상권_평균매출_반영"] == (1.0, 0.0), "None 인 행은 분모에서 빠져야 한다"
+    assert all_model == 1.0, "None 은 결함이 아니라 전항목 집계에서 통과로 센다"
+    assert all_service == 0.5, "False 는 여전히 결함이다 — None 과 다르게 센다"
+
+
+def test_선정률은_전항목_집계에서_빠진다():
+    """선정률(salesSummary_선정률·hourlySales_선정률)은 규칙 위반이 아니라 "이번
+    요청에서 그 축이 선정됐는지" 를 재는 측정값이다 — 3 문장 안에 6 축이 다
+    선정되지 않는 게 정상이라 False 가 흔하다. 그대로 전항목(출하 판정)에 넣으면
+    상시 0% 가 된다(#209 리뷰 Important #2, #178 카드_개수_일치 사고와 같은 모양).
+    per_key 표에는 그대로 찍되 전항목 집계에서만 뺀다."""
+    rows = [
+        _row(
+            200,
+            {"parsed": True, "hourlySales_선정률": False, "상권_평균매출_반영": None},
+            {"parsed": True, "hourlySales_선정률": False, "상권_평균매출_반영": None},
+        ),
+    ]
+    _, per_key, all_model, all_service = _rates(rows)
+
+    assert per_key["hourlySales_선정률"] == (0.0, 0.0), "표에는 선정률 그대로 찍는다"
+    assert (all_model, all_service) == (1.0, 1.0), "선정률은 전항목 집계에서 뺀다"
+
+
+def test_checks가_None을_bool로_뭉개지_않는다():
+    """브리프 산출물 — bool(None) 으로 뭉개면 _rates 의 None 처리가 전부 무력화된다
+    (#209 리뷰 Important #4). _row() 로 dict 를 직접 만드는 다른 테스트들은 _checks
+    를 우회하므로, 이 동작만 따로 고정해 둔다."""
+    assert _checks({"parsed": True, "상권_평균매출_반영": None}) == {
+        "parsed": True,
+        "상권_평균매출_반영": None,
+    }
+
+
+def test_선정률_측정값이_전부_MEASURE_ONLY에_등록돼_있다():
+    """grade_insight 가 실제로 내는 선정률 키와 대조한다 — 리터럴끼리 비교하면
+    새 선정률 키를 등록하지 않아도 통과해서 Important #2 가 조용히 무력화된다
+    (#209 최종 리뷰 Important #2). 뒤쪽 단언은 반대 방향 — 진짜 결함 항목을
+    MEASURE_ONLY 에 넣으면 전항목(출하 판정)이 조용히 느슨해진다."""
+    from devtools.contract_check import EXAMPLES
+
+    metrics = EXAMPLES["sales-insights"]["metrics"]
+    body = json.dumps({"insights": ["총 매출은 전기 대비 4.2% 증가했습니다."]}, ensure_ascii=False)
+    result = grade.grade_insight(body, metrics)
+
+    rates = {k for k in result if k.endswith("선정률")}
+
+    assert rates, "선정률 키가 하나도 없다 — 대조가 무의미하다"
+    assert rates <= MEASURE_ONLY
+    assert MEASURE_ONLY == {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}

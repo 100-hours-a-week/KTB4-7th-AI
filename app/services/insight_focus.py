@@ -22,7 +22,45 @@
 문제(가중치 1.0일 때 거의 항상 1순위)와 같은 실패 모드다. 날씨와 같은 처방을 썼다 —
 게이트(표본 수)는 그대로 두고, 점수를 격차 비례값이 아니라 고정 보충값(
 _DISTRICT_SUPPLEMENT_SCORE)으로 바꿨다. "다른 세 축이 전부 약할 때만" 상권이 들어온다.
+
+2026-10-21(#209, PR #207·#208 실측): districtBenchmark 를 전용 근거 축에서 완전히
+뺐다. 인사이트는 상권이 들어오기 전부터 이미 6 개 축이 경쟁 중이었는데, 고정 보충값
+0.3 으로는 여전히 자주 밀렸다(#208 "전부있음" 실측: districtBenchmark 0.300 이 7 개
+중 5 위). 전용 축 대신 salesSummary(평균매출 비교)·hourlySales(피크 시간대)에
+조건부로 끼워 넣는다 — districtBenchmark 라는 중첩 객체는 더 이상 모델에게 안 보이고,
+대신 평평한 필드(districtAvgMonthlySalesPerCafe·vsDistrictAvg·peakSalesHourBand·
+peakFootTrafficHourBand)로 쪼개져 두 축에 나뉜다. 비교 방향(vsDistrictAvg)은 코드가
+미리 계산한다 — solution_focus.peak_ratios() 와 같은 이유로, 두 숫자 다 지표에 있어
+UNGROUNDED_NUMBER 로 못 잡는 "방향 반전" 오류를 막는다.
+
+2026-10-21(#209 최종 리뷰 Important #4): _district_gate 가 peakSalesHourBand·
+peakFootTrafficHourBand 의 포맷을 검증하지 않아서, BE 가 그 문자열을 바꾸면(과거
+10-19 에 BE 계약 3 건이 통보 없이 바뀐 전례가 있다) _in_band 의 int() 변환이
+터져 상권 붙은 모든 인사이트 요청이 500 이 된다 — 이 번들링 변경 전에는 밴드
+문자열을 파싱 없이 그대로 프롬프트에 넘겨서 이 크래시 경로가 없었다. 게이트에서
+포맷이 안 맞으면 조용히 탈락시킨다 — 상권만 빠지고 인사이트는 정상 생성된다.
+
+2026-10-22(#209 최종 리뷰 Important #5, PR #219 머지 전 재검토): _store_peak_hour 가
+dayType 을 구분하지 않고 전역 최대 한 행의 시각을 "우리 매장 피크"로 썼다.
+hourlySales 의 다른 모든 구성(_spread_rows)은 dayType 별로 따로 행을 고르는데,
+비교 방향(vsDistrictSalesPeak 등)만 평일·주말을 섞은 단일 피크로 계산되면,
+모델이 실제로 묘사하는 행(예: WEEKDAY 15 시)과 코드가 계산한 피크(예: WEEKEND
+12 시)가 달라 방향이 어긋날 수 있다. dayType 별로 피크를 따로 계산해 비교
+필드도 dayType 별로 쪼갰다(vsDistrictSalesPeakWeekday/Weekend,
+vsDistrictFootTrafficPeakWeekday/Weekend) — 어느 dayType 피크를 모델이
+말해도 그에 맞는 비교값을 받는다.
+
+2026-10-23(#209 재검토 반영): peakSalesHourBand·peakFootTrafficHourBand 는
+이제 SAME(우리 매장 피크와 겹침)이면 그 밴드 자체를 안 보낸다 — "다른 가게처럼
+바쁘다"는 당연한 사실만 남아 할 말이 없다는 판단이다. 두 밴드는 서로 독립적으로
+판단한다 — 매출 피크와 유동인구 피크는 다른 시간대일 수 있어, 하나만
+생략되거나 둘 다 생략되거나 둘 다 포함될 수 있다. 존재하는 dayType 비교 중
+하나라도 DIFFERENT면 그 밴드와 해당 라벨을 포함하고, 전부 SAME이면 통째로
+생략한다. 비교를 계산할 dayType이 하나도 없으면(두 dayType 다 영업 데이터
+없음) 밴드 값은 상권 자체의 사실이라 그대로 남긴다(기존과 동일, 2026-10-21(5)).
 """
+
+import re
 
 # 잠정 가중치 — 증감률은 절대값이 작아서(0.042) 격차 점수와 자릿수를 맞춘다.
 _CHANGE_WEIGHT = 3.0
@@ -32,9 +70,11 @@ _SHARE_CHANGE_WEIGHT = 2.0
 # 크로스체크할 수 있게 상수로 분리해 둔다 — 잠정값이다.
 _MIN_CAFE_STORE_COUNT = 3
 
-# solution_focus._WEATHER_SUPPLEMENT_SCORE 와 같은 역할·같은 값이다(2026-10-16, PR #161
-# 리뷰). "다른 세 축이 전부 약할 때만" 상권이 카드를 차지하게 하는 상한이다 — 잠정값이다.
-_DISTRICT_SUPPLEMENT_SCORE = 0.3
+# peakSalesHourBand·peakFootTrafficHourBand 의 기대 포맷("HH-HH") — BE
+# DistrictBenchmarkService.VALID_HOUR_BANDS 는 그 서비스 내부 약속일 뿐 우리
+# 스키마(str)에는 강제되지 않는다. 안 맞으면 _in_band 의 int() 변환이 터져
+# 상권 붙은 모든 요청이 500 이 된다(#209 최종 리뷰 Important #4).
+_HOUR_BAND = re.compile(r"^\d{1,2}-\d{1,2}$")
 
 # 프롬프트에 보여줄 행 수 — 잠정값. 상·하위 몇 행, 비중 상위 몇 종.
 # hourlySales 는 24 시간 × 2 dayType, salesTrend 는 한 달치가 올 수 있다. 한 문장이
@@ -99,20 +139,105 @@ def _share_score(points: list[dict]) -> float:
     return min(max(top_share, top_change), 1.0)
 
 
-def _district_score(district: dict | None) -> float:
+def district_comparison(total_sales: int, district_avg: int) -> str:
+    """상권 평균 대비 매장 매출의 방향을 코드가 미리 계산한다.
+
+    두 숫자 다 지표에 실재해 UNGROUNDED_NUMBER 게이트로는 못 잡는 오류다 — 모델이
+    직접 비교하다 방향을 뒤집어 말할 수 있다. solution_focus.peak_ratios() 가 "어느
+    두 시각 사이 배수인지"를 코드가 계산해 넘기는 것과 같은 이유다.
+    """
+    if total_sales > district_avg:
+        return "ABOVE"
+    if total_sales < district_avg:
+        return "BELOW"
+    return "EQUAL"
+
+
+def _district_gate(district: dict | None) -> bool:
     """표본이 너무 적은 상권(1~2 곳)은 평균이 의미가 없어 후보에서 뺀다(#157).
 
-    격차 크기로 점수를 매기지 않는다 — "매장이 상권 평균보다 작다"는 사실 자체가 달마다
-    거의 안 바뀌어(기준도 분기 단위) 그러면 상권이 매달 1위를 차지한다(PR #161 리뷰,
-    헥터). 게이트(표본 수·평균 유효성)만 보고, 통과하면 날씨와 같은 고정 보충값을 준다.
+    salesSummary·hourlySales 두 번들링 지점이 이 게이트를 공유한다.
     """
     if not district:
-        return -1.0
+        return False
     if (district.get("cafeStoreCount") or 0) < _MIN_CAFE_STORE_COUNT:
-        return -1.0
-    if (district.get("districtAvgMonthlySalesPerCafe") or 0) <= 0:
-        return -1.0
-    return _DISTRICT_SUPPLEMENT_SCORE
+        return False
+    return (district.get("districtAvgMonthlySalesPerCafe") or 0) > 0
+
+
+def _band_gate(district: dict | None) -> bool:
+    """peakSalesHourBand·peakFootTrafficHourBand 포맷이 "HH-HH" 인지만 본다.
+
+    hourlySales 번들링만 그 문자열을 _in_band 로 파싱한다 — salesSummary 쪽은
+    평균매출만 쓰고 밴드는 안 건드려 포맷과 무관하다. _district_gate 에 합치지
+    않고 hourlySales 호출부에서만 추가로 본다(#209 최종 리뷰 Important #4) —
+    합치면 밴드 포맷만 깨져도 상권 평균매출(salesSummary 쪽)까지 같이 멈춘다.
+    """
+    if not district:
+        return False
+    return bool(
+        _HOUR_BAND.fullmatch(district.get("peakSalesHourBand") or "")
+        and _HOUR_BAND.fullmatch(district.get("peakFootTrafficHourBand") or "")
+    )
+
+
+# hourlySales 의 dayType 값 — BE 계약상 고정 2 종(2026-10-22).
+_DAY_TYPES = ("WEEKDAY", "WEEKEND")
+
+
+def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
+    """dayType 이 day_type 인, 영업 중(menuSales > 0)인 행 중 매출이 가장 높은 시간.
+    없으면 None.
+    """
+    selling = [p for p in _selling(points) if p.get("dayType") == day_type]
+    if not selling:
+        return None
+    return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
+
+
+def _in_band(hour: int, band: str) -> bool:
+    """우리 매장 피크 시간이 상권 밴드("HH-HH") 안에 드는지. 밴드 형식은 BE
+    DistrictBenchmarkService.VALID_HOUR_BANDS 가 고정 집합으로 보장한다. 호출부가
+    hour is None 인 경우를 먼저 걸러내므로 여기선 int 만 받는다.
+    """
+    start, end = (int(x) for x in band.split("-"))
+    return start <= hour < end
+
+
+def _band_included(points: list[dict], band: str) -> bool:
+    """band(peakSalesHourBand 류)를 focus 에 넣을지.
+
+    존재하는 dayType(피크를 계산할 수 있는 dayType) 비교 중 하나라도 DIFFERENT
+    면 포함한다. 전부 SAME 이면(비교가 하나 이상 있을 때) 생략한다 — "우리
+    매장도 다른 가게처럼 바쁘다"는 당연한 사실만 남아 점주에게 할 말이 거의
+    없다. 두 밴드(매출/유동인구)는 서로 독립적으로 판단한다. 비교가 하나도
+    없으면(두 dayType 다 피크를 못 구함) 밴드 값은 상권 자체의 사실이라 그대로
+    포함한다. devtools/grade.py::_band_expected 가 같은 로직을 복제해 검사한다.
+    """
+    comparisons = [
+        _in_band(hour, band)
+        for hour in (_store_peak_hour(points, day_type) for day_type in _DAY_TYPES)
+        if hour is not None
+    ]
+    return not comparisons or not all(comparisons)
+
+
+def _apply_band(
+    focus: dict, points: list[dict], band_field: str, label_prefix: str, band: str
+) -> None:
+    """band_field(peakSalesHourBand 류)와 그 label_prefix 라벨(Weekday/Weekend)을
+    조건부로 채운다 — 포함 여부는 _band_included 로 정한다.
+    """
+    if not _band_included(points, band):
+        return
+    focus[band_field] = band
+    for day_type in _DAY_TYPES:
+        peak_hour = _store_peak_hour(points, day_type)
+        if peak_hour is None:
+            continue
+        focus[f"{label_prefix}{day_type.capitalize()}"] = (
+            "SAME" if _in_band(peak_hour, band) else "DIFFERENT"
+        )
 
 
 def assign(metrics: dict, max_count: int) -> list[dict]:
@@ -122,21 +247,42 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     개수를 줄이는 편이 낫다. 호출부는 app/services/insight.py::generate 다.
     """
     summary = metrics.get("salesSummary") or {}
+    district = metrics.get("districtBenchmark")
+
+    summary_focus: dict = {"salesSummary": summary}
+    if _district_gate(district):
+        summary_focus["districtAvgMonthlySalesPerCafe"] = district["districtAvgMonthlySalesPerCafe"]
+        summary_focus["vsDistrictAvg"] = district_comparison(
+            summary.get("totalSales") or 0, district["districtAvgMonthlySalesPerCafe"]
+        )
+
     candidates: list[tuple[dict, float]] = [
-        ({"salesSummary": summary}, _summary_score(summary) if summary else -1.0),
+        (summary_focus, _summary_score(summary) if summary else -1.0),
     ]
     # 점수는 받은 행 전부로 내고, 프롬프트에 넣는 행만 줄인다.
     series_axes = (("salesTrend", "date"), ("weekdaySales", "dayOfWeek"), ("hourlySales", "hour"))
     for key, order_key in series_axes:
         points = metrics.get(key) or []
         focus = {key: _spread_rows(points, order_key)}
+        if key == "hourlySales" and _district_gate(district) and _band_gate(district):
+            _apply_band(
+                focus,
+                points,
+                "peakSalesHourBand",
+                "vsDistrictSalesPeak",
+                district["peakSalesHourBand"],
+            )
+            _apply_band(
+                focus,
+                points,
+                "peakFootTrafficHourBand",
+                "vsDistrictFootTrafficPeak",
+                district["peakFootTrafficHourBand"],
+            )
         candidates.append((focus, _spread(points) if points else -1.0))
     for key in ("categorySales", "menuRankings"):
         points = metrics.get(key) or []
         candidates.append(({key: _share_rows(points)}, _share_score(points) if points else -1.0))
-
-    district = metrics.get("districtBenchmark")
-    candidates.append(({"districtBenchmark": district}, _district_score(district)))
 
     usable = [(focus, score) for focus, score in candidates if score >= 0.0]
     usable.sort(key=lambda pair: pair[1], reverse=True)

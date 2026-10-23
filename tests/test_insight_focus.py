@@ -5,7 +5,7 @@
 여기서 가장 중요한 건 "문장마다 하나씩, 겹치지 않게" 다.
 """
 
-from app.services.insight_focus import assign
+from app.services.insight_focus import assign, district_comparison
 
 METRICS = {
     "salesSummary": {
@@ -138,42 +138,198 @@ DISTRICT = {
     "peakFootTrafficHourBand": "11-14",
 }
 
-# 다른 세 축이 전부 약한 metrics. "상권이 거의 매달 1위"가 되는 걸 막으려고 고정 보충
-# 점수(0.3)로 바꿨다(PR #161 리뷰, 헥터) — solution_focus._FLAT_METRICS 와 같은 역할이다.
-_FLAT_METRICS = {
-    "salesSummary": {
-        "totalSales": 1000000,
-        "menuSales": 950000,
-        "orderCount": 120,
-        "averageOrderValue": 7917,
-        "vsPrevPeriod": 0.01,
-    },
+
+def test_매장_매출이_상권_평균보다_크면_ABOVE():
+    assert district_comparison(10_000_000, 9_413_000) == "ABOVE"
+
+
+def test_매장_매출이_상권_평균보다_작으면_BELOW():
+    assert district_comparison(7_920_000, 9_413_000) == "BELOW"
+
+
+def test_매장_매출이_상권_평균과_같으면_EQUAL():
+    assert district_comparison(9_413_000, 9_413_000) == "EQUAL"
+
+
+def test_매출요약이_선정되면_상권_평균매출이_같이_묻는다():
+    focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=4)
+
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert summary_focus["districtAvgMonthlySalesPerCafe"] == 9413000
+    assert summary_focus["vsDistrictAvg"] in ("ABOVE", "BELOW", "EQUAL")
+
+
+def test_표본이_너무_적은_상권은_매출요약에_안_묻는다():
+    """cafeStoreCount 가 1~2 곳이면 평균이 의미가 없다(#157)."""
+    district = {**DISTRICT, "cafeStoreCount": 2}
+    focus = assign({**METRICS, "districtBenchmark": district}, max_count=4)
+
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert "districtAvgMonthlySalesPerCafe" not in summary_focus
+
+
+def test_상권_필드가_없으면_매출요약에_안_묻는다():
+    focus = assign(METRICS, max_count=4)
+
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert "districtAvgMonthlySalesPerCafe" not in summary_focus
+
+
+def test_독립_상권_축은_더_이상_없다():
+    """districtBenchmark 를 그 자체로 담은 focus 블록이 나오면 안 된다(#209)."""
+    focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=4)
+
+    assert not any(set(item) == {"districtBenchmark"} for item in focus)
+
+
+HOURLY_METRICS = {
+    **METRICS,
+    "hourlySales": [
+        {"dayType": "WEEKDAY", "hour": 11, "menuSales": 850000, "orderCount": 95},
+        {"dayType": "WEEKDAY", "hour": 19, "menuSales": 210000, "orderCount": 24},
+    ],
 }
 
 
-def test_다른_축이_전부_약하면_상권이_1순위가_된다():
-    """고정 보충 점수(0.3)가 "다른 축이 전부 약할 때만 보충"으로 동작하는지 확인한다."""
-    focus = assign({**_FLAT_METRICS, "districtBenchmark": DISTRICT}, max_count=1)
+def test_시간대_축이_선정되면_DIFFERENT인_밴드만_같이_묻는다():
+    """우리 매장 매출 피크(평일 11시)는 peakSalesHourBand(14-17)엔 안 들어(DIFFERENT)
+    포함되고, peakFootTrafficHourBand(11-14)엔 들어(SAME) 생략된다 — 두 밴드는
+    독립적으로 판단한다."""
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": DISTRICT}, max_count=4)
 
-    assert "districtBenchmark" in focus[0]
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert "peakFootTrafficHourBand" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
 
 
-def test_다른_축이_뚜렷하면_상권이_밀린다():
-    """표준 METRICS(categorySales 0.417)는 고정 보충 점수(0.3)보다 커서 상권이 못 든다."""
-    focus = assign({**METRICS, "districtBenchmark": DISTRICT}, max_count=1)
+def test_두_밴드_모두_SAME이면_둘_다_생략한다():
+    """우리 매장 매출 피크(평일 11시)가 두 밴드 모두에 들면(SAME) "다른 가게처럼
+    바쁘다"는 당연한 사실만 남아 할 말이 없다 — 밴드·라벨을 통째로 생략한다."""
+    district = {**DISTRICT, "peakSalesHourBand": "10-13"}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
 
-    assert "districtBenchmark" not in focus[0]
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "peakFootTrafficHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
 
 
-def test_표본이_너무_적은_상권은_배정되지_않는다():
-    """cafeStoreCount 가 1~2 곳이면 평균이 의미가 없어 뺀다(#157)."""
+def test_평일_주말_피크가_다른_밴드에_들면_dayType별로_다른_비교값을_받는다():
+    """#209 최종 리뷰 Important #5 재현 — 평일 피크(11시)는 peakFootTrafficHourBand
+    (11-14)와 겹치고(SAME), 주말 피크(15시)는 peakSalesHourBand(14-17)와 겹친다
+    (SAME). dayType 을 안 구분하고 전역 최대 하나만 뽑으면(옛 구현) 주말 15시가
+    전역 피크가 돼 평일 피크(11시) 기준 비교가 통째로 사라졌다."""
+    hours = [
+        {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
+        {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
+    ]
+    focus = assign({**METRICS, "hourlySales": hours, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekday"] == "SAME"
+    assert hourly_focus["vsDistrictSalesPeakWeekend"] == "SAME"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekend"] == "DIFFERENT"
+
+
+def test_한쪽_dayType만_영업중이면_그_dayType만_비교값을_받는다():
+    """주말 행이 전부 0 원(휴무)이면 주말 비교 필드는 안 보내고 평일만 보낸다."""
+    hours = [
+        {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
+        {"dayType": "WEEKEND", "hour": 12, "menuSales": 0, "orderCount": 0},
+    ]
+    focus = assign({**METRICS, "hourlySales": hours, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert "vsDistrictSalesPeakWeekend" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekend" not in hourly_focus
+
+
+def test_유동인구_밴드만_DIFFERENT이면_그_밴드만_포함된다():
+    """위 테스트의 반대 방향 — 매출 밴드가 SAME으로 생략되고 유동인구 밴드만
+    남는지 확인한다."""
+    district = {**DISTRICT, "peakSalesHourBand": "10-13", "peakFootTrafficHourBand": "14-17"}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert hourly_focus["peakFootTrafficHourBand"] == "14-17"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekday"] == "DIFFERENT"
+
+
+def test_두_밴드_모두_DIFFERENT이면_둘_다_포함된다():
+    """회귀 기준선 — 둘 다 DIFFERENT인 "흔한" 경우가 여전히 둘 다 포함되는지."""
+    hours = [{"dayType": "WEEKDAY", "hour": 20, "menuSales": 500000, "orderCount": 60}]
+    focus = assign({**METRICS, "hourlySales": hours, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert hourly_focus["peakFootTrafficHourBand"] == "11-14"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekday"] == "DIFFERENT"
+
+
+def test_상권_필드가_없으면_시간대_축에_안_묻는다():
+    focus = assign(HOURLY_METRICS, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "peakFootTrafficHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
+
+
+def test_표본이_너무_적은_상권은_시간대_축에_안_묻는다():
     district = {**DISTRICT, "cafeStoreCount": 2}
-    focus = assign({**_FLAT_METRICS, "districtBenchmark": district}, max_count=4)
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
 
-    assert not any("districtBenchmark" in item for item in focus)
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
 
 
-def test_상권_필드가_없으면_배정되지_않는다():
-    focus = assign(METRICS, max_count=4)
+def test_밴드_포맷이_깨지면_시간대_축에_안_묻고_500으로_안_죽는다():
+    """BE 가 peakSalesHourBand 포맷을 바꾸면(과거 전례 있음, 통보 없이 계약
+    변경) _in_band 의 int() 변환이 터져 상권 붙은 모든 인사이트 요청이 500이
+    됐다 — 이 번들링 변경이 새로 만든 크래시 경로다(#209 최종 리뷰 Important
+    #4). 게이트에서 조용히 탈락시킨다."""
+    district = {**DISTRICT, "peakSalesHourBand": "14시-17시"}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
 
-    assert not any("districtBenchmark" in item for item in focus)
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+
+
+def test_밴드_포맷이_깨져도_매출요약의_상권_평균은_그대로_묻는다():
+    """밴드 포맷 검증은 hourlySales 번들링에만 건다 — salesSummary 쪽은
+    평균매출만 쓰고 밴드를 안 건드리므로 밴드가 깨져도 영향이 없어야 한다
+    (#209 최종 리뷰 Important #4, 게이트를 합치지 않은 이유)."""
+    district = {**DISTRICT, "peakSalesHourBand": "14시-17시"}
+    focus = assign({**METRICS, "districtBenchmark": district}, max_count=4)
+
+    summary_focus = next(item for item in focus if "salesSummary" in item)
+    assert summary_focus["districtAvgMonthlySalesPerCafe"] == 9413000
+
+
+def test_영업중인_행이_없으면_피크_비교_필드를_안_넣는다():
+    """매출이 전부 0 이면(영업 전·휴무) 우리 매장 피크를 계산할 수 없다 — 이때
+    DIFFERENT로 단정하지 않고 비교 필드 자체를 뺀다(별도 검토, 2026-10-21(5)).
+    밴드 원본 값은 상권 자체의 사실이라 그대로 남긴다."""
+    closed = {
+        **HOURLY_METRICS,
+        "hourlySales": [
+            {"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0},
+            {"dayType": "WEEKDAY", "hour": 4, "menuSales": 0, "orderCount": 0},
+        ],
+    }
+    focus = assign({**closed, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
