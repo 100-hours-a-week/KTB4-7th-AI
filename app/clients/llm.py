@@ -130,8 +130,30 @@ def _provider_status(exc: Exception) -> int | None:
     return None
 
 
+# vLLM이 --max-model-len(infra/vllm/serve.sh, 8192)을 넘는 프롬프트에 돌려주는 400의
+# 본문 문구. 2026-10-22 챗봇 전면 장애 — 히스토리가 쌓인 대화가 로컬 vLLM 컨텍스트를
+# 넘겨 400이 났는데, 400이 영구 오류로 묶여 있어 Claude(컨텍스트 훨씬 큼)로도 못 넘어가고
+# 그대로 실패했다. 모델명 오설정 등 "다시 불러도 안 되는" 다른 400과 성격이 달라 분리한다.
+_CONTEXT_LENGTH_ERROR = re.compile(r"maximum context length", re.IGNORECASE)
+
+
+def _is_context_length_error(cause: Exception) -> bool:
+    return _provider_status(cause) == 400 and bool(_CONTEXT_LENGTH_ERROR.search(str(cause)))
+
+
+def is_capacity_error(exc: ApiError) -> bool:
+    """breaker가 "GPU 가용성" 신호로 취급하면 안 되는 폴백 사유인가.
+
+    컨텍스트 초과는 이 요청이 크다는 뜻이지 GPU가 죽었다는 신호가 아니다. 이걸로
+    breaker 실패를 기록하면, 쌓인 대화 하나가 연속으로 임계치를 넘겨 breaker가 열리고
+    그 쿨다운 동안 무관한 짧은 요청까지 전부 Claude로 샌다(2026-10-22).
+    """
+    return _is_context_length_error(exc.__cause__)
+
+
 def is_fallback_eligible(exc: ApiError) -> bool:
-    """가용성 문제(연결실패·타임아웃·5xx)면 True — 그때만 fallback provider로 넘긴다.
+    """가용성 문제(연결실패·타임아웃·5xx)거나 컨텍스트 초과면 True — 그때만 fallback
+    provider로 넘긴다.
 
     exc.__cause__ 로 원본 SDK 예외를 본다(전부 `raise ... from exc`로 체인돼 있다).
     원인이 없으면(예: 지원 안 하는 LLM_PROVIDER 설정 오류) 가용성 문제가 아니므로 False.
@@ -142,6 +164,8 @@ def is_fallback_eligible(exc: ApiError) -> bool:
     if cause is None:
         return False
     if isinstance(cause, (anthropic.APITimeoutError, openai.APITimeoutError, TimeoutError)):
+        return True
+    if _is_context_length_error(cause):
         return True
     return _provider_status(cause) not in _PERMANENT_PROVIDER_STATUSES
 
@@ -164,13 +188,18 @@ async def _vllm_healthy() -> bool:
         return False
 
 
-def _log_fallback(reason: str) -> None:
-    """폴백이 실제로 발동했음을 남긴다.
+def log_fallback(reason: str) -> None:
+    """폴백이 실제로 발동했음을 남긴다. app/api/chat.py도 직접 부른다(모듈 경계 넘는
+    공개 API라 밑줄 없이 둔다) — 챗봇 스트리밍 도중 전환은 llm.py 내부를 안 거친다.
 
     2026-10-19 설계에 "폴백 발생 시 logger.warning" 이 적혀 있었는데 구현이 빠져
     있었다(2026-10-20 제나 발견, 이슈 #220). 그래서 운영 전환용 env var 를 다 넣고
     재배포까지 했는데도 **GPU 가 실제로 쓰이는지 아무도 확인하지 못했다** — GPU 가
     죽어 Claude 로 넘어가도 조용히 넘어가고, 비용이 그쪽으로 새도 모른다.
+
+    챗봇 스트리밍 중 "첫 토큰 전 전환"(app/api/chat.py의 _stream())도 같은 공백이
+    있었다 — record_failure()만 부르고 이 로그는 안 남겨서, 그 경로로 조용히 Claude로
+    넘어간 건 "LLM 폴백" 검색으로도 안 보였다(2026-10-22 발견, 이슈 #224 리뷰 중).
 
     WARNING 이다. 정상 동작이 아니라 "GPU 가 안 쓰이고 있다" 는 신호다.
     **프롬프트·응답 본문은 남기지 않는다** — provider·모델·사유뿐이다.
@@ -225,7 +254,7 @@ async def resolve_primary_or_fallback() -> tuple[str, str, bool]:
     complete()는 같은 결정을 내부에서 직접 한다 — 단발 호출이라 모델을 미리 안 만든다.
     """
     if await should_use_fallback():
-        _log_fallback("차단기 열림 — primary 를 건너뛴다")
+        log_fallback("차단기 열림 — primary 를 건너뛴다")
         return settings.llm_fallback_provider, settings.llm_fallback_model, True
     return settings.llm_provider, settings.llm_model, False
 
@@ -342,7 +371,7 @@ async def complete(
     """
     use_fallback = await should_use_fallback()
     if use_fallback:
-        _log_fallback("차단기 열림 — primary 를 건너뛴다")
+        log_fallback("차단기 열림 — primary 를 건너뛴다")
     provider = settings.llm_fallback_provider if use_fallback else settings.llm_provider
     model = settings.llm_fallback_model if use_fallback else settings.llm_model
     attempt_timeout = timeout if use_fallback else _primary_timeout(timeout)
@@ -354,8 +383,9 @@ async def complete(
             # 이미 fallback을 쓰고 있었거나(더 넘어갈 데 없음), 기능이 꺼져 있거나,
             # 가용성 문제가 아니면(영구 오류 등) 그대로 올린다 — 기존 동작과 동일.
             raise
-        record_failure()
-        _log_fallback(f"primary 호출 실패 — {exc.code}")
+        if not is_capacity_error(exc):
+            record_failure()
+        log_fallback(f"primary 호출 실패 — {exc.code}")
         return await _complete_once(
             settings.llm_fallback_provider,
             settings.llm_fallback_model,

@@ -7,6 +7,7 @@
 """
 
 import httpx
+import openai
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
@@ -154,6 +155,19 @@ def _provider_error(status: int | None) -> Exception:
     return exc
 
 
+def _context_length_error() -> Exception:
+    """실제 vLLM(--max-model-len 8192)이 2026-10-22 돌려준 400 본문을 그대로 재현한다."""
+    exc = RuntimeError(
+        "Error code: 400 - {'error': {'message': \"This model's maximum context "
+        "length is 8192 tokens. However, your prompt contains at least 8193 input "
+        "tokens, which exceeds this limit even without any output tokens. Please "
+        'reduce the length of the input prompt. (parameter=input_tokens, value=8193)", '
+        "'type': 'BadRequestError', 'param': 'input_tokens', 'code': 400}}"
+    )
+    exc.status_code = 400
+    return exc
+
+
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     monkeypatch.setattr(llm, "_clients", {})
@@ -243,6 +257,40 @@ async def test_영구_오류면_fallback을_쓰지_않는다(monkeypatch):
     assert _FakeAnthropicSuccess.calls == 0
 
 
+async def test_컨텍스트_초과는_영구_오류로_안_묶고_fallback을_쓴다(monkeypatch):
+    """vLLM max-model-len(8192) 초과는 모델명 오설정 같은 다른 400과 다르다 — 같은
+    요청이 Claude(컨텍스트 훨씬 큼)로는 그대로 성공할 수 있다. 2026-10-22 챗봇 전면
+    장애(히스토리가 쌓인 대화가 8192를 넘겨 폴백도 못 타고 전부 실패) 대응."""
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: _RaisingOpenAI(_context_length_error()))
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    result = await llm.complete("sys", "user")
+
+    assert result == "fallback-ok"
+    assert _FakeAnthropicSuccess.calls == 1
+
+
+async def test_컨텍스트_초과는_breaker를_열지_않는다(monkeypatch):
+    """컨텍스트 초과는 GPU 가 아니라 이 요청이 크다는 신호다 — breaker 실패로 기록하면
+    쌓인 대화 하나가 연속으로 임계치를 넘겨 breaker가 열리고, 그 쿨다운 동안 무관한
+    짧은 요청까지 전부 Claude로 샌다."""
+    monkeypatch.setattr(llm, "_breaker", CircuitBreaker(failure_threshold=2, cooldown_seconds=30.0))
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    primary = _RaisingOpenAI(_context_length_error())
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: primary)
+
+    await llm.complete("sys", "user")
+    await llm.complete("sys", "user")
+    await llm.complete("sys", "user")
+
+    assert primary.calls == 3, "컨텍스트 초과가 연속돼도 breaker가 열려 primary를 건너뛰면 안 된다"
+
+
 async def test_연속_실패가_임계치에_닿으면_breaker가_열려_primary를_건너뛴다(monkeypatch):
     monkeypatch.setattr(llm, "_breaker", CircuitBreaker(failure_threshold=2, cooldown_seconds=30.0))
     monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
@@ -265,7 +313,10 @@ async def test_연속_실패가_임계치에_닿으면_breaker가_열려_primary
 # 깔아두는데, 여기선 챗봇의 primary를 anthropic:claude-primary로 재설정한다.
 
 
-async def test_breaker가_열려있으면_primary_모델을_안_만들고_fallback으로_바로_간다(monkeypatch):
+async def test_breaker가_열려있으면_primary_모델을_안_만들고_fallback으로_바로_간다(
+    monkeypatch, caplog
+):
+    """GPU가 이미 다운인 걸 알고 있는 경우(breaker open) — 로그로 구분 가능해야 한다."""
     monkeypatch.setattr(settings, "llm_provider", "anthropic")
     monkeypatch.setattr(settings, "llm_model", "claude-primary")
     opened = CircuitBreaker(failure_threshold=1, cooldown_seconds=9999.0)
@@ -282,14 +333,20 @@ async def test_breaker가_열려있으면_primary_모델을_안_만들고_fallba
 
     monkeypatch.setattr(chat_graph, "get_model", spy_get_model)
 
-    res = await _post(REQUEST_BODY)
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
     assert "".join(_answer_chunks(res.text)) == "폴백 답변"
     assert built_with == [("anthropic", "claude-fallback")]
+    assert "차단기 열림" in _fallback_lines(caplog)[0]
 
 
-async def test_첫_토큰_전_실패면_fallback으로_전환해_에러_없이_끝난다(monkeypatch):
+async def test_첫_토큰_전_실패면_fallback으로_전환해_에러_없이_끝난다(monkeypatch, caplog):
+    """GPU가 이번 요청에서 처음 응답을 못한 경우(타임아웃 등 가용성 문제) — breaker가
+    아직 안 열려 있던 상태에서도 로그로 전환 사실이 남아야 한다(2026-10-22, 이슈 #224
+    리뷰 중 발견 — record_failure()만 부르고 로그가 안 남아 "LLM 폴백" 검색으로도
+    이 경로의 전환이 안 보이던 공백)."""
     monkeypatch.setattr(settings, "llm_provider", "anthropic")
     monkeypatch.setattr(settings, "llm_model", "claude-primary")
     monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
@@ -310,12 +367,57 @@ async def test_첫_토큰_전_실패면_fallback으로_전환해_에러_없이_�
 
     monkeypatch.setattr(chat_graph, "get_model", spy_get_model)
 
-    res = await _post(REQUEST_BODY)
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        res = await _post(REQUEST_BODY)
 
     assert res.status_code == 200
     assert _error_events(res.text) == []
     assert "".join(_answer_chunks(res.text)) == "폴백 답변"
     assert built_with == [("anthropic", "claude-primary"), ("anthropic", "claude-fallback")]
+    line = _fallback_lines(caplog)[0]
+    assert "primary 호출 실패" in line
+    assert "AI_TIMEOUT" in line
+
+
+class _ContextLengthOpenAIError(openai.OpenAIError):
+    """실제 vLLM이 돌려준 400 본문(2026-10-22)을 그대로 흉내낸다. status_code를
+    클래스 속성으로 둬 _provider_status()가 인스턴스에서 바로 읽게 한다."""
+
+    status_code = 400
+
+    def __str__(self):
+        return (
+            "Error code: 400 - {'error': {'message': \"This model's maximum context "
+            "length is 8192 tokens. However, your prompt contains at least 8193 input "
+            "tokens...\", 'type': 'BadRequestError', 'param': 'input_tokens', "
+            "'code': 400}}"
+        )
+
+
+async def test_챗봇에서도_컨텍스트_초과는_fallback을_쓰고_breaker를_안_연다(monkeypatch, caplog):
+    """app/api/chat.py의 _stream()은 llm.complete()와 별도 호출 경로라 똑같이 확인한다."""
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_model", "claude-primary")
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    breaker = CircuitBreaker(failure_threshold=1, cooldown_seconds=30.0)
+    monkeypatch.setattr(llm, "_breaker", breaker)
+
+    def spy_get_model(tools, provider, model_name):
+        if model_name == settings.llm_fallback_model:
+            return FakeModel(responses=[AIMessage(content="폴백 답변")])
+        return FakeModel(responses=[_ContextLengthOpenAIError()])
+
+    monkeypatch.setattr(chat_graph, "get_model", spy_get_model)
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert _error_events(res.text) == []
+    assert "".join(_answer_chunks(res.text)) == "폴백 답변"
+    assert breaker.should_skip() is False, "컨텍스트 초과는 breaker를 열면 안 된다"
+    assert "primary 호출 실패" in _fallback_lines(caplog)[0]
 
 
 async def test_토큰을_이미_보낸_뒤_실패하면_전환하지_않는다(monkeypatch):

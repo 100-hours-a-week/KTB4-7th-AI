@@ -7,9 +7,11 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 
+from app.api.chat import MAX_HISTORY_MESSAGES, _to_lc_messages
 from app.clients import backend
 from app.main import app
 from app.prompts import chat as chat_prompt
+from app.schemas.chat import ChatMessage
 from app.services.chat import graph as chat_graph
 
 REQUEST_BODY = {
@@ -390,3 +392,24 @@ async def test_chatDate_가_없어도_통과한다(monkeypatch):
     _patch_model(monkeypatch, [AIMessage(content="네, 확인했어요.")])
     res = await _post(REQUEST_BODY)
     assert res.status_code == 200
+
+
+def test_히스토리가_길면_최근_N개만_남긴다():
+    """BE가 쌓인 대화 전체를 그대로 보내면(길이 제한 없음, app/schemas/chat.py)
+    시스템 프롬프트 + 툴 스키마 + 히스토리가 로컬 vLLM의 --max-model-len(8192)을
+    넘긴다 — 2026-10-22 챗봇 전면 장애. 정확한 토큰 수 대신 메시지 개수로 자른다."""
+    history = [
+        ChatMessage(role="USER" if i % 2 == 0 else "ASSISTANT", content=f"msg-{i}")
+        for i in range(MAX_HISTORY_MESSAGES + 5)
+    ]
+
+    messages = _to_lc_messages(history)
+
+    assert len(messages) == MAX_HISTORY_MESSAGES
+    assert messages[0].content == "msg-5"
+    assert messages[-1].content == f"msg-{MAX_HISTORY_MESSAGES + 4}"
+
+
+def test_히스토리가_짧으면_그대로_쓴다():
+    history = [ChatMessage(role="USER", content="안녕")]
+    assert len(_to_lc_messages(history)) == 1
