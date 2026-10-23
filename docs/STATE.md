@@ -1,8 +1,13 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-22
-브랜치: `feat/209-district-benchmark-bundling-impl` (아래 날짜 절들은 각각 별개
-브랜치에서 진행돼 머지됐다).
+마지막 갱신: 2026-10-24
+브랜치: `dev` (아래 날짜 절들은 각각 별개 브랜치에서 진행돼 머지됐다).
+
+## 2026-10-21~22 — PR #219 작업 중 상세 기록 (Task 1~6, 머지 전)
+
+아래는 같은 PR #219가 머지되기 전, 다른 세션에서 남긴 상세 기록이다 — 맨 아래
+"2026-10-24" 절(이 PR이 실제로 머지된 뒤의 Task 7·외부 리뷰 반영 기록)과 이어서
+읽는다.
 
 ### 2026-10-22 추가 — PR #219 머지 전 재검토: `_store_peak_hour` dayType 분리
 
@@ -443,6 +448,64 @@ vLLM, 추가 API 과금 없음), 측정값을 올리는 것과 별개로 **설�
 다르면 바로 "모델이 못한다"로 해석하지 말고 이 표를 먼저 본다.
 
 ---
+
+## 2026-10-24 — 상권 밴드 SAME 생략 + 외부 리뷰 반영 (Issue #209, PR #219 머지됨)
+
+### 지금 어디
+완료. PR #219(`feat/209-district-benchmark-bundling-impl` → `dev`)가 2026-10-23
+머지됨. 작업은 별도 워크트리(`.claude/worktrees/district-benchmark-bundling`)에서
+진행했다 — 메인 체크아웃(`feat/224-chat-context-length-fallback`)은 이 작업과
+무관, 그대로 둠.
+
+### 마지막으로 통과한 것
+- `uv run pytest -q` — 503 passed, 4 failed(`tests/test_health.py`·
+  `tests/test_chat.py`, `LLM_FALLBACK_PROVIDER` 관련 — base 커밋에서도 재현돼
+  이번 작업과 무관함을 직접 확인함)
+- `uv run ruff check . && uv run ruff format --check .` — clean
+- 서브에이전트 2단계 리뷰(task reviewer + 최종 code reviewer, opus) 통과 →
+  "Ready to merge: Yes"
+- 사용자가 직접 머지 확인(PR #219 MERGED, 2026-10-23T03:19:26Z)
+
+### 이번에 바뀐 것
+`districtBenchmark`의 `peakSalesHourBand`/`peakFootTrafficHourBand`를 매장
+피크와 SAME이면 생략하도록 `app/services/insight_focus.py`를 고쳤다(두 밴드
+독립 판단). `devtools/grade.py::_district_band_reflected`를 동기화했고,
+`app/prompts/insight.py` SYSTEM 지시문도 "밴드가 하나만/둘 다/둘 다 안 올 수
+있다"는 전제로 바꿨다.
+
+머지 전 외부 리뷰(사용자가 전달)에서 **Important 1건**을 잡았다 — 두 밴드가
+둘 다 DIFFERENT(서비스가 둘 다 줬어야 함)인데 모델이 둘 다 생략하면, 기존
+로직은 "밴드 숫자가 하나도 안 보이니 hourlySales 미선정"으로 오판해 `False`
+대신 `None`(측정 대상 제외)을 돌려줬다 — 가장 심한 누락이 반영률 분모에서
+빠지는 문제였다. `_district_avg_reflected`가 이미 쓰던 `_axis_selected`를
+OR로 더해 고쳤다(커밋 `c17f1ea`). 재현 테스트부터 작성해 RED→GREEN 확인함.
+
+### 미해결 결정
+- **밴드 유효성 검사**: `_band_gate`가 `^\d{1,2}-\d{1,2}$` 형식만 보고 BE의
+  고정 6개 밴드(`00-06`~`21-24`) 값인지는 안 본다. 외부 리뷰·사용자 모두
+  "지금 당장 바꿀 필요까지는 없다"고 판단해 보류 — BE 계약이 통보 없이 바뀐
+  전례가 있어 가치는 있지만 우선순위 낮음.
+- **밴드 언급 판단 정밀도**: `_band_mentioned`가 시작·끝 숫자 두 개의 존재만
+  보고 실제로 그 피크를 설명했는지는 구분 못 한다. 재현 테스트로 실제
+  오탐이 나는지 먼저 확인해야 하는 사안이라 보류.
+- **실제 `assign()` 선정 결과를 벤치마크에 기록**(설계 문서 "다음 단계"에
+  이미 있던 항목, 이번 리뷰로 재확인): `_axis_selected`는 문장 기반 추정이라
+  "카드 미선택"과 "카드는 선택됐는데 누락"을 못 가른다 — 이 실험을 포트폴리오·
+  성능 개선 근거로 쓰려면 이 항목을 다음으로 미루지 않는 게 좋다는 리뷰어
+  의견.
+- "상권 변화가 크면 독립 카드" 안(개업·폐업률 급등 등)은 BE가 개업·폐업 수·
+  유동인구 총량·전분기 비교값을 아직 안 줘서 보류 — 2026-10-23 결정, 그대로
+  유효.
+
+### 함정
+- 같은 세션에서 로컬 커밋(`c17f1ea`)만 만들고 `git push`를 빼먹어서 외부
+  리뷰어가 "원격엔 수정이 없다"고 재지적하는 왕복이 한 번 있었다 — 서브에이전트
+  작업 뒤 커밋만 확인하고 push 여부를 안 확인한 게 원인. 커밋 직후 `git log
+  --oneline -3` 뿐 아니라 `git status`(ahead/behind)까지 같이 확인한다.
+- 설계 문서(`docs/superpowers/specs/2026-10-21-district-benchmark-bundling-design.md`)
+  와 구현 계획(`docs/superpowers/plans/2026-10-21-district-benchmark-bundling.md`)에
+  이번 Task 7·리뷰 결과까지 날짜별로 다 기록돼 있다 — 상권 관련 다음 작업은
+  거기부터 읽는다, 위키를 다시 훑지 않는다.
 
 ## 2026-10-21 — A40 8차 재측정: 벤치 케이스가 처음으로 축 전체를 커버 (devtools.bench)
 
