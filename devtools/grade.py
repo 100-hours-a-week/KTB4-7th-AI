@@ -64,8 +64,15 @@ def strip_fence(raw: str) -> str:
 # 가린다 — 두 dayType 의 방향이 서로 다르면 본문만으로는 어느 쪽을 말하는지 구분
 # 못 해 판정을 보류한다(아래 `_district_band_reflected` 참고). 밴드 인용 여부
 # 검사(`_band_mentioned`)는 손대지 않았다.
+# 2026-10-23 은 peakSalesHourBand·peakFootTrafficHourBand 가 SAME 이면(우리
+# 매장 피크와 겹치면) 서비스가 그 밴드 자체를 안 보내도록 바뀐 변경이다
+# (app/services/insight_focus.py::_apply_band). `상권_피크밴드_반영` 은
+# "서비스가 실제로 줬을 밴드"만 언급을 요구하도록 고쳤다 — 전부 SAME 이라
+# 안 준 밴드를 "안 언급했다"고 결함으로 오판하면 안 된다. 언급된 밴드는(줬을
+# 밴드가 아니어도) 여전히 방향까지 확인한다 — `_band_mentioned`·
+# `_band_direction_correct`는 손대지 않았다.
 TARGET_SOLUTION_VERSION = "2026-10-20"
-TARGET_INSIGHT_VERSION = "2026-10-22"
+TARGET_INSIGHT_VERSION = "2026-10-23"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
@@ -178,6 +185,18 @@ def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
 def _in_band(hour: int, band: str) -> bool:
     start, end = (int(x) for x in band.split("-"))
     return start <= hour < end
+
+
+# app/services/insight_focus.py::_band_included 와 같은 로직이어야 한다 —
+# 어긋나면 한쪽은 밴드를 줬는데 다른 쪽은 "안 언급했다"고 결함(False)으로
+# 오판한다.
+def _band_expected(points: list[dict], band: str) -> bool:
+    comparisons = [
+        _in_band(h, band)
+        for h in (_store_peak_hour(points, dt) for dt in _DAY_TYPES)
+        if h is not None
+    ]
+    return not comparisons or not all(comparisons)
 
 
 def _axis_selected(body: str, metrics: dict, key: str) -> bool:
@@ -334,14 +353,16 @@ def _band_direction_correct(body: str, comparisons: set[str], band: str, other_b
 
 
 def _district_band_reflected(body: str, metrics: dict) -> bool | None:
-    """게이트를 통과하고 두 밴드가 모두 문장에 인용됐을 때만 유효한 측정이다(#209 "A").
+    """게이트를 통과하고, 서비스가 실제로 줬을 밴드가 하나라도 언급됐을 때만
+    유효한 측정이다.
 
-    hourlySales candidate는 두 밴드·두 비교 필드를 같은 한 문장에 묶어 넘긴다
-    (vsDistrictAvg가 salesSummary 문장에 묶이는 것과 같은 구조, 위 "A" 주석 참고) —
-    한쪽만 말하고 다른 쪽을 빠뜨리면 결함이다("문장마다 근거 하나"는 축 사이의
-    얘기라 같은 축 번들 안의 누락엔 안 걸린다. 재검토로 "둘 다 요구"로 되돌림,
-    2026-10-21(6)). 둘 다 언급 안 됐으면 이번엔 hourlySales 가 선정 안 된 것으로
-    보고 None — 결함이 아니다.
+    2026-10-23 부터 두 밴드는 독립적으로 포함 여부가 갈린다(app/services/
+    insight_focus.py::_apply_band 참고) — 전부 SAME 이라 서비스가 애초에
+    안 줬을 밴드를 "안 언급했다"고 반영 실패로 오판하면 안 된다. `_band_expected`
+    로 그 판단을 복제해, **포함됐어야 할 밴드만** 언급을 요구한다. 언급된
+    밴드는(포함 예정 여부와 무관하게) 방향까지 `_band_direction_correct` 로
+    확인한다 — DIFFERENT라서 줬는데 모델이 방향을 틀리거나 안 언급하면 여전히
+    결함이다.
     """
     district = metrics.get("districtBenchmark")
     if not _district_gate(district) or not _band_gate(district):
@@ -351,23 +372,29 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     sales_mentioned = _band_mentioned(body, sales_band)
     traffic_mentioned = _band_mentioned(body, traffic_band)
     if not sales_mentioned and not traffic_mentioned:
-        return None
-    if not (sales_mentioned and traffic_mentioned):
-        return False
+        return None  # 이번엔 hourlySales 가 선정 안 된 것으로 본다
+
     hourly = metrics.get("hourlySales") or []
+    if _band_expected(hourly, sales_band) and not sales_mentioned:
+        return False
+    if _band_expected(hourly, traffic_band) and not traffic_mentioned:
+        return False
+
     peak_hours = [h for h in (_store_peak_hour(hourly, dt) for dt in _DAY_TYPES) if h is not None]
     if not peak_hours:
-        # 평일·주말 둘 다 우리 매장 피크를 계산할 수 없었던 달이다(app 쪽과 같은
-        # 이유로 비교 필드가 안 보내진다) — 비교를 요구하지 않고 둘 다 인용됐는지만
-        # 본다.
         return True
-    sales_comparisons = {("SAME" if _in_band(h, sales_band) else "DIFFERENT") for h in peak_hours}
-    traffic_comparisons = {
-        ("SAME" if _in_band(h, traffic_band) else "DIFFERENT") for h in peak_hours
-    }
-    return _band_direction_correct(
-        body, sales_comparisons, sales_band, traffic_band
-    ) and _band_direction_correct(body, traffic_comparisons, traffic_band, sales_band)
+    ok = True
+    if sales_mentioned:
+        sales_comparisons = {
+            ("SAME" if _in_band(h, sales_band) else "DIFFERENT") for h in peak_hours
+        }
+        ok = ok and _band_direction_correct(body, sales_comparisons, sales_band, traffic_band)
+    if traffic_mentioned:
+        traffic_comparisons = {
+            ("SAME" if _in_band(h, traffic_band) else "DIFFERENT") for h in peak_hours
+        }
+        ok = ok and _band_direction_correct(body, traffic_comparisons, traffic_band, sales_band)
+    return ok
 
 
 # weekdaySales[].dayOfWeek 표기가 영문 전체 이름("SATURDAY")인지 세글자 약어

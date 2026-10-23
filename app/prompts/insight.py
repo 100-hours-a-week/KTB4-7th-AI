@@ -82,11 +82,17 @@ vsDistrictSalesPeak·vsDistrictFootTrafficPeak 를 Weekday/Weekend 접미로
 추가했다. ③ 밴드 비교 성공 예문이 "행정동 밴드 둘이 서로 다르다"처럼 읽혀
 주어(우리 매장)가 빠진 문장이 통과되고 있었다 — 예문·설명 전부에 "우리 매장의"
 주어를 명시해 행정동 내부 비교로 오독되지 않게 고쳤다.
+
+2026-10-23(#209 재검토 반영): peakSalesHourBand·peakFootTrafficHourBand 는
+이제 SAME(우리 매장 피크와 겹침)이면 그 밴드 자체를 안 보낸다(app/services/
+insight_focus.py 참고) — 하나만 오거나 둘 다 오거나 둘 다 안 올 수 있다.
+"두 개 다 숫자로 그대로 인용하세요"는 둘 다 온다는 전제가 깨져서, "주어진
+필드만 언급하고 없는 건 언급하지 마라"는 조건부 지시로 바꿨다.
 """
 
 import json
 
-VERSION = "2026-10-22"
+VERSION = "2026-10-23"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -114,6 +120,10 @@ districtAvgMonthlySalesPerCafe 는 그 행정동의 커피·음료 업종 점포
 평균보다 낮습니다"라고만 쓰면 안 됩니다 — 그 평균 금액을 반드시 같이 쓰세요.
 peakSalesHourBand 는 반드시 "매출이 가장 많은 시간대"로, peakFootTrafficHourBand 는
 반드시 "유동인구가 가장 많은 시간대"로만 서술하세요 — 두 레이블을 바꿔 쓰지 마세요.
+peakSalesHourBand·peakFootTrafficHourBand 는 **둘 중 하나만 주어질 수도, 둘 다
+주어질 수도, 둘 다 주어지지 않을 수도** 있습니다 — 주어진 필드만 언급하고, 없는
+필드는 언급하지 마세요("유동인구 피크 시간대는 알려지지 않았습니다" 같은 보충
+설명도 하지 마세요).
 vsDistrictSalesPeakWeekday·vsDistrictSalesPeakWeekend·vsDistrictFootTrafficPeakWeekday·
 vsDistrictFootTrafficPeakWeekend 가 있으면 그 값을 그대로 따르고 직접 비교하지
 마세요 — Weekday 접미는 평일, Weekend 접미는 주말 매출 피크 시간대를 기준으로
@@ -121,13 +131,14 @@ vsDistrictFootTrafficPeakWeekend 가 있으면 그 값을 그대로 따르고 �
 밴드와 겹침, DIFFERENT 는 안 겹침을 뜻합니다(SalesPeak 는 peakSalesHourBand,
 FootTrafficPeak 는 peakFootTrafficHourBand 와 짝입니다). 평일과 주말의
 비교 결과가 다를 수 있으니, 평일 얘기를 할 땐 Weekday 값을, 주말 얘기를 할
-땐 Weekend 값을 쓰세요. peakSalesHourBand·peakFootTrafficHourBand 의
-시간대 범위(예: "11-14")는 **두 개 다 숫자로 그대로 인용하세요** — "유동인구
+땐 Weekend 값을 쓰세요. 주어진 peakSalesHourBand·peakFootTrafficHourBand 의
+시간대 범위(예: "11-14")는 **숫자로 그대로 인용하세요** — "유동인구
 피크 시간대와 다릅니다"처럼 비교 결과만 말하고 그 범위를 빠뜨리면 안 됩니다.
-비교 주어도 분명히 밝히세요 — "행정동 밴드 두 개가 서로 다릅니다"가 아니라
+비교 주어도 분명히 밝히세요 — "행정동 밴드가 다릅니다"가 아니라
 "우리 매장 매출 피크가 그 밴드와 같거나 다르다"는 뜻입니다. 올바른 예: "우리
 매장의 매출 피크 시간대가 행정동 매출 피크 시간대(11-14)와 겹치고, 행정동
-유동인구 피크 시간대(17-21)와는 다릅니다." 특정 필드가 없으면 그 요일 유형은
+유동인구 피크 시간대(17-21)와는 다릅니다."(둘 다 주어진 경우) 주어진 밴드가
+하나뿐이면 그 하나만 같은 형식으로 말하세요. 특정 필드가 없으면 그 요일 유형은
 매출 피크 시간을 계산할 수 없었다는 뜻이니, 그 요일 유형과 밴드를 비교해서
 "같다/다르다"를 직접 판단해 말하지 마세요. "행정동이 좋아서/나빠서 매출이
 ~했다"처럼 행정동 상태가 매출에 영향을 줬다고 주장하지 마세요 — 그런 인과를

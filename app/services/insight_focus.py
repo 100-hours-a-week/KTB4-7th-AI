@@ -49,6 +49,15 @@ hourlySales 의 다른 모든 구성(_spread_rows)은 dayType 별로 따로 행�
 필드도 dayType 별로 쪼갰다(vsDistrictSalesPeakWeekday/Weekend,
 vsDistrictFootTrafficPeakWeekday/Weekend) — 어느 dayType 피크를 모델이
 말해도 그에 맞는 비교값을 받는다.
+
+2026-10-23(#209 재검토 반영): peakSalesHourBand·peakFootTrafficHourBand 는
+이제 SAME(우리 매장 피크와 겹침)이면 그 밴드 자체를 안 보낸다 — "다른 가게처럼
+바쁘다"는 당연한 사실만 남아 할 말이 없다는 판단이다. 두 밴드는 서로 독립적으로
+판단한다 — 매출 피크와 유동인구 피크는 다른 시간대일 수 있어, 하나만
+생략되거나 둘 다 생략되거나 둘 다 포함될 수 있다. 존재하는 dayType 비교 중
+하나라도 DIFFERENT면 그 밴드와 해당 라벨을 포함하고, 전부 SAME이면 통째로
+생략한다. 비교를 계산할 dayType이 하나도 없으면(두 dayType 다 영업 데이터
+없음) 밴드 값은 상권 자체의 사실이라 그대로 남긴다(기존과 동일, 2026-10-21(5)).
 """
 
 import re
@@ -195,6 +204,42 @@ def _in_band(hour: int, band: str) -> bool:
     return start <= hour < end
 
 
+def _band_included(points: list[dict], band: str) -> bool:
+    """band(peakSalesHourBand 류)를 focus 에 넣을지.
+
+    존재하는 dayType(피크를 계산할 수 있는 dayType) 비교 중 하나라도 DIFFERENT
+    면 포함한다. 전부 SAME 이면(비교가 하나 이상 있을 때) 생략한다 — "우리
+    매장도 다른 가게처럼 바쁘다"는 당연한 사실만 남아 점주에게 할 말이 거의
+    없다. 두 밴드(매출/유동인구)는 서로 독립적으로 판단한다. 비교가 하나도
+    없으면(두 dayType 다 피크를 못 구함) 밴드 값은 상권 자체의 사실이라 그대로
+    포함한다. devtools/grade.py::_band_expected 가 같은 로직을 복제해 검사한다.
+    """
+    comparisons = [
+        _in_band(hour, band)
+        for hour in (_store_peak_hour(points, day_type) for day_type in _DAY_TYPES)
+        if hour is not None
+    ]
+    return not comparisons or not all(comparisons)
+
+
+def _apply_band(
+    focus: dict, points: list[dict], band_field: str, label_prefix: str, band: str
+) -> None:
+    """band_field(peakSalesHourBand 류)와 그 label_prefix 라벨(Weekday/Weekend)을
+    조건부로 채운다 — 포함 여부는 _band_included 로 정한다.
+    """
+    if not _band_included(points, band):
+        return
+    focus[band_field] = band
+    for day_type in _DAY_TYPES:
+        peak_hour = _store_peak_hour(points, day_type)
+        if peak_hour is None:
+            continue
+        focus[f"{label_prefix}{day_type.capitalize()}"] = (
+            "SAME" if _in_band(peak_hour, band) else "DIFFERENT"
+        )
+
+
 def assign(metrics: dict, max_count: int) -> list[dict]:
     """문장 순서대로의 근거 지표를 돌려준다. 최대 max_count 개.
 
@@ -220,21 +265,14 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
         points = metrics.get(key) or []
         focus = {key: _spread_rows(points, order_key)}
         if key == "hourlySales" and _district_gate(district) and _band_gate(district):
-            focus["peakSalesHourBand"] = district["peakSalesHourBand"]
-            focus["peakFootTrafficHourBand"] = district["peakFootTrafficHourBand"]
-            for day_type in _DAY_TYPES:
-                peak_hour = _store_peak_hour(points, day_type)
-                if peak_hour is None:
-                    continue
-                label = day_type.capitalize()
-                focus[f"vsDistrictSalesPeak{label}"] = (
-                    "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
-                )
-                focus[f"vsDistrictFootTrafficPeak{label}"] = (
-                    "SAME"
-                    if _in_band(peak_hour, district["peakFootTrafficHourBand"])
-                    else "DIFFERENT"
-                )
+            _apply_band(
+                focus, points, "peakSalesHourBand", "vsDistrictSalesPeak",
+                district["peakSalesHourBand"],
+            )
+            _apply_band(
+                focus, points, "peakFootTrafficHourBand", "vsDistrictFootTrafficPeak",
+                district["peakFootTrafficHourBand"],
+            )
         candidates.append((focus, _spread(points) if points else -1.0))
     for key in ("categorySales", "menuRankings"):
         points = metrics.get(key) or []

@@ -488,6 +488,25 @@ def test_채점기의_밴드_경계가_서비스와_같다():
         assert grade._in_band(hour, band) == insight_focus._in_band(hour, band)
 
 
+def test_채점기의_밴드_포함_여부가_서비스와_같다():
+    """app::_band_included 와 같은 로직이어야 한다 — 어긋나면 한쪽은 밴드를
+    줬는데 다른 쪽은 "안 언급했다"고 결함으로 오판한다."""
+    cases: list[tuple[list[dict], str]] = [
+        ([{"dayType": "WEEKDAY", "hour": 14, "menuSales": 500000, "orderCount": 60}], "14-17"),
+        ([{"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60}], "14-17"),
+        (
+            [
+                {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
+                {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
+            ],
+            "14-17",
+        ),
+        ([{"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0}], "14-17"),
+    ]
+    for points, band in cases:
+        assert grade._band_expected(points, band) == insight_focus._band_included(points, band)
+
+
 def test_매출요약이_선정되면_선정률이_참이다():
     result = _district_insight("총 매출은 전기 대비 4.2% 증가했습니다.")
 
@@ -711,6 +730,32 @@ def test_겹치지_않습니다_가_SAME_어간과_혼동되지_않는다():
     )
 
     assert result["상권_피크밴드_반영"] is False
+
+
+def test_두_밴드_모두_SAME이라_서비스가_안_줬으면_안_언급해도_결함이_아니다():
+    """두 밴드 다 우리 매장 피크(14시)와 겹쳐(SAME) 서비스가 애초에 안 줬을
+    상권이다 — 모델이 안 언급해도 결함(False)이 아니라 측정 대상 제외(None)다."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "districtBenchmark": {
+            **_DISTRICT_METRICS["districtBenchmark"],
+            "peakFootTrafficHourBand": "13-16",  # 14시가 이 밴드에도 들어 SAME
+        },
+    }
+    result = _district_insight("총 매출은 전기 대비 4.2% 증가했습니다.", metrics=metrics)
+
+    assert result["상권_피크밴드_반영"] is None
+
+
+def test_한쪽_밴드만_DIFFERENT로_주어지면_그것만_언급해도_통과한다():
+    """peakSalesHourBand(14-17)는 우리 매장 피크(14시)와 겹쳐(SAME) 서비스가 안
+    줄 밴드고, peakFootTrafficHourBand(11-14)는 안 겹쳐(DIFFERENT) 줄 밴드다 —
+    안 준 쪽은 언급 안 해도 되고, 준 쪽만 올바르게 언급하면 반영으로 통과해야 한다."""
+    result = _district_insight(
+        "오전 11시부터 오후 2시(14시)까지인 상권 유동인구 피크와는 다른 시간대에 매출이 가장 높습니다."
+    )
+
+    assert result["상권_피크밴드_반영"] is True
 
 
 def test_시간대축이_선정_안_되면_상권_피크밴드_반영은_측정_대상이_아니다():
