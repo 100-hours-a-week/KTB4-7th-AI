@@ -74,6 +74,8 @@ def strip_fence(raw: str) -> str:
 # 2026-10-24 는 SAME 서술 어휘를 "겹침"에서 "동일함"으로 바꾼 변경이다(사용자
 # 요청). `_DIRECTION_WORDS["SAME"]`에 "동일" 패턴을 추가했다 — 안 더하면
 # 모델이 "동일하다"로 답해도 방향 오류를 못 잡는다.
+# 2026-10-24(2) 는 외부 리뷰로 "동일함"이 "포함됨"으로 다시 바뀐 변경이다 —
+# `_DIRECTION_WORDS["SAME"]`에 "포함" 패턴을 추가했다. "동일" 패턴은 그대로 둔다.
 TARGET_SOLUTION_VERSION = "2026-10-20"
 TARGET_INSIGHT_VERSION = "2026-10-24"
 
@@ -229,6 +231,11 @@ def _axis_selected(body: str, metrics: dict, key: str) -> bool:
 # 2026-10-24: 프롬프트가 SAME을 "겹침" 대신 "동일함"으로 가르치도록 바뀌어서
 # "동일" 패턴을 추가했다 — "동일하지 않습니다"(DIFFERENT의 정답 문구일 수
 # 있다)는 겹치/일치와 같은 이유로 부정 접미를 lookahead로 제외한다.
+# 2026-10-24(2): "동일함"도 글자 그대로 같은 값이라는 뜻으로 읽혀 부정확하다는
+# 외부 리뷰를 받아, 프롬프트는 "포함됨"으로 다시 바뀌었다 — "포함" 패턴을
+# 추가한다(같은 이유로 "포함되지 않"/"포함하지 않" 부정형은 lookahead로 제외).
+# "동일" 패턴은 프롬프트가 더는 안 가르쳐도, 모델이 그렇게 말할 가능성에
+# 대비해 지우지 않고 그대로 둔다.
 _DIRECTION_WORDS = {
     "ABOVE": (re.compile("높"), re.compile("웃돌"), re.compile("상회")),
     "BELOW": (re.compile("낮"), re.compile("밑돌"), re.compile("하회")),
@@ -237,6 +244,7 @@ _DIRECTION_WORDS = {
         re.compile(r"겹치(?!지\s*않)"),
         re.compile(r"(?<!불)일치"),
         re.compile(r"동일(?!하지\s*않)"),
+        re.compile(r"포함(?!되지\s*않|하지\s*않)"),
     ),
     "DIFFERENT": (re.compile(r"겹치지\s*않"), re.compile(r"다른\s*시간대"), re.compile("불일치")),
 }
