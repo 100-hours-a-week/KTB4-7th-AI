@@ -1500,11 +1500,17 @@ if key == "hourlySales" and _district_gate(district) and _band_gate(district):
 # 교체 후
 if key == "hourlySales" and _district_gate(district) and _band_gate(district):
     _apply_band(
-        focus, points, "peakSalesHourBand", "vsDistrictSalesPeak",
+        focus,
+        points,
+        "peakSalesHourBand",
+        "vsDistrictSalesPeak",
         district["peakSalesHourBand"],
     )
     _apply_band(
-        focus, points, "peakFootTrafficHourBand", "vsDistrictFootTrafficPeak",
+        focus,
+        points,
+        "peakFootTrafficHourBand",
+        "vsDistrictFootTrafficPeak",
         district["peakFootTrafficHourBand"],
     )
 ```
