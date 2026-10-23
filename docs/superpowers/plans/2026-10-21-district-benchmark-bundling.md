@@ -55,6 +55,14 @@ candidate를 삭제하고, 같은 함수 안에서 `salesSummary`·`hourlySales`
   라는 표현이 **그 문장 바로 옆에** 있는지 확인한다 — 설계 문서 한 군데에만
   적혀 있고 실제 결과 보고에는 추정치라는 말 없이 "선정률 92%"식으로만 적으면
   이 항목은 통과가 아니다.
+- [ ] **SAME 생략·채점기 동기화 검증(2026-10-23, Task 7)**: `_band_included`
+  (서비스)와 `_band_expected`(채점기)가 실제로 같은 로직인지
+  `test_채점기의_밴드_포함_여부가_서비스와_같다`가 통과하는지 PR diff에서
+  직접 확인한다. 서비스가 밴드를 생략했는데 채점기가 "안 언급했다"고
+  오판하지 않는지는
+  `test_두_밴드_모두_SAME이라_서비스가_안_줬으면_안_언급해도_결함이_아니다`가
+  `None`(결함 아님)을 단언하는지로 확인한다 — `False`로 잘못 바뀌어 있으면
+  이 항목은 통과가 아니다.
 
 ---
 
@@ -1318,6 +1326,429 @@ Expected: `districtBenchmark` 객체가 요청 예시에 그대로 나온다(요
 ```bash
 git add docs/STATE.md
 git commit -m "docs: STATE.md에 상권 번들링 작업 내용을 반영한다(#209)"
+```
+
+---
+
+## Task 7: `hourlySales` 상권 밴드 — SAME이면 생략 (2026-10-23 재검토)
+
+**배경**: Task 2까지는 `peakSalesHourBand`/`peakFootTrafficHourBand` 두 밴드를
+게이트만 통과하면 항상 focus에 넣었다. 매장 피크가 그 밴드와 겹치면(SAME)
+"다른 가게처럼 바쁘다"는 당연한 사실만 남아 점주에게 전달할 가치가 거의 없다
+— 설계 문서 "3) SAME이면 밴드 생략" 참고. 두 밴드(매출/유동인구)는 독립적으로
+판단한다.
+
+**Files:**
+- Modify: `app/services/insight_focus.py`
+- Modify: `devtools/grade.py`
+- Modify: `app/prompts/insight.py`
+- Test: `tests/test_insight_focus.py`
+- Test: `tests/test_grade.py`
+
+**Interfaces:**
+- Consumes: `insight_focus._district_gate`·`_band_gate`·`_store_peak_hour(points, day_type)`·
+  `_in_band(hour, band)`·`_DAY_TYPES`(Task 2에서 정의); `grade._district_gate`·`_band_gate`·
+  `_store_peak_hour`·`_in_band`·`_DAY_TYPES`·`_band_mentioned`·`_band_direction_correct`(Task 4에서 정의)
+- Produces: `insight_focus._band_included(points: list[dict], band: str) -> bool`,
+  `insight_focus._apply_band(focus: dict, points: list[dict], band_field: str, label_prefix: str, band: str) -> None`,
+  `grade._band_expected(points: list[dict], band: str) -> bool`(서비스 쪾
+  `_band_included`과 반드시 같은 로직 — drift 테스트로 고정)
+
+### Step 1: `tests/test_insight_focus.py`에 실패하는 테스트부터 쓴다
+
+194~211행의 기존 두 테스트를 아래로 교체한다(이름·단언이 바뀐다 — "SAME이면
+생략"이라는 새 요구사항에 맞게 재해석):
+
+```python
+def test_시간대_축이_선정되면_DIFFERENT인_밴드만_같이_묻는다():
+    """우리 매장 매출 피크(평일 11시)는 peakSalesHourBand(14-17)엔 안 들어(DIFFERENT)
+    포함되고, peakFootTrafficHourBand(11-14)엔 들어(SAME) 생략된다 — 두 밴드는
+    독립적으로 판단한다."""
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert "peakFootTrafficHourBand" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
+
+
+def test_두_밴드_모두_SAME이면_둘_다_생략한다():
+    """우리 매장 매출 피크(평일 11시)가 두 밴드 모두에 들면(SAME) "다른 가게처럼
+    바쁘다"는 당연한 사실만 남아 할 말이 없다 — 밴드·라벨을 통째로 생략한다."""
+    district = {**DISTRICT, "peakSalesHourBand": "10-13"}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "peakFootTrafficHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert "vsDistrictFootTrafficPeakWeekday" not in hourly_focus
+```
+
+같은 파일에 아래 두 테스트를 새로 추가한다(기존 테스트들 뒤, `test_상권_필드가_없으면_시간대_축에_안_묻는다` 앞):
+
+```python
+def test_유동인구_밴드만_DIFFERENT이면_그_밴드만_포함된다():
+    """위 테스트의 반대 방향 — 매출 밴드가 SAME으로 생략되고 유동인구 밴드만
+    남는지 확인한다."""
+    district = {**DISTRICT, "peakSalesHourBand": "10-13", "peakFootTrafficHourBand": "14-17"}
+    focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert "peakSalesHourBand" not in hourly_focus
+    assert "vsDistrictSalesPeakWeekday" not in hourly_focus
+    assert hourly_focus["peakFootTrafficHourBand"] == "14-17"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekday"] == "DIFFERENT"
+
+
+def test_두_밴드_모두_DIFFERENT이면_둘_다_포함된다():
+    """회귀 기준선 — 둘 다 DIFFERENT인 "흔한" 경우가 여전히 둘 다 포함되는지."""
+    hours = [{"dayType": "WEEKDAY", "hour": 20, "menuSales": 500000, "orderCount": 60}]
+    focus = assign({**METRICS, "hourlySales": hours, "districtBenchmark": DISTRICT}, max_count=4)
+
+    hourly_focus = next(item for item in focus if "hourlySales" in item)
+    assert hourly_focus["peakSalesHourBand"] == "14-17"
+    assert hourly_focus["vsDistrictSalesPeakWeekday"] == "DIFFERENT"
+    assert hourly_focus["peakFootTrafficHourBand"] == "11-14"
+    assert hourly_focus["vsDistrictFootTrafficPeakWeekday"] == "DIFFERENT"
+```
+
+### Step 2: 테스트 실행 — 실패 확인
+
+```bash
+uv run pytest tests/test_insight_focus.py -v
+```
+
+Expected: 위 4개(교체 2 + 신규 2) FAIL. 교체한 2개는 `peakFootTrafficHourBand`가
+여전히 무조건 들어 있어서 `not in` 단언이 깨지고, 신규 2개는 `_apply_band`가
+아직 없어 `AssertionError`(값이 지금 로직 그대로라 기대와 다름)로 실패한다.
+
+### Step 3: `app/services/insight_focus.py` 구현
+
+머리말 docstring 2026-10-22 항목 바로 뒤에 추가:
+
+```python
+2026-10-23(#209 재검토 반영): peakSalesHourBand·peakFootTrafficHourBand 는
+이제 SAME(우리 매장 피크와 겹침)이면 그 밴드 자체를 안 보낸다 — "다른 가게처럼
+바쁘다"는 당연한 사실만 남아 할 말이 없다는 판단이다. 두 밴드는 서로 독립적으로
+판단한다 — 매출 피크와 유동인구 피크는 다른 시간대일 수 있어, 하나만
+생략되거나 둘 다 생략되거나 둘 다 포함될 수 있다. 존재하는 dayType 비교 중
+하나라도 DIFFERENT면 그 밴드와 해당 라벨을 포함하고, 전부 SAME이면 통째로
+생략한다. 비교를 계산할 dayType이 하나도 없으면(두 dayType 다 영업 데이터
+없음) 밴드 값은 상권 자체의 사실이라 그대로 남긴다(기존과 동일, 2026-10-21(5)).
+```
+
+`_in_band` 함수 뒤, `assign()` 앞에 헬퍼 2개 추가:
+
+```python
+def _band_included(points: list[dict], band: str) -> bool:
+    """band(peakSalesHourBand 류)를 focus 에 넣을지.
+
+    존재하는 dayType(피크를 계산할 수 있는 dayType) 비교 중 하나라도 DIFFERENT
+    면 포함한다. 전부 SAME 이면(비교가 하나 이상 있을 때) 생략한다 — "우리
+    매장도 다른 가게처럼 바쁘다"는 당연한 사실만 남아 점주에게 할 말이 거의
+    없다. 두 밴드(매출/유동인구)는 서로 독립적으로 판단한다. 비교가 하나도
+    없으면(두 dayType 다 피크를 못 구함) 밴드 값은 상권 자체의 사실이라 그대로
+    포함한다. devtools/grade.py::_band_expected 가 같은 로직을 복제해 검사한다.
+    """
+    comparisons = [
+        _in_band(hour, band)
+        for hour in (_store_peak_hour(points, day_type) for day_type in _DAY_TYPES)
+        if hour is not None
+    ]
+    return not comparisons or not all(comparisons)
+
+
+def _apply_band(
+    focus: dict, points: list[dict], band_field: str, label_prefix: str, band: str
+) -> None:
+    """band_field(peakSalesHourBand 류)와 그 label_prefix 라벨(Weekday/Weekend)을
+    조건부로 채운다 — 포함 여부는 _band_included 로 정한다.
+    """
+    if not _band_included(points, band):
+        return
+    focus[band_field] = band
+    for day_type in _DAY_TYPES:
+        peak_hour = _store_peak_hour(points, day_type)
+        if peak_hour is None:
+            continue
+        focus[f"{label_prefix}{day_type.capitalize()}"] = (
+            "SAME" if _in_band(peak_hour, band) else "DIFFERENT"
+        )
+```
+
+`assign()` 안 `hourlySales` 분기(Task 2에서 만든 블록)를 교체:
+
+```python
+# 교체 전
+if key == "hourlySales" and _district_gate(district) and _band_gate(district):
+    focus["peakSalesHourBand"] = district["peakSalesHourBand"]
+    focus["peakFootTrafficHourBand"] = district["peakFootTrafficHourBand"]
+    for day_type in _DAY_TYPES:
+        peak_hour = _store_peak_hour(points, day_type)
+        if peak_hour is None:
+            continue
+        label = day_type.capitalize()
+        focus[f"vsDistrictSalesPeak{label}"] = (
+            "SAME" if _in_band(peak_hour, district["peakSalesHourBand"]) else "DIFFERENT"
+        )
+        focus[f"vsDistrictFootTrafficPeak{label}"] = (
+            "SAME" if _in_band(peak_hour, district["peakFootTrafficHourBand"]) else "DIFFERENT"
+        )
+
+# 교체 후
+if key == "hourlySales" and _district_gate(district) and _band_gate(district):
+    _apply_band(
+        focus, points, "peakSalesHourBand", "vsDistrictSalesPeak",
+        district["peakSalesHourBand"],
+    )
+    _apply_band(
+        focus, points, "peakFootTrafficHourBand", "vsDistrictFootTrafficPeak",
+        district["peakFootTrafficHourBand"],
+    )
+```
+
+### Step 4: 테스트 실행 — 통과 확인
+
+```bash
+uv run pytest tests/test_insight_focus.py -v
+```
+
+Expected: 전부 PASS. 그 아래 기존 테스트(`test_평일_주말_피크가_다른_밴드에_들면...`
+등)도 같이 돌려 회귀가 없는지 확인한다 — 수치상 영향 없어야 한다(두 밴드가
+이미 "혼합"(하나는 SAME, 하나는 DIFFERENT) 케이스라 `_band_included`가 둘 다
+`True`를 돌려준다).
+
+### Step 5: `tests/test_grade.py`에 실패하는 테스트부터 쓴다
+
+`test_채점기의_매장_피크_시간이_서비스와_같다` 근처에 추가:
+
+```python
+def test_채점기의_밴드_포함_여부가_서비스와_같다():
+    """app::_band_included 와 같은 로직이어야 한다 — 어긋나면 한쪽은 밴드를
+    줬는데 다른 쪽은 "안 언급했다"고 결함으로 오판한다."""
+    cases: list[tuple[list[dict], str]] = [
+        ([{"dayType": "WEEKDAY", "hour": 14, "menuSales": 500000, "orderCount": 60}], "14-17"),
+        ([{"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60}], "14-17"),
+        (
+            [
+                {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
+                {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
+            ],
+            "14-17",
+        ),
+        ([{"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0}], "14-17"),
+    ]
+    for points, band in cases:
+        assert grade._band_expected(points, band) == insight_focus._band_included(points, band)
+```
+
+`test_시간대축이_선정_안_되면_상권_피크밴드_반영은_측정_대상이_아니다` 근처에 추가:
+
+```python
+def test_두_밴드_모두_SAME이라_서비스가_안_줬으면_안_언급해도_결함이_아니다():
+    """두 밴드 다 우리 매장 피크(14시)와 겹쳐(SAME) 서비스가 애초에 안 줬을
+    상권이다 — 모델이 안 언급해도 결함(False)이 아니라 측정 대상 제외(None)다."""
+    metrics = {
+        **_DISTRICT_METRICS,
+        "districtBenchmark": {
+            **_DISTRICT_METRICS["districtBenchmark"],
+            "peakFootTrafficHourBand": "13-16",  # 14시가 이 밴드에도 들어 SAME
+        },
+    }
+    result = _district_insight("총 매출은 전기 대비 4.2% 증가했습니다.", metrics=metrics)
+
+    assert result["상권_피크밴드_반영"] is None
+
+
+def test_한쪽_밴드만_DIFFERENT로_주어지면_그것만_언급해도_통과한다():
+    """peakSalesHourBand(14-17)는 우리 매장 피크(14시)와 겹쳐(SAME) 서비스가 안
+    줬을 밴드고, peakFootTrafficHourBand(11-14)는 안 겹쳐(DIFFERENT) 줬을
+    밴드다 — 안 준 쪽은 언급 안 해도 되고, 준 쪽만 올바르게 언급하면 반영으로
+    통과해야 한다."""
+    result = _district_insight(
+        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 다른 시간대에 매출이 가장 높습니다."
+    )
+
+    assert result["상권_피크밴드_반영"] is True
+```
+
+### Step 6: 테스트 실행 — 실패 확인
+
+```bash
+uv run pytest tests/test_grade.py -v
+```
+
+Expected: 위 3개 FAIL(`_band_expected` 미정의로 `AttributeError`, 또는 기존
+`_district_band_reflected`가 "둘 다 언급해야 통과"라 새 기대값과 안 맞음).
+기존 13개 테스트(587~758행)는 **여전히 PASS**여야 한다(아직 안 바꿨으니까).
+
+### Step 7: `devtools/grade.py` 구현
+
+상단 "대조한 프롬프트 판" 주석 블록 뒤에 추가 + 버전 bump:
+
+```python
+# 2026-10-23 은 peakSalesHourBand·peakFootTrafficHourBand 가 SAME 이면(우리
+# 매장 피크와 겹치면) 서비스가 그 밴드 자체를 안 보내도록 바뀐 변경이다
+# (app/services/insight_focus.py::_apply_band). `상권_피크밴드_반영` 은
+# "서비스가 실제로 줬을 밴드"만 언급을 요구하도록 고쳤다 — 전부 SAME 이라
+# 안 준 밴드를 "안 언급했다"고 결함으로 오판하면 안 된다. 언급된 밴드는(줬을
+# 밴드가 아니어도) 여전히 방향까지 확인한다 — `_band_mentioned`·
+# `_band_direction_correct`는 손대지 않았다.
+TARGET_INSIGHT_VERSION = "2026-10-23"
+```
+
+`_in_band` 뒤, `_axis_selected` 앞에 추가:
+
+```python
+# app/services/insight_focus.py::_band_included 와 같은 로직이어야 한다 —
+# 어긋나면 한쪽은 밴드를 줬는데 다른 쪽은 "안 언급했다"고 결함(False)으로
+# 오판한다.
+def _band_expected(points: list[dict], band: str) -> bool:
+    comparisons = [
+        _in_band(h, band)
+        for h in (_store_peak_hour(points, dt) for dt in _DAY_TYPES)
+        if h is not None
+    ]
+    return not comparisons or not all(comparisons)
+```
+
+`_district_band_reflected` 전체를 교체:
+
+```python
+def _district_band_reflected(body: str, metrics: dict) -> bool | None:
+    """게이트를 통과하고, 서비스가 실제로 줬을 밴드가 하나라도 언급됐을 때만
+    유효한 측정이다.
+
+    2026-10-23 부터 두 밴드는 독립적으로 포함 여부가 갈린다(app/services/
+    insight_focus.py::_apply_band 참고) — 전부 SAME 이라 서비스가 애초에
+    안 줬을 밴드를 "안 언급했다"고 반영 실패로 오판하면 안 된다. `_band_expected`
+    로 그 판단을 복제해, **포함됐어야 할 밴드만** 언급을 요구한다. 언급된
+    밴드는(포함 예정 여부와 무관하게) 방향까지 `_band_direction_correct` 로
+    확인한다 — DIFFERENT라서 줬는데 모델이 방향을 틀리거나 안 언급하면 여전히
+    결함이다.
+    """
+    district = metrics.get("districtBenchmark")
+    if not _district_gate(district) or not _band_gate(district):
+        return None
+    sales_band = district["peakSalesHourBand"]
+    traffic_band = district["peakFootTrafficHourBand"]
+    sales_mentioned = _band_mentioned(body, sales_band)
+    traffic_mentioned = _band_mentioned(body, traffic_band)
+    if not sales_mentioned and not traffic_mentioned:
+        return None  # 이번엔 hourlySales 가 선정 안 된 것으로 본다
+
+    hourly = metrics.get("hourlySales") or []
+    if _band_expected(hourly, sales_band) and not sales_mentioned:
+        return False
+    if _band_expected(hourly, traffic_band) and not traffic_mentioned:
+        return False
+
+    peak_hours = [h for h in (_store_peak_hour(hourly, dt) for dt in _DAY_TYPES) if h is not None]
+    if not peak_hours:
+        return True
+    ok = True
+    if sales_mentioned:
+        sales_comparisons = {
+            ("SAME" if _in_band(h, sales_band) else "DIFFERENT") for h in peak_hours
+        }
+        ok = ok and _band_direction_correct(body, sales_comparisons, sales_band, traffic_band)
+    if traffic_mentioned:
+        traffic_comparisons = {
+            ("SAME" if _in_band(h, traffic_band) else "DIFFERENT") for h in peak_hours
+        }
+        ok = ok and _band_direction_correct(body, traffic_comparisons, traffic_band, sales_band)
+    return ok
+```
+
+### Step 8: 테스트 실행 — 통과 확인
+
+```bash
+uv run pytest tests/test_grade.py -v
+```
+
+Expected: 전부 PASS — 새로 추가한 3개뿐 아니라 **기존 13개(587~758행)도 한 글자도
+안 고쳤는데 그대로 통과**한다. 이유: 새 로직은 "포함됐어야 할 밴드만 언급을
+강제"하지만 "언급된 밴드는 포함 예정 여부와 무관하게 방향을 검사"하므로,
+기존 테스트가 만든 문장들은 전부 두 밴드 숫자를 다 담고 있어 결론이 안 바뀐다.
+만약 하나라도 실패하면 Step 7의 교체가 기존 동작을 바꾼 것이니 다시 대조한다.
+
+### Step 9: `app/prompts/insight.py` 수정
+
+머리말 docstring 2026-10-22(3) 항목 뒤에 추가:
+
+```python
+2026-10-23(#209 재검토 반영): peakSalesHourBand·peakFootTrafficHourBand 는
+이제 SAME(우리 매장 피크와 겹침)이면 그 밴드 자체를 안 보낸다(app/services/
+insight_focus.py 참고) — 하나만 오거나 둘 다 오거나 둘 다 안 올 수 있다.
+"두 개 다 숫자로 그대로 인용하세요"는 둘 다 온다는 전제가 깨져서, "주어진
+필드만 언급하고 없는 건 언급하지 마라"는 조건부 지시로 바꿨다.
+```
+
+`VERSION` bump:
+
+```python
+VERSION = "2026-10-23"
+```
+
+SYSTEM 안 밴드 지시문을 교체:
+
+```python
+# 교체 전 (일부)
+peakSalesHourBand 는 반드시 "매출이 가장 많은 시간대"로, peakFootTrafficHourBand 는
+반드시 "유동인구가 가장 많은 시간대"로만 서술하세요 — 두 레이블을 바꿔 쓰지 마세요.
+vsDistrictSalesPeakWeekday·...
+
+# 교체 후
+peakSalesHourBand 는 반드시 "매출이 가장 많은 시간대"로, peakFootTrafficHourBand 는
+반드시 "유동인구가 가장 많은 시간대"로만 서술하세요 — 두 레이블을 바꿔 쓰지 마세요.
+peakSalesHourBand·peakFootTrafficHourBand 는 **둘 중 하나만 주어질 수도, 둘 다
+주어질 수도, 둘 다 주어지지 않을 수도** 있습니다 — 주어진 필드만 언급하고, 없는
+필드는 언급하지 마세요("유동인구 피크 시간대는 알려지지 않았습니다" 같은 보충
+설명도 하지 마세요).
+vsDistrictSalesPeakWeekday·...
+```
+
+그리고 "두 개 다 숫자로 그대로 인용하세요" 문단을 아래로 교체:
+
+```python
+# 교체 전
+땐 Weekend 값을 쓰세요. peakSalesHourBand·peakFootTrafficHourBand 의
+시간대 범위(예: "11-14")는 **두 개 다 숫자로 그대로 인용하세요** — "유동인구
+피크 시간대와 다릅니다"처럼 비교 결과만 말하고 그 범위를 빠뜨리면 안 됩니다.
+비교 주어도 분명히 밝히세요 — "행정동 밴드 두 개가 서로 다릅니다"가 아니라
+"우리 매장 매출 피크가 그 밴드와 같거나 다르다"는 뜻입니다. 올바른 예: "우리
+매장의 매출 피크 시간대가 행정동 매출 피크 시간대(11-14)와 겹치고, 행정동
+유동인구 피크 시간대(17-21)와는 다릅니다." 특정 필드가 없으면 그 요일 유형은
+
+# 교체 후
+땐 Weekend 값을 쓰세요. 주어진 peakSalesHourBand·peakFootTrafficHourBand 의
+시간대 범위(예: "11-14")는 **숫자로 그대로 인용하세요** — "유동인구
+피크 시간대와 다릅니다"처럼 비교 결과만 말하고 그 범위를 빠뜨리면 안 됩니다.
+비교 주어도 분명히 밝히세요 — "행정동 밴드가 다릅니다"가 아니라
+"우리 매장 매출 피크가 그 밴드와 같거나 다르다"는 뜻입니다. 올바른 예: "우리
+매장의 매출 피크 시간대가 행정동 매출 피크 시간대(11-14)와 겹치고, 행정동
+유동인구 피크 시간대(17-21)와는 다릅니다."(둘 다 주어진 경우) 주어진 밴드가
+하나뿐이면 그 하나만 같은 형식으로 말하세요. 특정 필드가 없으면 그 요일 유형은
+```
+
+### Step 10: 전체 검증
+
+```bash
+uv run pytest -q
+uv run ruff check --fix . && uv run ruff format .
+```
+
+Expected: 전부 PASS, Task 6에서 확인한 수보다 +5(insight_focus 신규 2 +
+grade 신규 3) 이상. ruff 추가 수정 없음.
+
+### Step 11: 커밋
+
+```bash
+git add app/services/insight_focus.py devtools/grade.py app/prompts/insight.py \
+  tests/test_insight_focus.py tests/test_grade.py
+git commit -m "fix: 매장 피크와 같은(SAME) 상권 밴드는 번들링에서 생략한다(#209)"
 ```
 
 ---
