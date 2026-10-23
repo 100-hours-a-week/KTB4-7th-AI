@@ -88,11 +88,16 @@ vsDistrictSalesPeak·vsDistrictFootTrafficPeak 를 Weekday/Weekend 접미로
 insight_focus.py 참고) — 하나만 오거나 둘 다 오거나 둘 다 안 올 수 있다.
 "두 개 다 숫자로 그대로 인용하세요"는 둘 다 온다는 전제가 깨져서, "주어진
 필드만 언급하고 없는 건 언급하지 마라"는 조건부 지시로 바꿨다.
+
+2026-10-24(사용자 요청): SAME 비교를 "겹침"으로 서술하라는 지시·예문을
+"동일함"으로 바꿨다. devtools/grade.py::_DIRECTION_WORDS["SAME"]에 "동일"
+패턴을 추가해 같이 맞췄다 — 안 바꾸면 모델이 "동일하다"로 답해도 채점기가
+SAME 어휘로 인식 못 해 방향 검사가 전부 통과(무검증)로 샐 수 있다.
 """
 
 import json
 
-VERSION = "2026-10-23"
+VERSION = "2026-10-24"
 
 SYSTEM = """당신은 카페 매출 분석 어시스턴트입니다.
 아래 지표만 근거로 사용하고, 직접 계산하거나 새로운 수치를 만들지 마세요.
@@ -128,7 +133,7 @@ vsDistrictSalesPeakWeekday·vsDistrictSalesPeakWeekend·vsDistrictFootTrafficPea
 vsDistrictFootTrafficPeakWeekend 가 있으면 그 값을 그대로 따르고 직접 비교하지
 마세요 — Weekday 접미는 평일, Weekend 접미는 주말 매출 피크 시간대를 기준으로
 계산한 값입니다. SAME 은 **우리 매장의** 그 요일 유형 매출 피크 시간대가 행정동
-밴드와 겹침, DIFFERENT 는 안 겹침을 뜻합니다(SalesPeak 는 peakSalesHourBand,
+밴드와 동일함, DIFFERENT 는 다름을 뜻합니다(SalesPeak 는 peakSalesHourBand,
 FootTrafficPeak 는 peakFootTrafficHourBand 와 짝입니다). 평일과 주말의
 비교 결과가 다를 수 있으니, 평일 얘기를 할 땐 Weekday 값을, 주말 얘기를 할
 땐 Weekend 값을 쓰세요. 주어진 peakSalesHourBand·peakFootTrafficHourBand 의
@@ -136,7 +141,7 @@ FootTrafficPeak 는 peakFootTrafficHourBand 와 짝입니다). 평일과 주말�
 피크 시간대와 다릅니다"처럼 비교 결과만 말하고 그 범위를 빠뜨리면 안 됩니다.
 비교 주어도 분명히 밝히세요 — "행정동 밴드가 다릅니다"가 아니라
 "우리 매장 매출 피크가 그 밴드와 같거나 다르다"는 뜻입니다. 올바른 예: "우리
-매장의 매출 피크 시간대가 행정동 매출 피크 시간대(11-14)와 겹치고, 행정동
+매장의 매출 피크 시간대가 행정동 매출 피크 시간대(11-14)와 동일하고, 행정동
 유동인구 피크 시간대(17-21)와는 다릅니다."(둘 다 주어진 경우) 주어진 밴드가
 하나뿐이면 그 하나만 같은 형식으로 말하세요. 특정 필드가 없으면 그 요일 유형은
 매출 피크 시간을 계산할 수 없었다는 뜻이니, 그 요일 유형과 밴드를 비교해서

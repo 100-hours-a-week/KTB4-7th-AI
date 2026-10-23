@@ -71,8 +71,11 @@ def strip_fence(raw: str) -> str:
 # 안 준 밴드를 "안 언급했다"고 결함으로 오판하면 안 된다. 언급된 밴드는(줬을
 # 밴드가 아니어도) 여전히 방향까지 확인한다 — `_band_mentioned`·
 # `_band_direction_correct`는 손대지 않았다.
+# 2026-10-24 는 SAME 서술 어휘를 "겹침"에서 "동일함"으로 바꾼 변경이다(사용자
+# 요청). `_DIRECTION_WORDS["SAME"]`에 "동일" 패턴을 추가했다 — 안 더하면
+# 모델이 "동일하다"로 답해도 방향 오류를 못 잡는다.
 TARGET_SOLUTION_VERSION = "2026-10-20"
-TARGET_INSIGHT_VERSION = "2026-10-23"
+TARGET_INSIGHT_VERSION = "2026-10-24"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
@@ -223,11 +226,18 @@ def _axis_selected(body: str, metrics: dict, key: str) -> bool:
 # 정답 문구 "겹치지 않습니다"에도 포함돼 있어 SAME으로 오매칭된다 — 부정 접미
 # "지 않"이 뒤따르면 SAME이 아니라고 미리 걸러낸다(음성 lookahead). "일치"도
 # DIFFERENT의 "불일치"에 포함되므로 같은 이유로 "불" 접두를 제외한다.
+# 2026-10-24: 프롬프트가 SAME을 "겹침" 대신 "동일함"으로 가르치도록 바뀌어서
+# "동일" 패턴을 추가했다 — "동일하지 않습니다"(DIFFERENT의 정답 문구일 수
+# 있다)는 겹치/일치와 같은 이유로 부정 접미를 lookahead로 제외한다.
 _DIRECTION_WORDS = {
     "ABOVE": (re.compile("높"), re.compile("웃돌"), re.compile("상회")),
     "BELOW": (re.compile("낮"), re.compile("밑돌"), re.compile("하회")),
     "EQUAL": (re.compile("같습니다"), re.compile("동일")),
-    "SAME": (re.compile(r"겹치(?!지\s*않)"), re.compile(r"(?<!불)일치")),
+    "SAME": (
+        re.compile(r"겹치(?!지\s*않)"),
+        re.compile(r"(?<!불)일치"),
+        re.compile(r"동일(?!하지\s*않)"),
+    ),
     "DIFFERENT": (re.compile(r"겹치지\s*않"), re.compile(r"다른\s*시간대"), re.compile("불일치")),
 }
 _OPPOSITE = {
