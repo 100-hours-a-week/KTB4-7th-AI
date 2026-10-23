@@ -363,6 +363,13 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     밴드는(포함 예정 여부와 무관하게) 방향까지 `_band_direction_correct` 로
     확인한다 — DIFFERENT라서 줬는데 모델이 방향을 틀리거나 안 언급하면 여전히
     결함이다.
+
+    한계(최종 리뷰, 2026-10-23): SAME이라 생략된 밴드를 모델이 그래도 멋대로
+    말하면 이 함수는 "언급됐다"고 보고 방향만 확인한다 — 애초에 안 준 숫자를
+    모델이 안다는 것 자체는 못 잡는다. `metrics`가 focus 블록이 아니라 전체
+    지표라 `UNGROUNDED_NUMBER`도 못 잡는다(그 숫자가 `districtBenchmark`엔
+    실제로 존재하니까). 이건 이 지표의 범위 밖이고, 실제 방지책은 프롬프트
+    쪽(주어진 필드만 언급하라는 지시)이다.
     """
     district = metrics.get("districtBenchmark")
     if not _district_gate(district) or not _band_gate(district):
