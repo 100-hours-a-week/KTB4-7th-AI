@@ -557,6 +557,29 @@ async def test_재시도해도_여전히_모자라면_그때까지_받은_걸_�
     assert insights == ["9월 총 매출은 7,920,000원으로 이전 기간보다 4.2% 증가했습니다."]
 
 
+async def test_재시도가_더_나쁘면_1회차를_쓴다(monkeypatch):
+    first = [
+        "9월 총 매출은 7,920,000원으로 이전 기간보다 4.2% 증가했습니다.",
+        "아메리카노 매출은 2,108,000원으로 메뉴 매출의 28.2%를 차지했습니다.",
+    ]
+    calls = []
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            return json.dumps({"insights": first}, ensure_ascii=False)
+        return json.dumps(
+            {"insights": ["커피 매출은 전체 메뉴 매출의 41.7%를 차지합니다."]}, ensure_ascii=False
+        )
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(calls) == 2
+    assert res.json()["data"]["insights"] == first, "2회차(1개)가 더 적으면 1회차(2개)를 쓴다"
+
+
 async def test_지표에_없는_수치를_쓴_문장도_버린다(monkeypatch):
     async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
         return json.dumps(
