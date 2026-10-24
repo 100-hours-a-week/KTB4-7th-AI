@@ -2,10 +2,12 @@
 
 BE 가 COST_INPUT_REQUIRED·EMPTY 를 걸러서 호출하지만, 통과하고도 매출이 전부 0원인 경우가
 남아 그때는 LLM 을 부르지 않고 INSUFFICIENT_DATA 를 돌려준다. 파싱이 실패하면 1회만 재시도한다.
+
+2026-10-24: 생성 루프를 app/services/insight.py::_complete_best_effort 로 옮겼다 —
+요청한 개수보다 적게 나오면 그 1회 재시도를 써서 더 채운다(매출 인사이트와 같은 문제,
+같은 수정).
 """
 
-from app.clients import llm
-from app.core.config import settings
 from app.core.errors import ApiError
 from app.prompts import profit_insight as prompt
 from app.schemas.profit_insight import (
@@ -14,7 +16,7 @@ from app.schemas.profit_insight import (
     ProfitInsightRequest,
     ProfitInsightResponse,
 )
-from app.services.insight import MAX_CHARS, MAX_RETRY, MAX_TOKENS, _parse
+from app.services.insight import MAX_CHARS, _complete_best_effort
 
 _WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
 
@@ -61,20 +63,10 @@ async def generate(req: ProfitInsightRequest) -> ProfitInsightResponse:
         MAX_CHARS,
     )
 
-    insights = None
-    for _ in range(MAX_RETRY + 1):
-        raw = await llm.complete(
-            prompt.SYSTEM,
-            user,
-            max_tokens=MAX_TOKENS,
-            timeout=settings.insight_llm_timeout_seconds,
-        )
-        # metrics=None → 금액 어림·수치 접지 검사를 건너뛴다. 매출 인사이트에는 2026-10-20
-        # 에 넣었는데(A40 실측에서 금액_어림 77.5%·수치_정확 65.0% 가 그대로 나갔다),
-        # 순이익 쪽은 지표 모양이 달라 접지 기준을 못 정했고 측정도 없다.
-        insights = _parse(raw, req.maxInsightCount, None)
-        if insights:
-            break
+    # metrics=None → 금액 어림·수치 접지 검사를 건너뛴다. 매출 인사이트에는 2026-10-20
+    # 에 넣었는데(A40 실측에서 금액_어림 77.5%·수치_정확 65.0% 가 그대로 나갔다),
+    # 순이익 쪽은 지표 모양이 달라 접지 기준을 못 정했고 측정도 없다.
+    insights = await _complete_best_effort(prompt.SYSTEM, user, req.maxInsightCount, None)
 
     if not insights:
         raise ApiError(

@@ -4,6 +4,12 @@
 셀 수 없다. 다만 그 검사를 통과하고도 **지표가 사실상 비어 있는 경우**는 남아서,
 그때는 LLM 을 부르지 않고 INSUFFICIENT_DATA 를 돌려준다(아래 _missing_data).
 생성에 들어간 뒤 파싱이 실패하면 1회만 재시도한다.
+
+2026-10-24: 파싱은 됐지만 위반 문장이 버려져 요청한 개수(wanted)보다 적게
+나오는 경우도 그 1회 재시도를 쓴다(`_complete_best_effort`) — 예전엔 뭐라도
+받으면 멈춰서, 3개 중 1개가 걸러지면 재시도 없이 2개만 그대로 나갔다(점주 신고).
+재시도해도 더 못 채우면 먼저 받은 걸 그대로 쓴다 — 없는 근거로 억지로 3개를
+채우진 않는다.
 """
 
 import json
@@ -118,6 +124,32 @@ def _parse(raw: str, max_count: int, metrics: dict | None) -> list[str] | None:
     return kept or None
 
 
+async def _complete_best_effort(
+    system: str, user: str, wanted: int, metrics: dict | None
+) -> list[str] | None:
+    """wanted 개를 받을 때까지 MAX_RETRY 번 안에서 재시도하고, 그래도 모자라면
+    그때까지 받은 것 중 가장 많이 건진 걸 돌려준다 — 0 보다는 낫다(2026-10-24,
+    점주 신고 — 3개 요청했는데 2개만 보임).
+
+    `_parse` 가 위반 문장만 버려서(ROUNDED_AMOUNT 등) 모델이 wanted 개를 만들어도
+    결과가 그보다 적게 나갈 수 있다. 예전엔 "뭔가 받으면 바로 멈춘다"(모자라도
+    재시도 안 함)라 그 위반이 재시도 없이 그대로 화면에 나갔다. wanted 는
+    assign_focus 가 실제로 찾은 축 수라 — 모자란 건 재료 부족이 아니라 그날 생성
+    품질 문제다. 재시도로 더 받으면 쓰고, 더 못 받으면 먼저 받은 걸 그대로 쓴다.
+    """
+    best: list[str] | None = None
+    for _ in range(MAX_RETRY + 1):
+        raw = await llm.complete(
+            system, user, max_tokens=MAX_TOKENS, timeout=settings.insight_llm_timeout_seconds
+        )
+        parsed = _parse(raw, wanted, metrics)
+        if parsed and (best is None or len(parsed) > len(best)):
+            best = parsed
+        if best and len(best) >= wanted:
+            break
+    return best
+
+
 async def generate(req: InsightRequest) -> InsightResponse:
     missing = _missing_data(req.metrics)
     if missing:
@@ -139,17 +171,7 @@ async def generate(req: InsightRequest) -> InsightResponse:
     # 배정한 수만큼만 받는다. _missing_data 를 통과했으면 축이 둘 이상 남으므로 0 은 아니다.
     wanted = len(focus) or req.maxInsightCount
 
-    insights = None
-    for _ in range(MAX_RETRY + 1):
-        raw = await llm.complete(
-            insight_prompt.SYSTEM,
-            prompt,
-            max_tokens=MAX_TOKENS,
-            timeout=settings.insight_llm_timeout_seconds,
-        )
-        insights = _parse(raw, wanted, metrics)
-        if insights:
-            break
+    insights = await _complete_best_effort(insight_prompt.SYSTEM, prompt, wanted, metrics)
 
     if not insights:
         raise ApiError(500, "INSIGHT_GENERATION_FAILED", "매출 분석 인사이트 생성에 실패했습니다.")

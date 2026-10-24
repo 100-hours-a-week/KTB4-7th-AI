@@ -128,6 +128,25 @@ async def test_불량_응답은_재시도_1회_후_500이다(monkeypatch):
         assert len(calls) == 2, "최초 시도 + 재시도 1회"
 
 
+async def test_요청한_개수보다_적게_받으면_재시도해서_채운다(monkeypatch):
+    """1회차가 maxInsightCount(3)보다 적게(1개) 돌아오면 재시도한다(2026-10-24,
+    매출 인사이트와 같은 수정 — app/services/insight.py::_complete_best_effort
+    공유). 재시도가 3개를 채우면 그 결과를 쓴다."""
+    calls: list = []
+    responses = iter([_insights("하나"), _insights("하나", "둘", "셋")])
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        calls.append(user)
+        return next(responses)
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert len(calls) == 2
+    assert res.json()["data"]["insights"] == ["하나", "둘", "셋"]
+
+
 async def test_정확히_100자는_통과한다(monkeypatch):
     _fake(monkeypatch, _insights("가" * 100))
 
