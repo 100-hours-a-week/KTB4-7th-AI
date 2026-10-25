@@ -41,11 +41,15 @@ RunPod Pod에서 vLLM을 기동하는 커맨드는 `infra/vllm/serve.sh`에 고�
 GPU 서빙 예산이 한정돼 상시 가동하지 않는다. `LLM_PROVIDER=openai`(vLLM)로 운영하면서
 `LLM_FALLBACK_PROVIDER=anthropic` + `LLM_FALLBACK_MODEL=claude-sonnet-4-5` 를 같이
 넣으면, GPU 호출이 연결실패·타임아웃·5xx로 실패할 때 같은 요청을 Claude로 넘겨
-처리한다(솔루션·인사이트·챗봇 전부). 모델명·키·권한 오류 같은 영구 오류는 폴백 대상이
-아니다 — 그건 GPU를 고쳐야 풀린다.
+처리한다(솔루션·인사이트·챗봇 전부). **로컬 vLLM(`LLM_BASE_URL`)의 404도 폴백한다** —
+RunPod 프록시는 Pod가 꺼져 있으면 연결거부가 아니라 404를 준다(2026-10-25, 이슈 #232).
+그 대가로 vLLM 모델명 오설정 404도 Claude로 넘어가니 `LLM 폴백` WARNING 로그를 본다.
+키·권한 오류 같은 영구 오류는 폴백 대상이 아니다 — 그건 GPU를 고쳐야 풀린다.
 
 연속 `LLM_FALLBACK_FAILURE_THRESHOLD`회 실패하면 `LLM_FALLBACK_COOLDOWN_SECONDS`초
 동안 GPU를 건너뛰고 바로 Claude로 보낸다(circuit breaker, `app/clients/circuit_breaker.py`).
+쿨다운이 끝나도 생성 요청을 바로 보내지 않고 vLLM `/health`부터 확인한다 — GPU가 계속
+꺼져 있으면 Claude 폴백이 유지되고, 30초마다 `/health` GET만 1회 간다.
 **인메모리 상태라 워커/인스턴스 하나 기준이다** — 여러 대로 늘리면 각자 따로 추적한다.
 `LLM_FALLBACK_PROVIDER`를 비워 두면(기본값) 이 기능 전체가 꺼지고 지금 운영 동작과
 100% 동일하다.
