@@ -174,6 +174,7 @@ def _reset(monkeypatch):
     monkeypatch.setattr(llm, "_breaker", CircuitBreaker(failure_threshold=3, cooldown_seconds=30.0))
     monkeypatch.setattr(settings, "llm_provider", "openai")
     monkeypatch.setattr(settings, "llm_model", "qwen-primary")
+    monkeypatch.setattr(settings, "llm_base_url", None)
     monkeypatch.setattr(settings, "llm_fallback_provider", None)
     monkeypatch.setattr(settings, "llm_fallback_model", None)
     monkeypatch.setattr(settings, "llm_timeout_seconds", 60.0)
@@ -308,6 +309,109 @@ async def test_연속_실패가_임계치에_닿으면_breaker가_열려_primary
     assert _FakeAnthropicSuccess.calls == 3
 
 
+# ── RunPod Pod 중지 시 프록시 404 (2026-10-25, 이슈 #232) ────────────────
+# RunPod 프록시는 Pod가 꺼져 있으면 연결거부가 아니라 404를 돌려준다. 404를 모델명
+# 오설정(영구 오류)로만 보던 탓에 GPU를 끄자마자 솔루션이 폴백 없이 500으로 실패했다.
+
+_RUNPOD_URL = "https://pod-8000.proxy.runpod.net/v1"
+
+
+class _RaisingAnthropic:
+    def __init__(self, exc: Exception):
+        self._exc = exc
+        self.calls = 0
+        self.messages = self
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        raise self._exc
+
+
+def _use_runpod_with_fallback(monkeypatch):
+    monkeypatch.setattr(settings, "llm_base_url", _RUNPOD_URL)
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+
+
+async def test_로컬_vLLM의_404는_fallback으로_넘긴다(monkeypatch, caplog):
+    _use_runpod_with_fallback(monkeypatch)
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: _RaisingOpenAI(_provider_error(404)))
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        result = await llm.complete("sys", "user")
+
+    assert result == "fallback-ok"
+    assert "primary 호출 실패" in _fallback_lines(caplog)[0]
+
+
+async def test_로컬_vLLM의_404가_이어지면_breaker가_열린다(monkeypatch):
+    monkeypatch.setattr(llm, "_breaker", CircuitBreaker(failure_threshold=2, cooldown_seconds=30.0))
+    _use_runpod_with_fallback(monkeypatch)
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+    primary = _RaisingOpenAI(_provider_error(404))
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: primary)
+
+    for _ in range(3):
+        await llm.complete("sys", "user")
+
+    assert primary.calls == 2
+    assert _FakeAnthropicSuccess.calls == 3
+
+
+async def test_쿨다운이_지나도_health가_죽어있으면_생성_요청_없이_fallback을_유지한다(
+    monkeypatch,
+):
+    """쿨다운이 끝났다고 GPU에 생성 요청을 다시 보내지 않는다 — /health 로 먼저 본다."""
+    breaker, clock = _breaker(threshold=1, cooldown=30.0)
+    monkeypatch.setattr(llm, "_breaker", breaker)
+    _use_runpod_with_fallback(monkeypatch)
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+    primary = _RaisingOpenAI(_provider_error(404))
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: primary)
+
+    async def dead() -> bool:
+        return False
+
+    monkeypatch.setattr(llm, "_vllm_healthy", dead)
+
+    await llm.complete("sys", "user")  # 404 → breaker 열림
+    clock.now = 31.0
+    await llm.complete("sys", "user")  # half-open, /health 실패 → 바로 fallback
+    await llm.complete("sys", "user")  # 다시 열린 쿨다운 중
+
+    assert primary.calls == 1
+    assert _FakeAnthropicSuccess.calls == 3
+
+
+async def test_공식_OpenAI의_404는_여전히_fallback하지_않는다(monkeypatch):
+    """LLM_BASE_URL 없는 openai 404는 모델명 오설정이다 — #141 영구 오류 분류 유지."""
+    monkeypatch.setattr(settings, "llm_fallback_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_model", "claude-fallback")
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: _RaisingOpenAI(_provider_error(404)))
+    monkeypatch.setattr(llm, "AsyncAnthropic", _FakeAnthropicSuccess)
+
+    with pytest.raises(ApiError) as caught:
+        await llm.complete("sys", "user")
+
+    assert caught.value.status == 500
+    assert _FakeAnthropicSuccess.calls == 0
+
+
+async def test_fallback도_404면_한번_더_넘기지_않고_실패한다(monkeypatch):
+    """is_fallback_eligible()은 primary 설정만 보므로 primary 실패에만 써야 한다."""
+    _use_runpod_with_fallback(monkeypatch)
+    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kw: _RaisingOpenAI(_provider_error(404)))
+    fallback = _RaisingAnthropic(_provider_error(404))
+    monkeypatch.setattr(llm, "AsyncAnthropic", lambda **kw: fallback)
+
+    with pytest.raises(ApiError) as caught:
+        await llm.complete("sys", "user")
+
+    assert caught.value.status == 500
+    assert fallback.calls == 1
+
+
 # ── 챗봇 첫 토큰 전 전환 ─────────────────────────────────────────────────
 # _reset(위)이 모듈 전체에 autouse라 llm_provider/llm_model을 openai/qwen-primary로
 # 깔아두는데, 여기선 챗봇의 primary를 anthropic:claude-primary로 재설정한다.
@@ -418,6 +522,31 @@ async def test_챗봇에서도_컨텍스트_초과는_fallback을_쓰고_breaker
     assert "".join(_answer_chunks(res.text)) == "폴백 답변"
     assert breaker.should_skip() is False, "컨텍스트 초과는 breaker를 열면 안 된다"
     assert "primary 호출 실패" in _fallback_lines(caplog)[0]
+
+
+class _NotFoundOpenAIError(openai.OpenAIError):
+    status_code = 404
+
+
+async def test_챗봇에서도_로컬_vLLM의_404는_fallback으로_넘긴다(monkeypatch, caplog):
+    _use_runpod_with_fallback(monkeypatch)
+    breaker = CircuitBreaker(failure_threshold=1, cooldown_seconds=30.0)
+    monkeypatch.setattr(llm, "_breaker", breaker)
+
+    def spy_get_model(tools, provider, model_name):
+        if model_name == settings.llm_fallback_model:
+            return FakeModel(responses=[AIMessage(content="폴백 답변")])
+        return FakeModel(responses=[_NotFoundOpenAIError()])
+
+    monkeypatch.setattr(chat_graph, "get_model", spy_get_model)
+
+    with caplog.at_level("WARNING", logger="app.clients.llm"):
+        res = await _post(REQUEST_BODY)
+
+    assert res.status_code == 200
+    assert _error_events(res.text) == []
+    assert "".join(_answer_chunks(res.text)) == "폴백 답변"
+    assert breaker.should_skip() is True, "Pod 중지 404는 breaker 실패로 기록돼야 한다"
 
 
 async def test_토큰을_이미_보낸_뒤_실패하면_전환하지_않는다(monkeypatch):

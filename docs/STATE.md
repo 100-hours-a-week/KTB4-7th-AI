@@ -1,7 +1,74 @@
 # 작업 상태
 
-마지막 갱신: 2026-10-24
+마지막 갱신: 2026-10-25
 브랜치: `dev` (아래 날짜 절들은 각각 별개 브랜치에서 진행돼 머지됐다).
+
+## 2026-10-25 — GPU 중지 시 RunPod 프록시 404도 Claude로 폴백 (Issue #232, PR #233)
+
+### 지금 어디
+코드 작업 완료, **PR #233(`feat/232-runpod-404-fallback` → `dev`) 리뷰·머지 대기**.
+머지만으로는 완료가 아니다 — 아래 "다음 한 걸음"의 배포 후 실측이 완료 기준이다.
+
+### 무슨 일이 있었나
+2026-10-25 20:38, GPU(RunPod Pod)를 의도적으로 끈 직후 솔루션 생성이 500
+`PROVIDER_ERROR`("모델 공급자가 요청을 거절했습니다")로 실패했다. 배포 로그에
+`POST https://<pod>-8000.proxy.runpod.net/v1/chat/completions` → `404 Not Found`가
+찍혔고 `LLM 폴백 ...` 줄이 **없었다** — 폴백이 실패한 게 아니라 발동 자체를 안 했다.
+
+원인: 10-19 폴백 설계(#184)는 "GPU가 꺼지면 연결거부·타임아웃·5xx"를 가정했는데,
+**RunPod 프록시는 Pod가 꺼져 있으면 연결을 받아 404를 돌려준다.**
+`is_fallback_eligible()`이 이 404를 `_PERMANENT_PROVIDER_STATUSES`(모델명 오설정,
+10-14 장애 #141 대응)로 분류해 폴백에서 뺐다. 챗봇(`_stream()` 첫 토큰 전 전환)도
+같은 함수를 써서 같은 이유로 실패했을 것이다(실제 챗봇 실패 로그는 미확인).
+
+### 이번에 바뀐 것
+- `is_fallback_eligible()`에 한 줄: primary가 로컬 vLLM(`uses_local_llm_server`)이면
+  404를 폴백 대상으로 본다. 솔루션·인사이트(`complete()`)와 챗봇이 이 판정 하나를
+  공유하고, True면 기존 `record_failure()` 경로를 타므로 **breaker는 안 건드렸다.**
+- anthropic·공식 OpenAI의 404는 그대로 영구 오류(#141 보호 유지).
+- 이 함수는 **primary 오류 판정 전용**이다(전역 primary 설정을 봄) — docstring과
+  테스트(`fallback도_404면_한번_더_넘기지_않고_실패한다`)로 고정. 외부 리뷰 지적 반영.
+- 테스트 `_reset` 픽스처에 `llm_base_url=None` 추가(설정 누출 방지, 외부 리뷰 지적).
+- `docs/DEPLOY.md` 폴백 조건 문구 갱신.
+
+**트레이드오프**: vLLM 모델명 오설정 404도 Claude로 넘어간다 — 조용히 묻히진 않고
+`LLM 폴백` WARNING으로 보인다. 그래서 GPU 운영 중 이 로그가 계속 나오면 Pod 중지만이
+아니라 `LLM_MODEL` 오타도 의심한다.
+
+### 쿨다운 이후 동작 (코드로 확인)
+30초 쿨다운이 끝나도 GPU에 생성 요청을 바로 다시 보내지 않는다. `should_use_fallback()`
+이 half-open에서 `_vllm_healthy()`로 `/health`부터 찌르고, 꺼진 Pod는 프록시 404라
+실패 → breaker를 다시 열고 그 요청도 Claude로 보낸다. 즉 GPU가 꺼져 있는 동안은
+30초마다 `/health` GET 1회만 RunPod로 가고 나머지는 전부 Claude다.
+
+### 마지막으로 통과한 것
+- 새 테스트 6개 작성 → 수정 전 5개 실패 확인 → 수정 후 전부 통과
+- `uv run pytest -q` — 523 passed
+- `uv run ruff check . && uv run ruff format --check .` — clean
+- **배포 환경 실측은 아직 안 했다.**
+
+### 다음 한 걸음
+1. 배포 AI 컨테이너에 `LLM_FALLBACK_PROVIDER=anthropic`·`LLM_FALLBACK_MODEL`·
+   `ANTHROPIC_API_KEY`가 들어 있는지 확인(클라우드팀). 없으면 코드와 무관하게 폴백 안 됨.
+2. PR #233 리뷰·머지 → 재배포.
+3. GPU를 끈 상태에서 솔루션·인사이트·챗봇 각 1회 이상 호출해 확인:
+   정상 응답 / `LLM 폴백 ... 사유=primary 호출 실패 — PROVIDER_ERROR` 로그 /
+   3회 이후 `사유=차단기 열림` / **쿨다운(30초) 지난 뒤에도 Claude 유지**, RunPod로는
+   `/health` GET만 가고 `chat/completions` POST는 다시 안 감.
+
+### 미해결 결정
+- GPU 중지를 미리 감지해 처음부터 Claude로 보내는 구조 — 이번엔 범위 밖. 지금은
+  breaker가 처음 3회 404(빠르게 끝남) 뒤 대신한다. 그 3회 비용이 문제 되면 재검토.
+- `is_fallback_eligible()`이 provider를 인자로 받게 바꿀지 — 호출 경로가 늘어날 때.
+
+### 함정
+- **"GPU 꺼짐 = 연결거부"가 아니다.** 프록시를 끼면 404·502 등 프록시가 정한 응답이
+  온다. 폴백 조건을 짤 때 실제로 Pod를 끄고 응답을 확인해야 했다.
+- `/health` 200(AI 서버 자체)은 vLLM 상태와 무관하다 — 배포 로그에서 헷갈리기 쉽다.
+- 로컬 `.env`는 `LLM_PROVIDER=anthropic`이라 로컬에선 재현 안 된다. 배포 환경 설정과
+  다르다는 걸 먼저 의심할 것.
+
+---
 
 ## 2026-10-21~22 — PR #219 작업 중 상세 기록 (Task 1~6, 머지 전)
 

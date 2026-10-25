@@ -159,6 +159,9 @@ def is_fallback_eligible(exc: ApiError) -> bool:
     원인이 없으면(예: 지원 안 하는 LLM_PROVIDER 설정 오류) 가용성 문제가 아니므로 False.
     모델 출력이 스키마를 어기는 건 이 레이어에 안 온다 — complete()가 텍스트를 이미
     정상적으로 반환한 뒤 서비스 레이어(MAX_RETRY)가 보는 영역이라 서로 안 겹친다.
+
+    primary 호출 실패 판정 전용이다 — 예외가 어느 provider 것인지 안 받고 전역
+    primary 설정(settings)을 보므로, fallback 쪽 예외에 부르면 잘못 분류한다.
     """
     cause = exc.__cause__
     if cause is None:
@@ -166,6 +169,9 @@ def is_fallback_eligible(exc: ApiError) -> bool:
     if isinstance(cause, (anthropic.APITimeoutError, openai.APITimeoutError, TimeoutError)):
         return True
     if _is_context_length_error(cause):
+        return True
+    # RunPod 프록시는 Pod가 꺼져 있으면 연결거부가 아니라 404를 준다(2026-10-25, 이슈 #232).
+    if _provider_status(cause) == 404 and uses_local_llm_server(settings):
         return True
     return _provider_status(cause) not in _PERMANENT_PROVIDER_STATUSES
 
