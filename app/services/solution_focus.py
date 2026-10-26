@@ -174,6 +174,25 @@ def derive(metrics: dict) -> dict:
     return {**metrics, "hourlyPeakRatio": ratios} if ratios else metrics
 
 
+def _menu_share_delta(point: dict) -> float:
+    """이 메뉴의 변화가 전체 매출의 몇 %였나. 부호를 유지한다.
+
+    `ratio`(현재 비중)와 `vsPrevPeriod`(증감률)만으로 전체 매출을 안 받고 낼 수 있다 —
+    근사가 아니라 정확히 같은 값이다:
+
+        변화금액/전체 = (menuSales - prev)/전체
+                      = (menuSales/전체) x (menuSales - prev)/menuSales
+                      = ratio x vsPrevPeriod/(1 + vsPrevPeriod)
+
+    vsPrevPeriod 가 null 이면 비교할 게 없어 0.0 이다. -1.0(전기 매출이 통째로 사라진
+    경우)이면 분모가 0 이 되는데, 그 메뉴는 현재 매출이 0 이라 랭킹에 올 수 없다.
+    """
+    change = point.get("vsPrevPeriod")
+    if change is None or change == -1.0:
+        return 0.0
+    return (point.get("ratio") or 0.0) * change / (1.0 + change)
+
+
 def _menu_rows(points: list[dict]) -> list[dict]:
     """변화폭 상위 몇 종. 점수와 같은 기준으로 골라야 한다.
 
@@ -183,11 +202,7 @@ def _menu_rows(points: list[dict]) -> list[dict]:
 
     증감이 없는 메뉴(vsPrevPeriod 가 null)는 뒤로 민다 — 비교할 게 없으면 할 말도 없다.
     """
-    return sorted(
-        points,
-        key=lambda p: abs(p.get("vsPrevPeriod") or 0.0),
-        reverse=True,
-    )[:_TOP_SHARES]
+    return sorted(points, key=lambda p: abs(_menu_share_delta(p)), reverse=True)[:_TOP_SHARES]
 
 
 def _category_rows(points: list[dict]) -> list[dict]:
@@ -204,12 +219,18 @@ def _menu_score(points: list[dict]) -> float:
     그리고 "상위 메뉴가 있다" 는 뉴스가 아니다. 늘 아메리카노가 1 위다. 할 말이
     생기는 건 **많이 움직였을 때**다.
 
-    **잠정값이다. 아직 실측이 없다** — BE 가 menuRankings 를 보내기 시작하면 다시 본다.
+    2026-10-26: 변화 **율** 최댓값으로 재던 걸 변화 **금액**(전체 매출 대비)으로 바꿨다.
+    율로 재면 꼬리 메뉴 하나가 점수를 포화시킨다 — POS 실측(92 일, 매장 1 곳)에서 이 축은
+    92 일 **전부 정확히 1.000** 이었다(표준편차 0.000). 7 일 창에 메뉴가 135 종 있고 그중
+    42 종이 전주 대비 ±50% 이상 움직이는데, `0.5 x 2.0 = 1.0` 이라 6 개 팔린
+    "바닐라아이스크림 +500%" 한 종만 있어도 상한에 닿았다. 금액 기준으로 바꾸면 같은
+    데이터에서 평균 0.057·표준편차 0.035·포화 0% 가 된다.
+    근거: docs/experiments/2026-10-26-solution-axis-scores.md
     """
-    changes = [abs(p["vsPrevPeriod"]) for p in points if p.get("vsPrevPeriod") is not None]
-    if not changes:
+    deltas = [abs(_menu_share_delta(p)) for p in points]
+    if not deltas:
         return 0.0
-    return min(max(changes) * _CATEGORY_CHANGE_WEIGHT, 1.0)
+    return min(max(deltas) * _CATEGORY_CHANGE_WEIGHT, 1.0)
 
 
 def _category_score(points: list[dict]) -> float:
