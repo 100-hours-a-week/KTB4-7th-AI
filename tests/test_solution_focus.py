@@ -4,7 +4,15 @@
 배정을 코드로 옮긴 이유라, 여기서 가장 중요한 건 "겹치지 않는다" 하나다.
 """
 
-from app.services.solution_focus import MAX_CARDS, assign, derive
+import pytest
+
+from app.services.solution_focus import (
+    MAX_CARDS,
+    _menu_score,
+    _menu_share_delta,
+    assign,
+    derive,
+)
 
 METRICS = {
     "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
@@ -290,9 +298,9 @@ def test_메뉴는_변화폭_상위만_넣는다():
             "menuName": f"메뉴{i}",
             "menuSales": 500000 - i * 10000,
             "quantity": 100 - i,
-            "ratio": round(0.3 - i * 0.01, 4),
-            # 비중은 i 가 커질수록 작은데, 변화는 꼴찌가 가장 크다
-            "vsPrevPeriod": -0.42 if i == 19 else 0.01,
+            # 비중은 i 가 커질수록 작은데, 움직인 금액은 꼴찌가 가장 크다
+            "ratio": 0.25 if i == 19 else 0.02,
+            "vsPrevPeriod": -0.6 if i == 19 else 0.01,
         }
         for i in range(20)
     ]
@@ -301,6 +309,72 @@ def test_메뉴는_변화폭_상위만_넣는다():
 
     assert len(rows) == 5
     assert rows[0]["menuName"] == "메뉴19", "점수를 만든 메뉴가 맨 앞에 와야 한다"
+
+
+def test_꼬리_메뉴는_점수를_포화시키지_않는다():
+    """POS 실측(92 일)에서 이 축이 전부 1.000 이던 원인 — 변화**율** 최댓값으로 재면
+    6 개 팔린 메뉴의 +500% 가 `0.5 x 2.0` 으로 상한에 닿는다. 금액 기준은 비중이 작아
+    점수를 못 올린다. 근거: docs/experiments/2026-10-26-solution-axis-scores.md
+    """
+    tail = [
+        {
+            "rank": 1,
+            "menuName": "아메리카노",
+            "menuSales": 800000,
+            "quantity": 250,
+            "ratio": 0.4,
+            "vsPrevPeriod": 0.01,
+        },
+        # 전체 매출의 0.02% 를 차지하는 6 개 팔린 메뉴가 5 배로 뛰었다
+        {
+            "rank": 2,
+            "menuName": "바닐라아이스크림",
+            "menuSales": 45000,
+            "quantity": 6,
+            "ratio": 0.0225,
+            "vsPrevPeriod": 5.0,
+        },
+    ]
+
+    assert _menu_score(tail) < 0.1
+
+
+def test_비중이_큰_메뉴가_조금_움직이면_꼬리보다_높다():
+    """금액 기준으로 바꾼 이유 — 점주가 손쓸 수 있는 건 매출을 움직인 메뉴다."""
+    big = {
+        "rank": 1,
+        "menuName": "아메리카노",
+        "menuSales": 800000,
+        "quantity": 250,
+        "ratio": 0.4,
+        "vsPrevPeriod": -0.2,
+    }
+    tail = {
+        "rank": 2,
+        "menuName": "유자차",
+        "menuSales": 9000,
+        "quantity": 2,
+        "ratio": 0.0045,
+        "vsPrevPeriod": -0.8,
+    }
+
+    assert _menu_score([big]) > _menu_score([tail])
+
+
+def test_변화금액은_전체매출을_안_받고도_정확하다():
+    """ratio x vsPrev/(1+vsPrev) 는 근사가 아니라 (현재 - 이전)/전체 와 같은 값이다."""
+    total, current, previous = 2_000_000, 800_000, 1_000_000
+    point = {
+        "ratio": current / total,
+        "vsPrevPeriod": (current - previous) / previous,
+    }
+
+    assert _menu_share_delta(point) == pytest.approx((current - previous) / total)
+
+
+def test_전기_매출이_사라진_메뉴는_0이다():
+    """vsPrevPeriod 가 -1.0 이면 1 + change 가 0 이라 나눌 수 없다."""
+    assert _menu_share_delta({"ratio": 0.1, "vsPrevPeriod": -1.0}) == 0.0
 
 
 def test_증감이_없는_메뉴는_뒤로_민다():
@@ -312,8 +386,8 @@ def test_증감이_없는_메뉴는_뒤로_민다():
             "menuName": "급락",
             "menuSales": 100000,
             "quantity": 20,
-            "ratio": 0.06,
-            "vsPrevPeriod": -0.4,
+            "ratio": 0.3,
+            "vsPrevPeriod": -0.5,
         },
     ]
     focus = assign({**METRICS, "menuRankings": mixed})
@@ -413,12 +487,15 @@ def test_다른_축이_전부_약하면_날씨가_들어온다():
     assert any("weatherContext" in card for card in focus)
 
 
-def test_축이_다섯이면_날씨가_밀린다():
-    """**현재 동작이고, 고칠지는 아직 결정 안 됐다**(이슈 #206 범위 밖).
+def test_메뉴를_금액으로_재면_날씨_보충_자리가_돌아온다():
+    """2026-10-26 까지는 `test_축이_다섯이면_날씨가_밀린다` 였다 — "축이 다섯이 되면서
+    날씨 자리가 사실상 사라졌다, 이 테스트가 깨지면 그 결정이 내려진 것" 이라고 적어
+    뒀던 tripwire 다.
 
-    날씨만 상한이 0.3(_WEATHER_SUPPLEMENT_SCORE) 고정이고 나머지는 1.0 까지 간다.
-    축이 넷일 때는 "다른 셋이 약한 날" 이 가끔 있었는데, #181 로 다섯이 되면서
-    그 자리가 사실상 사라졌다. 이 테스트가 깨지면 그 결정이 내려진 것이다.
+    깨진 이유는 날씨를 건드려서가 아니라 **메뉴 축의 포화를 없애서** 다. 메뉴를 변화율로
+    재던 동안은 꼬리 메뉴 하나가 점수를 1.0 으로 만들어(POS 92 일 실측 전부 1.000) 날씨의
+    0.3 을 늘 눌렀다. 금액 기준으로 바꾸니 이 fixture 에서 메뉴가 0.133 으로 내려가
+    날씨가 다시 세 번째 자리를 얻는다.
     """
     busy_day = {
         **_FLAT_DAY,
@@ -440,7 +517,8 @@ def test_축이_다섯이면_날씨가_밀린다():
     focus = assign(busy_day)
 
     assert len(focus) == MAX_CARDS
-    assert not any("weatherContext" in card for card in focus)
+    assert any("weatherContext" in card for card in focus)
+    assert not any("menuRankings" in card for card in focus), "메뉴가 날씨에 밀린다"
 
 
 def test_파생_배율도_영업시간_밖을_뺀다():
