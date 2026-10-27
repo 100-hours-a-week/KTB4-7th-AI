@@ -26,18 +26,25 @@ _CHANGE_WEIGHT = 3.0  # 증감률은 절대값이 작아서(0.12) 다른 점수�
 _CATEGORY_CHANGE_WEIGHT = 2.0
 _PREDICTION_WEIGHT = 2.0
 
-# 2026-10-14: 처음엔 1.0(다른 축의 상한과 동일)으로 뒀더니 표준 fixture 기준 날씨가 거의
-# 항상 1 순위를 차지해 기존 세 축 중 하나를 밀어냈다 — "다른 축이 할 말 없을 때만 보충"
-# 이라는 의도와 반대로 동작했다(실측: hourly 0.674·category 0.62·total 0.36인 fixture에서
-# 날씨가 1 순위, total_focus 탈락). 0.3 으로 낮춰 "그 날의 다른 세 축이 전부 약할 때만"
-# 날씨가 들어오게 한다 — 이 값도 다른 가중치처럼 잠정값이다.
-_WEATHER_SUPPLEMENT_SCORE = 0.3
-
-# 특보급 날씨는 그 날 가장 할 말이 많다. 보통 날씨의 "보충" 자리와 성격이 다르다.
-# 기준은 기상청 주의보 발효 기준을 그대로 쓴다 — 우리가 고른 숫자가 아니다.
+# 특보급 날씨는 그 날 가장 할 말이 많다. 기준은 기상청 주의보 발효 기준을 그대로 쓴다 —
+# 우리가 고른 숫자가 아니다. 서울경기 일별 극값 615 일에서 36 일(6%)이 여기 걸린다.
 _COLD_WAVE_MIN_TEMP = -12  # 한파주의보: 아침 최저기온 -12℃ 이하
 _HEAT_WAVE_MAX_TEMP = 33  # 폭염주의보: 최고기온 33℃ 이상
 _WEATHER_ALERT_SCORE = 1.0
+
+# 아이스 음료 비중이 기온에 따라 움직이는 구간과 기울기. 둘 다 실측값이다 —
+# docs/experiments/2026-09-08-weather-sales.md §1 (267 일, 상관 0.759).
+#
+#   기온 0℃대 0.338 → 18℃대 0.454 → 20℃대 0.478 (18℃ 위는 포화)
+#   18℃ 미만 구간 기울기: 기온 1 도당 아이스 비중 +0.61%p
+#
+# _ICE_RATIO_SPAN 은 실험이 관측한 전체 변동폭(0.338~0.478)이다. 환산한 변동폭을 이 값으로
+# 나눠 0~1 로 만든다 — 다른 축과 자릿수를 맞추려고 임의로 곱하는 가중치를 쓰지 않는다.
+_ICE_SATURATION_TEMP = 18.0
+_ICE_RATIO_PER_DEGREE = 0.0061
+_ICE_RATIO_SPAN = 0.14
+# 실험의 최저 기온 구간이 (-10, 5] 라, 그보다 낮은 기온은 기울기를 외삽하지 않는다.
+_ICE_RATIO_FLOOR_TEMP = -10.0
 
 # 프롬프트에 보여줄 행 수 — 잠정값. dayType 별 상·하위 몇 행, 비중 상위 몇 종.
 # 시간대는 24 시간 × 2 dayType = 48 행이 올 수 있고 카테고리도 20 종까지 가능한데,
@@ -259,19 +266,29 @@ def _prediction_score(predicted: int | None, net_sales: int) -> float:
 
 
 def _weather_score(weather: dict | None) -> float:
-    """notable 이면 보충 점수, 그중 특보급이면 1 순위.
+    """특보급이면 1 순위, 기온이 아이스/핫 구성을 갈라놓는 날이면 그 변동폭만큼.
+    둘 다 아니면 **후보에서 뺀다** — 평범한 날에 날씨 카드가 나가지 않는다.
 
-    2026-10-14 에는 "isNotable 이 참/거짓뿐이라 세부 점수를 매길 근거가 없다" 고 보고
-    고정값 하나만 썼는데, **원시값이 같이 온다는 걸 놓쳤다**(minTempC·maxTempC 등).
-    그래서 한파든 흐린 날이든 점수가 같았고, A40 8 차에서 날씨가 축 다섯 중 5 위로
-    밀렸다(2026-10-21, 이슈 #217).
+    2026-10-14 에는 isNotable 만 보고 고정값 0.3 을 줬다. 그게 "다른 축이 할 말 없을 때만
+    보충" 이라는 설계와 반대로 동작했다 — 매장 2 곳 639 일 실측에서 매출총액 축 점수가
+    평균 0.240 이라 **0.3 이 3 번 자리를 65~69% 차지했고** 메뉴 축은 아예 사라졌다.
+    그리고 기상청 서울경기 615 일 중 68% 가 "하루 종일 18℃ 위" 또는 "하루 종일 18℃ 아래" —
+    즉 아이스/핫 구성이 하루 안에서 갈리지 않는 평범한 날인데 같은 0.3 을 받았다.
 
-    한파·폭염은 **기상청 주의보 기준**으로 가른다 — 우리가 고른 숫자가 아니다.
-    그 날엔 "오늘 뭘 할까" 의 답이 날씨라서 다른 축보다 앞선다.
+    이제 0.3 고정값을 쓰지 않고 실측 기울기로 환산한다. 하루 최저~최고가 아이스 비중
+    포화점(18℃)을 **가로지르는** 날은 오전·오후의 음료 구성이 갈려서 "오전엔 핫, 오후엔
+    아이스를 준비하세요" 같은 실행 가능한 말이 나온다. 포화점 위아래로만 머문 날은
+    구성이 하루 내내 같아 할 말이 없다.
+    근거: docs/experiments/2026-09-08-weather-sales.md §1
 
-    **태풍·대설은 판정할 수 없다.** 풍속도 적설도 계약에 없다(WeatherContext 는
-    basisDateTime·skyText·minTempC·maxTempC·maxPop·rainHours·precipitationMm·isNotable).
-    BE 에 특보 발효 여부를 받는 쪽이 원시값으로 재구성하는 것보다 정확하다 — 요청해 둘 것.
+    isNotable 게이트는 그대로 둔다 — "BE 판정이 우선이고 우리가 덮어쓰지 않는다" 는
+    기존 결정이다. 바뀌는 건 그 **안쪽**이다: 예전엔 notable 이면 무조건 0.3 을 줬고,
+    이제는 기온이 구성을 갈라놓는 날에만 점수가 나온다. 강수는 conditionPatterns(과거
+    강수별 메뉴 판매)로 이미 입력이 오는데 점수식에 연결돼 있지 않다(이슈 #194) —
+    비는 그쪽에서 다루는 게 맞다.
+
+    **태풍·대설은 여전히 판정할 수 없다.** 풍속도 적설도 계약에 없다. BE 에 특보 발효
+    여부를 받는 쪽이 정확하다 — PR #227(weatherContext.alerts)로 진행 중이다.
     """
     if not weather or not weather.get("isNotable"):
         return -1.0
@@ -280,7 +297,10 @@ def _weather_score(weather: dict | None) -> float:
         high is not None and high >= _HEAT_WAVE_MAX_TEMP
     ):
         return _WEATHER_ALERT_SCORE
-    return _WEATHER_SUPPLEMENT_SCORE
+    if low is None or high is None or not low < _ICE_SATURATION_TEMP <= high:
+        return -1.0
+    swing = (_ICE_SATURATION_TEMP - max(low, _ICE_RATIO_FLOOR_TEMP)) * _ICE_RATIO_PER_DEGREE
+    return min(swing / _ICE_RATIO_SPAN, 1.0)
 
 
 def _hourly_focus(metrics: dict, hourly: list[dict]) -> dict:

@@ -173,23 +173,44 @@ _FLAT_METRICS = {
 
 
 def test_다른_축이_전부_약하면_날씨가_1순위가_된다():
-    """고정점수(0.3)가 "보충" 으로 동작하는지 확인한다 — 다른 세 축이 다 약해야 날씨가 든다."""
-    weather = {"basisDateTime": "2026-10-07 11:00", "skyText": "비", "isNotable": True}
+    """다른 세 축이 다 약한 날에만 날씨가 든다. 4~21℃ 는 아이스 비중 포화점(18℃)을
+    가로질러 (18-4)x0.0061/0.14 = 0.61 점이다."""
+    weather = {
+        "basisDateTime": "2026-10-07 11:00",
+        "skyText": "비",
+        "isNotable": True,
+        "minTempC": 4,
+        "maxTempC": 21,
+    }
     focus = assign({**_FLAT_METRICS, "weatherContext": weather})
 
     assert "weatherContext" in focus[0]
 
 
 def test_다른_축이_뚜렷하면_날씨가_밀린다():
-    """표준 METRICS(시간대 격차 0.674)는 0.3 보다 훨씬 커서 날씨가 세 장 안에 못 든다."""
-    weather = {"basisDateTime": "2026-10-07 11:00", "skyText": "비", "isNotable": True}
+    """표준 METRICS 는 시간대 0.674·카테고리 0.62·매출총액 0.36 이다. 16~19℃ 는 포화점을
+    아슬하게 가로질러 0.09 라 세 장 안에 못 든다 — 점수가 기온 폭에 비례하므로, 날씨가
+    드는지는 "가로지르나" 가 아니라 "얼마나 가로지르나" 로 갈린다."""
+    weather = {
+        "basisDateTime": "2026-10-07 11:00",
+        "skyText": "비",
+        "isNotable": True,
+        "minTempC": 16,
+        "maxTempC": 19,
+    }
     focus = assign({**METRICS, "weatherContext": weather})
 
     assert not any("weatherContext" in card for card in focus)
 
 
 def test_날씨가_notable이_아니면_배정되지_않는다():
-    weather = {"basisDateTime": "2026-10-07 11:00", "skyText": "맑음", "isNotable": False}
+    weather = {
+        "basisDateTime": "2026-10-07 11:00",
+        "skyText": "맑음",
+        "isNotable": False,
+        "minTempC": 4,
+        "maxTempC": 21,
+    }
     focus = assign({**METRICS, "weatherContext": weather})
 
     assert not any("weatherContext" in card for card in focus)
@@ -476,7 +497,14 @@ _FLAT_DAY = {
         {"name": "커피", "share": 0.38, "vsPrevPeriod": 0.02},
         {"name": "논커피", "share": 0.34, "vsPrevPeriod": -0.03},
     ],
-    "weatherContext": {"skyText": "비", "maxPop": 0.8, "isNotable": True},
+    # 4~21℃ — 아이스 비중 포화점(18℃)을 가로질러 0.61 점이다.
+    "weatherContext": {
+        "skyText": "비",
+        "maxPop": 0.8,
+        "isNotable": True,
+        "minTempC": 4,
+        "maxTempC": 21,
+    },
 }
 
 
@@ -493,9 +521,9 @@ def test_메뉴를_금액으로_재면_날씨_보충_자리가_돌아온다():
     뒀던 tripwire 다.
 
     깨진 이유는 날씨를 건드려서가 아니라 **메뉴 축의 포화를 없애서** 다. 메뉴를 변화율로
-    재던 동안은 꼬리 메뉴 하나가 점수를 1.0 으로 만들어(POS 92 일 실측 전부 1.000) 날씨의
-    0.3 을 늘 눌렀다. 금액 기준으로 바꾸니 이 fixture 에서 메뉴가 0.133 으로 내려가
-    날씨가 다시 세 번째 자리를 얻는다.
+    재던 동안은 꼬리 메뉴 하나가 점수를 1.0 으로 만들어(POS 92 일 실측 전부 1.000) 날씨를
+    늘 눌렀다. 금액 기준으로 바꾸니 이 fixture 에서 메뉴가 0.133 으로 내려가 날씨(0.61)가
+    세 번째 자리를 얻는다.
     """
     busy_day = {
         **_FLAT_DAY,
@@ -613,14 +641,54 @@ _BUSY_DAY = {
         },
     ],
 }
-_MILD = {"skyText": "흐림", "minTempC": 9, "maxTempC": 19, "maxPop": 0.6, "isNotable": True}
+# 19~26℃ — 하루 내내 아이스 비중 포화 구간(18℃ 이상) 안이라 구성이 갈리지 않는다.
+_MILD = {"skyText": "흐림", "minTempC": 19, "maxTempC": 26, "maxPop": 0.6, "isNotable": True}
 
 
-def test_평범한_날씨는_다른_축에_밀린다():
-    """축이 다섯인 보통 날에는 날씨가 보충 자리다 — 기존 설계 그대로."""
-    focus = assign({**_BUSY_DAY, "weatherContext": _MILD})
+def test_포화_구간을_안_벗어난_날은_후보에서_빠진다():
+    """2026-10-26: 예전엔 notable 이면 무조건 0.3 을 받아 "보충 자리" 에 있었다. 매장 2 곳
+    639 일 실측에서 그 0.3 이 3 번 자리를 65~69% 차지했고(매출총액 평균 0.240), 기상청
+    615 일 중 68% 가 이렇게 포화점을 안 가로지르는 평범한 날이었다. 이제는 탈락한다.
+
+    다른 축이 **전부 약한** 날로 본다 — 축이 센 날은 0.3 이어도 어차피 밀려서 이 변경을
+    확인하지 못한다. _FLAT_DAY 는 시간대 0.25·카테고리 0.38·매출총액 0.12 다.
+    """
+    focus = assign({**_FLAT_DAY, "weatherContext": _MILD})
 
     assert not any("weatherContext" in card for card in focus)
+
+
+def test_포화점을_가로지르면_변동폭만큼_점수가_난다():
+    """실측 기울기(1 도당 아이스 비중 +0.61%p)로 환산한다 — 임의 가중치가 아니다.
+    근거: docs/experiments/2026-09-08-weather-sales.md §1
+    """
+    from app.services.solution_focus import _weather_score
+
+    # 4~21℃: 18℃ 아래 구간이 14 도 → 14 x 0.61%p = 8.54%p, 실험 전체 변동폭 14%p 대비
+    assert _weather_score({**_MILD, "minTempC": 4, "maxTempC": 21}) == pytest.approx(0.61, abs=0.01)
+    # 14~19℃: 4 도 → 2.44%p
+    narrow_score = _weather_score({**_MILD, "minTempC": 14, "maxTempC": 19})
+    assert narrow_score == pytest.approx(0.17, abs=0.01)
+    # 기온 폭이 클수록 점수가 크다
+    wide = _weather_score({**_MILD, "minTempC": 2, "maxTempC": 25})
+    narrow = _weather_score({**_MILD, "minTempC": 16, "maxTempC": 19})
+    assert wide > narrow
+
+
+def test_실험_구간_밖_기온은_외삽하지_않는다():
+    """실험의 최저 구간이 (-10, 5] 다. -10 보다 낮은 기온으로 기울기를 늘리지 않는다."""
+    from app.services.solution_focus import _weather_score
+
+    assert _weather_score({**_MILD, "minTempC": -10, "maxTempC": 20}) == _weather_score(
+        {**_MILD, "minTempC": -11, "maxTempC": 20}
+    )
+
+
+def test_기온이_없으면_후보에서_빠진다():
+    """WeatherContext 는 minTempC·maxTempC 를 필수로 받는다. 없으면 점수를 낼 수 없다."""
+    from app.services.solution_focus import _weather_score
+
+    assert _weather_score({"skyText": "비", "isNotable": True}) == -1.0
 
 
 def test_한파주의보급이면_1순위가_된다():
