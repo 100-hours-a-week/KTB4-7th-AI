@@ -17,12 +17,19 @@ from app.services.solution_focus import (
 METRICS = {
     "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
     "predictedSalesToday": 1250000,
+    # dayType 별로 2 행 이상이어야 한다 — 점수를 계열별로 재므로 한 행짜리 계열은
+    # 비교할 게 없어 빠진다. 평일 최저와 주말 최고를 섞으면 틀린 문장이 된다.
     "hourlyProfile": [
         {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
         {"dayType": "WEEKEND", "hour": 14, "amount": 92000},
+        {"dayType": "WEEKEND", "hour": 18, "amount": 150000},
     ],
     "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12}],
 }
+
+# 위 METRICS 의 축 점수 — 전제가 바뀌면 여러 테스트가 같이 흔들리므로 한곳에 적어 둔다.
+# 시간대 0.375(평일 30,000/210,000) · 매출총액 0.36(-12% x 3.0) · 카테고리 0.19(구성 변동)
 
 
 def test_카드끼리_같은_지표를_받지_않는다():
@@ -40,8 +47,9 @@ def test_예측과_전체매출은_한_카드로_묶인다():
     assert "predictedSalesToday" in total
 
 
-def test_시간대_격차가_크면_첫_카드가_된다():
-    """30,000 대 92,000 이면 격차 점수가 커피 쏠림(0.62)보다 높다."""
+def test_시간대가_쏠려_있으면_첫_카드가_된다():
+    """평일이 30,000 대 210,000 이면 한가한 시간대에 빠져 있는 몫이 0.375 다 —
+    매출총액(0.36)·카테고리(0.19)보다 높다."""
     focus = assign(METRICS)
 
     assert "hourlyProfile" in focus[0]
@@ -88,12 +96,14 @@ def test_배정된_근거로만_쓰면_채점기의_카드_지표_중복이_구�
     from devtools.grade import grade_solution
 
     focus = assign(METRICS)
-    # 각 카드가 자기 근거의 숫자 하나만 인용한 응답을 만든다
-    quotes = [
-        "평일 14시 매출은 30,000원입니다.",
-        "커피 매출 비중은 62%입니다.",
-        "오늘 예상 매출은 1,250,000원입니다.",
-    ]
+    # 각 카드가 자기 근거의 숫자 하나만 인용한 응답을 만든다. 축 이름으로 고른다 —
+    # 카드 순서는 점수에 따라 바뀌므로 순서에 기대면 점수식을 손볼 때마다 깨진다.
+    by_axis = {
+        "hourlyProfile": "평일 14시 매출은 30,000원입니다.",
+        "categoryBreakdown": "커피 매출 비중은 62%입니다.",
+        "salesSummary": "오늘 예상 매출은 1,250,000원입니다.",
+    }
+    quotes = [by_axis[next(iter(card))] for card in focus]
     raw = json.dumps(
         {
             "solutionCards": [
@@ -150,16 +160,47 @@ def test_시간대는_dayType_별로_상하위만_넣는다():
     assert min(r["amount"] for r in weekday) == 10000
 
 
-def test_카테고리는_비중_상위만_넣는다():
+def test_카테고리는_많이_움직인_쪽을_넣는다():
+    """점수가 구성 변동이라 행도 같은 기준이어야 한다 — 비중 상위로 고르면 점수를 만든
+    카테고리가 빠진다. 매장 2 곳 639 일에서 최대 변동 카테고리가 비중 상위 5 종에 없는
+    날이 23~29% 였다(`_menu_rows` 에서 먼저 겪은 문제).
+    """
+    # share 는 합이 1.0 이다 — 20 종이 0.95 를 비중 순으로 나눠 갖고, 나머지 0.05 가 신규다
     category = [
-        {"name": f"카테고리{i}", "share": round(0.5 - i * 0.02, 4), "vsPrevPeriod": 0.01}
+        {"name": f"카테고리{i}", "share": round((20 - i) / 210 * 0.95, 5), "vsPrevPeriod": 0.01}
         for i in range(20)
     ]
+    # 비중은 하위권인데 이전 기간에 없던 카테고리 — 구성 변동은 가장 크다
+    category.append({"name": "신규", "share": 0.05, "vsPrevPeriod": None})
     focus = assign({**METRICS, "categoryBreakdown": category})
 
     rows = next(item["categoryBreakdown"] for item in focus if "categoryBreakdown" in item)
     assert len(rows) == 5
-    assert rows[0]["name"] == "카테고리0", "비중이 가장 큰 쪽이 먼저여야 한다"
+    assert rows[0]["name"] == "신규", f"가장 많이 움직인 쪽이 먼저여야 한다: {rows[0]}"
+
+
+def test_카테고리는_쏠림이_아니라_구성_변동으로_점수를_낸다():
+    """ "커피가 62%" 는 뉴스가 아니다 — 늘 그렇다. 매장 2 곳 639 일에서 비중항은 평균
+    0.358·표준편차 0.018 로 변별이 아니라 하한을 깔고 있었고, 증감률항은 77~90% 의 날에
+    1.0 으로 포화됐다.
+    """
+    from app.services.solution_focus import _category_score
+
+    # 쏠려 있지만 구성이 그대로인 날 — 할 말이 없다
+    assert _category_score([{"name": "커피", "share": 0.62}]) == 0.0
+    assert _category_score([{"name": "커피", "share": 1.0, "vsPrevPeriod": 0.0}]) == 0.0
+    # 꼬리 카테고리가 +400% 움직여도 포화되지 않는다 — 비중이 작으면 구성도 거의 그대로다
+    tail = [
+        {"name": "커피", "share": 0.98, "vsPrevPeriod": 0.0},
+        {"name": "병음료", "share": 0.02, "vsPrevPeriod": 4.0},
+    ]
+    assert _category_score(tail) < 0.05
+    # 구성이 실제로 재편된 날은 점수가 커진다
+    shifted = [
+        {"name": "커피", "share": 0.4, "vsPrevPeriod": -0.5},
+        {"name": "디저트", "share": 0.6, "vsPrevPeriod": 1.0},
+    ]
+    assert _category_score(shifted) > 0.15
 
 
 _FLAT_METRICS = {
@@ -188,7 +229,7 @@ def test_다른_축이_전부_약하면_날씨가_1순위가_된다():
 
 
 def test_다른_축이_뚜렷하면_날씨가_밀린다():
-    """표준 METRICS 는 시간대 0.674·카테고리 0.62·매출총액 0.36 이다. 16~19℃ 는 포화점을
+    """표준 METRICS 는 시간대 0.375·매출총액 0.36·카테고리 0.19 다. 16~19℃ 는 포화점을
     아슬하게 가로질러 0.09 라 세 장 안에 못 든다 — 점수가 기온 폭에 비례하므로, 날씨가
     드는지는 "가로지르나" 가 아니라 "얼마나 가로지르나" 로 갈린다."""
     weather = {
@@ -273,7 +314,7 @@ def test_메뉴는_비중이_아니라_변화로_점수를_낸다():
 
     그리고 "상위 메뉴가 있다" 는 뉴스가 아니다. 늘 아메리카노가 1 위다.
     """
-    from app.services.solution_focus import _category_score, _menu_score
+    from app.services.solution_focus import _menu_score
 
     # 비중은 카테고리의 절반 이하인데 변화는 더 크다
     assert max(m["ratio"] for m in MENUS) < 0.62
@@ -281,7 +322,6 @@ def test_메뉴는_비중이_아니라_변화로_점수를_낸다():
     # 변화가 없으면 할 말도 없다
     flat = [{**m, "vsPrevPeriod": None} for m in MENUS]
     assert _menu_score(flat) == 0.0
-    assert _category_score([{"name": "커피", "share": 0.62}]) == 0.62
 
 
 def test_메뉴가_크게_움직인_날에만_카드가_된다():
