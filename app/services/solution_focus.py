@@ -111,10 +111,15 @@ def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
     평일과 주말은 섞지 않는다 — `_hourly_rows` 와 같은 이유다. 따로 재서 더 쏠린 쪽을
     쓴다. 카드는 한 계열을 짚기 때문이다.
 
-    **날짜별 변별력은 이걸로도 작다**(표준편차 0.033). 7 일 창이 하루씩 미끄러지면 6/7 이
-    겹쳐서 시간대 모양 자체가 거의 안 변한다. 단일 창으로 "오늘 특이한가" 를 재는 건
-    원리적으로 안 된다 — hourlyProfile 에 이전 기간 값이 없다(`HourlyPoint`: dayType·
-    hour·amount). 이 변경이 푸는 건 변별력이 아니라 **다른 축을 누르던 높이**다.
+    **이 축은 "오늘 특이한가" 를 재지 않는다.** hourlyProfile 에 이전 기간 값이 없어서
+    (`HourlyPoint`: dayType·hour·amount) 비교 대상이 아예 없고, 애초에 비교할 날도 없다 —
+    BE 는 업로드마다 분석 기간을 잡고 그 사이에는 같은 기간을 다시 쓴다(BE
+    `SalesSolutionGenerationContextResolver.resolve` 가 `latestCompletedRun` 을 쓰고,
+    `assemble` 이 `end = periodEnd` 로 고정한다). 그래서 다음 업로드까지 이 축을 포함한
+    매출 축 점수가 전부 매일 같은 값이다. 날마다 바뀌는 입력은 예측과 날씨뿐이다.
+
+    재는 건 **이 매장 이 기간의 쏠림**이고, 그건 매장·업로드마다 다르다. 이 변경이 푸는 건
+    그래서 변별력이 아니라 **다른 축을 누르던 높이**다(0.968 → 0.246).
     근거: docs/experiments/2026-10-26-solution-axis-scores.md §9
 
     비교할 행이 2 개가 안 되면 -1.0 으로 후보에서 아예 뺀다. 0.0 을 돌려주면 "할 말은
