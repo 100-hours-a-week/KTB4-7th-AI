@@ -96,7 +96,31 @@ def _selling(points: list[dict]) -> list[dict]:
 
 
 def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
-    """시간대 격차. 가장 낮은 때가 가장 높은 때보다 많이 낮을수록 할 말이 많다.
+    """한가한 시간대에서 빠져 있는 매출이 전체의 몇 %인가. dayType 별로 재서 큰 쪽을 쓴다.
+
+    2026-10-27: 격차(`1 - 최저/최고`)로 재던 걸 바꿨다. 그 식이 재는 건 "피크가 있나" 인데
+    카페는 늘 피크가 있다 — 639 일 실측에서 평균 0.948~0.971·표준편차 0.010~0.021 이었다.
+    날짜와 무관한 구조적 상수라, 0.95 를 늘 넘으니 다른 축이 이길 수가 없었고 카드 1·2 가
+    시간대·카테고리로 고정됐다.
+
+    균등하게 팔렸다면 영업시간 n 개가 1/n 씩 가져간다. 그보다 모자란 시간들의 몫을 합치면
+    "한가한 시간대에서 빠져 있는 매출 비중" 이다. 0 이면 하루 내내 고르게 팔렸다는 뜻이라
+    할 말이 없고, 쏠릴수록 커진다. 자릿수를 맞추려고 곱하는 가중치가 없고, 메뉴·카테고리·
+    매출총액과 같은 단위(전체 매출 대비 몫)가 된다.
+
+    평일과 주말은 섞지 않는다 — `_hourly_rows` 와 같은 이유다. 따로 재서 더 쏠린 쪽을
+    쓴다. 카드는 한 계열을 짚기 때문이다.
+
+    **이 축은 "오늘 특이한가" 를 재지 않는다.** hourlyProfile 에 이전 기간 값이 없어서
+    (`HourlyPoint`: dayType·hour·amount) 비교 대상이 아예 없고, 애초에 비교할 날도 없다 —
+    BE 는 업로드마다 분석 기간을 잡고 그 사이에는 같은 기간을 다시 쓴다(BE
+    `SalesSolutionGenerationContextResolver.resolve` 가 `latestCompletedRun` 을 쓰고,
+    `assemble` 이 `end = periodEnd` 로 고정한다). 그래서 다음 업로드까지 이 축을 포함한
+    매출 축 점수가 전부 매일 같은 값이다. 날마다 바뀌는 입력은 예측과 날씨뿐이다.
+
+    재는 건 **이 매장 이 기간의 쏠림**이고, 그건 매장·업로드마다 다르다. 이 변경이 푸는 건
+    그래서 변별력이 아니라 **다른 축을 누르던 높이**다(0.96 → 0.255).
+    근거: docs/experiments/2026-10-26-solution-axis-scores.md §9
 
     비교할 행이 2 개가 안 되면 -1.0 으로 후보에서 아예 뺀다. 0.0 을 돌려주면 "할 말은
     없지만 후보" 가 되어 카드로 배정되고, 모델은 배정받은 지표로 뭐든 써야 하니 **없는
@@ -104,10 +128,16 @@ def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
     시간대에 비해 현저히 낮습니다"가 나왔다. 비교가 이 축의 존재 이유라, 비교할 게
     없으면 축 자체가 성립하지 않는다.
     """
-    amounts = [p.get("amount") or 0 for p in _selling(_open_hours(points, hours))]
-    if len(amounts) < 2 or max(amounts) <= 0:
-        return -1.0
-    return 1.0 - (min(amounts) / max(amounts))
+    selling = _selling(_open_hours(points, hours))
+    scores = []
+    for day_type in dict.fromkeys(p.get("dayType") for p in selling):
+        amounts = [p.get("amount") or 0 for p in selling if p.get("dayType") == day_type]
+        total = sum(amounts)
+        if len(amounts) < 2 or total <= 0:
+            continue
+        even = 1.0 / len(amounts)
+        scores.append(sum(max(0.0, even - amount / total) for amount in amounts))
+    return max(scores) if scores else -1.0
 
 
 def _hourly_rows(points: list[dict], hours: dict | None = None) -> list[dict]:
@@ -212,9 +242,48 @@ def _menu_rows(points: list[dict]) -> list[dict]:
     return sorted(points, key=lambda p: abs(_menu_share_delta(p)), reverse=True)[:_TOP_SHARES]
 
 
+def _category_share_shift(points: list[dict]) -> dict[str, float]:
+    """카테고리별 비중이 이전 기간 대비 몇 %p 움직였나. 부호를 유지한다.
+
+    전체 매출을 더 받지 않아도 된다 — `share` 와 `vsPrevPeriod` 로 이전 기간 비중이
+    복원된다. `prev_i = share_i / (1 + vsPrevPeriod_i)` 는 전체 매출 배수만큼 어긋난
+    값이라, 그 합으로 나눠 비중으로 되돌린다.
+
+    vsPrevPeriod 가 null 이면 이전 기간에 없던 카테고리다 — 등장 자체가 구성 변화라
+    이전 비중 0 으로 둔다. -1.0(이전 매출이 통째로 사라진 경우)은 분모가 0 이 되는데,
+    그 카테고리는 현재 매출이 0 이라 비중도 0 이다 — `_menu_share_delta` 와 같은 처리다.
+    """
+    current: dict[str, float] = {}
+    previous: dict[str, float] = {}
+    for point in points:
+        share = point.get("share") or 0.0
+        change = point.get("vsPrevPeriod")
+        current[point.get("name")] = share
+        previous[point.get("name")] = (
+            0.0 if change is None or change == -1.0 else share / (1.0 + change)
+        )
+    scale = sum(previous.values())
+    if scale <= 0:
+        return {}
+    return {name: share - previous[name] / scale for name, share in current.items()}
+
+
 def _category_rows(points: list[dict]) -> list[dict]:
-    """비중 상위 몇 종만 남긴다."""
-    return sorted(points, key=lambda p: p.get("share") or 0.0, reverse=True)[:_TOP_SHARES]
+    """비중이 많이 움직인 몇 종. 점수와 같은 기준으로 골라야 한다.
+
+    2026-10-27: 비중 상위로 고르던 걸 바꿨다. 점수를 구성 변동으로 바꾸면서 기준이
+    어긋났다 — 매장 2 곳 639 일에서 **가장 많이 움직인 카테고리가 비중 상위 5 종에 없는
+    날이 17~23%** 였다. 그 날엔 모델이 "구성이 재편됐다" 는 카드를 받고도 움직이지 않은
+    카테고리만 보게 된다. `_menu_rows` 에서 먼저 겪은 것과 같은 문제다.
+
+    비교할 게 없으면(첫 업로드) 변동이 전부 0 이라 비중 상위로 떨어진다.
+    """
+    shift = _category_share_shift(points)
+    return sorted(
+        points,
+        key=lambda p: (abs(shift.get(p.get("name"), 0.0)), p.get("share") or 0.0),
+        reverse=True,
+    )[:_TOP_SHARES]
 
 
 def _menu_score(points: list[dict]) -> float:
@@ -241,13 +310,32 @@ def _menu_score(points: list[dict]) -> float:
 
 
 def _category_score(points: list[dict]) -> float:
-    """한 카테고리 쏠림, 또는 카테고리별 증감 중 큰 쪽."""
-    if not points:
-        return 0.0
-    top_share = max(p.get("share") or 0.0 for p in points)
-    changes = [abs(p["vsPrevPeriod"]) for p in points if p.get("vsPrevPeriod") is not None]
-    top_change = max(changes) * _CATEGORY_CHANGE_WEIGHT if changes else 0.0
-    return min(max(top_share, top_change), 1.0)
+    """카테고리 **구성이 얼마나 재편됐나**. 비중의 총변동거리다.
+
+    0 이면 구성이 그대로라 할 말이 없고, 1 이면 통째로 바뀌었다. 비중의 몇 %p 가
+    카테고리 사이를 옮겨 갔는지라 0~1 범위가 보장돼, 자릿수용 가중치가 필요 없다.
+
+    2026-10-27: `max(비중, 증감률 최댓값 x 2.0)` 을 바꿨다. 매장 2 곳 639 일에서 **80~90% 의
+    날이 1.0 으로 포화**됐고, 포화는 전부 증감항에서 나왔다 — 비중항만 쓰면 평균
+    0.414~0.421·표준편차 0.016~0.018 로 상수다. `_menu_score` 가 겪은 꼬리 항목 문제와 같다:
+    카테고리가 9~17 종이라 비중 1% 짜리 하나가 +400% 움직이면 `0.5 x 2.0` 으로 상한에 닿는다.
+
+    그런데 메뉴와 **같은 잣대(변화 금액)를 쓰면 안 된다.** 카테고리의 변화 금액은 그
+    카테고리에 속한 메뉴들의 변화 금액 합이라 개별 메뉴 최댓값보다 구조적으로 크다 —
+    실측에서 메뉴 축의 카드 3 점유가 39% → 16% 로 밀렸다. "메뉴 비중은 카테고리보다
+    구조적으로 작다"(`_menu_score`)와 반대 방향인 같은 함정이다.
+
+    그래서 잣대를 가른다. 메뉴는 "한 메뉴가 크게 움직였다"(변화 금액 최댓값), 카테고리는
+    "구성이 재편됐다"(총변동). 카드 문장도 그렇게 갈린다.
+
+    비중 쏠림 항(`max(share)`)은 뺐다. "커피가 62%" 는 뉴스가 아니다 — 늘 그렇다
+    (`_menu_score` 의 "늘 아메리카노가 1 위다" 와 같은 판단). 639 일 평균 0.414~0.421·표준편차
+    0.016~0.018 로, 변별이 아니라 하한을 깔고 있었다. 부수 효과로 "미분류 100%" 같은 퇴화된
+    입력은 변동이 0 이라 축에서 탈락한다 — 실매장 639 일에는 그런 날이 0 건이다(§7).
+    근거: docs/experiments/2026-10-26-solution-axis-scores.md §9
+    """
+    shift = _category_share_shift(points)
+    return 0.5 * sum(abs(value) for value in shift.values())
 
 
 def _summary_score(summary: dict) -> float:
@@ -324,14 +412,13 @@ def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
     지표가 3 종이 안 되면 그만큼만 돌려준다. 없는 근거로 카드를 만들게 하느니 장수를
     줄이는 편이 낫다 — 서비스가 카드 2 장도 그대로 내보내는 것과 같은 판단이다.
 
-    2026-10-14: 날씨(weatherContext)가 네 번째 축으로 들어왔다. `isNotable` 이 BE 판정이라
-    점수를 더 매길 근거가 없어 고정값(`_WEATHER_SUPPLEMENT_SCORE`, 0.3)을 쓴다 — 다른 세
-    축이 전부 그보다 약할 때만 날씨가 카드를 차지한다("보충" 설계). 다른 축 중 하나라도
-    뚜렷하면 날씨는 밀린다.
+    상권(districtBenchmark)은 인사이트로 가서 솔루션 축에는 포함하지 않는다(2026-10-13).
 
-    축이 넷이 되면서 "오늘 할 말이 있는 것만 고른다"가 처음으로 실제 선택(= 네 후보 중
-    하나 탈락)으로 작동하기 시작한다. 상권(districtBenchmark)은 인사이트로 가서 솔루션
-    축에는 포함하지 않는다(2026-10-13 결정).
+    2026-10-27: 다섯 축의 점수가 처음으로 **같은 단위**가 됐다 — 전부 "전체 매출(또는
+    비중)의 몇 %" 다. 자릿수를 맞추려고 곱하는 가중치는 매출총액·예측 두 축에만 남았다.
+    그 전까지는 시간대(평균 0.96)와 카테고리(80~90% 포화)가 카드 1·2 를 사실상 고정했고,
+    "오늘 할 말이 있는 것만 고른다" 가 선택으로 작동하지 않았다.
+    근거: docs/experiments/2026-10-26-solution-axis-scores.md §9
     """
     summary = metrics.get("salesSummary") or {}
     hourly = metrics.get("hourlyProfile") or []
