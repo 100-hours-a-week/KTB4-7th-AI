@@ -1018,3 +1018,92 @@ def test_지표에_없는_차원은_접지_검사를_하지_않는다(text):
 @pytest.mark.parametrize("text", ["건수가 늘었습니다", "개수를 줄이세요"])
 def test_건수_개수는_수량_단위가_아니다(text):
     assert grade._ungrounded(text, _QTY_METRICS) == set()
+
+
+# ── 강수 패턴 프롬프트(PR #254)에 맞춘 검사 (2026-10-28) ──────────────
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # 프롬프트가 금지 예시로 적어 둔 세 문장. 옛 패턴은 첫 번째만 잡았다.
+        "비 때문에 매출이 줄었습니다",
+        "비가 와서 덜 팔렸습니다",
+        "강수 영향으로 감소했습니다",
+        # 프롬프트 자신의 표현 — "날씨가 매출 변화를 일으켰다고 단정하지 마세요"
+        "날씨가 매출 변화를 일으켰습니다",
+        "비가 판매 감소의 원인입니다",
+        "강수가 매출 하락을 초래했습니다",
+        "강수 자체가 판매 차이의 원인입니다",
+    ],
+)
+def test_인과_단정은_주어가_없어도_잡는다(sentence):
+    """매출어를 필수로 두면 동사형("덜 팔렸")·주어 생략("감소했습니다")을 놓친다."""
+    assert grade._WEATHER_CAUSAL.search(sentence)
+
+
+def test_강수_패턴이_없으면_과거_날씨별_판매를_말할_수_없다():
+    """PR #254 의 새 규칙이다 — 인과 연결어가 없어도 성립하는 서술이라
+    `_WEATHER_CAUSAL` 로는 안 걸리고, 숫자가 없으면 접지 검사에도 안 걸린다.
+    """
+    text = "비 오는 날에는 아이스 음료가 덜 팔립니다"
+    metrics = {"salesSummary": {"netSales": 1000000, "vsPrevPeriod": -0.12}}
+
+    assert grade._PAST_WEATHER_SALES.search(text)
+    assert _graded(_card(1, summary=text))["과거날씨_판매_추측_없음"] is False
+    assert (
+        grade.grade_solution(_raw(_card(1, summary=text)), metrics)["과거날씨_판매_추측_없음"]
+        is False
+    )
+
+
+def test_강수_패턴이_있으면_과거_관측_차이를_말해도_된다():
+    metrics = {
+        "salesSummary": {"netSales": 1000000, "vsPrevPeriod": -0.12},
+        "conditionPatterns": [
+            {
+                "condition": "RAIN",
+                "menus": [
+                    {
+                        "menuName": "아이스 아메리카노",
+                        "avgQuantity": 12,
+                        "baselineAvgQuantity": 20,
+                        "vsBaseline": -0.4,
+                        "avgSales": 12000,
+                        "baselineAvgSales": 20000,
+                    }
+                ],
+            }
+        ],
+    }
+    text = "비 온 날에는 아이스 아메리카노가 12잔, 무강수 날에는 20잔 팔렸습니다"
+    result = grade.grade_solution(_raw(_card(1, summary=text)), metrics)
+
+    assert result["과거날씨_판매_추측_없음"] is True
+    assert result["날씨_인과_주장_없음"] is True
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    ["오늘 비 예보가 있으니 온음료를 준비하세요", "오전에는 핫 음료 기계를 먼저 예열하세요"],
+)
+def test_오늘_예보_준비는_과거_추측이_아니다(sentence):
+    assert not grade._PAST_WEATHER_SALES.search(sentence)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # 한글은 단어 경계가 없어서 `비` 가 대비·준비·소비 안에서 걸린다. 실제 출력
+        # 84 건 중 6 건이 이 모양으로 날씨 인과로 오판됐다 — 날씨 얘기가 아예 없다.
+        "이전 기간 대비 매출 감소 원인을 파악하기 위해 분석하세요",
+        "이전 주와 비교해 매출이 줄어든 원인을 분석해 조치를 취해야 합니다",
+        "커피 판매 비중 감소 원인을 점검하고 응대 방식을 재조정하세요",
+        "소비 패턴 변화로 매출이 줄었습니다",
+        "준비 시간을 줄이면 손님이 늘었습니다",
+        # `눈` 도 같은 문제다 — 우리 플레이북 예시가 "눈에 띄게" 를 자주 쓴다.
+        "베이커리를 눈에 띄는 자리로 옮겨 매출 감소 원인을 줄이세요",
+    ],
+)
+def test_대비_준비_눈에_의_글자를_날씨로_보지_않는다(sentence):
+    assert not grade._WEATHER_CAUSAL.search(sentence)
