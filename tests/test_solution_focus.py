@@ -760,3 +760,146 @@ def test_isNotable이_아니면_특보_기온이어도_후보에서_빠진다():
     focus = assign({**_BUSY_DAY, "weatherContext": cold})
 
     assert not any("weatherContext" in card for card in focus)
+
+
+# ── 강수 패턴 (conditionPatterns, 2026-10-28) ──────────────────────────
+
+_RAIN_PATTERN = {
+    "condition": "RAIN",
+    "basisWeeks": 12,
+    "thresholdMm": 1.0,
+    "sampleDays": 7,
+    "baselineDays": 9,
+    "sampleWeekdayRatio": 0.57,
+    "baselineWeekdayRatio": 0.67,
+    "menus": [
+        # 일평균 금액. 비 오는 날 8,000원 덜 팔리고, 다른 메뉴는 2,000원 더 팔린다.
+        {
+            "menuName": "아이스 아메리카노",
+            "avgQuantity": 12,
+            "baselineAvgQuantity": 20,
+            "vsBaseline": -0.4,
+            "avgSales": 12000,
+            "baselineAvgSales": 20000,
+        },
+        {
+            "menuName": "핫 아메리카노",
+            "avgQuantity": 9,
+            "baselineAvgQuantity": 5,
+            "vsBaseline": 0.8,
+            "avgSales": 5000,
+            "baselineAvgSales": 3000,
+        },
+    ],
+}
+# 기간 10 일 · 순매출 1,000,000원 → 일평균 100,000원.
+# 변화 합계 8,000 + 2,000 = 10,000원 → 점수 0.1
+_RAIN_METRICS = {
+    "salesSummary": {"netSales": 1000000, "vsPrevPeriod": -0.01, "period": "2026-01-01~2026-01-10"},
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ],
+    "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.01}],
+    "weatherContext": {
+        "skyText": "흐림",
+        "minTempC": 12,
+        "maxTempC": 15,
+        "maxPop": 0.8,
+        "rainHours": [15, 16],
+        "isNotable": True,
+    },
+    "conditionPatterns": [_RAIN_PATTERN],
+}
+
+
+def test_강수_패턴은_하루_매출_대비_몫으로_점수를_낸다():
+    """avgSales 는 일평균이고 netSales 는 기간 합계다 — 기간 일수로 맞춰야 같은 잣대가 된다."""
+    from app.services.solution_focus import _condition_score
+
+    score = _condition_score(
+        _RAIN_METRICS["conditionPatterns"],
+        _RAIN_METRICS["salesSummary"],
+        _RAIN_METRICS["weatherContext"],
+    )
+
+    assert score == pytest.approx(0.1)
+
+
+def test_오늘_비_예보가_없으면_강수_패턴을_쓰지_않는다():
+    """ "비 올 때는 이렇습니다" 는 비 오는 날에만 할 말이다. 맑은 날엔 할 수 있는 게 없다."""
+    from app.services.solution_focus import _condition_score
+
+    dry = {**_RAIN_METRICS["weatherContext"], "rainHours": []}
+
+    assert (
+        _condition_score(_RAIN_METRICS["conditionPatterns"], _RAIN_METRICS["salesSummary"], dry)
+        == -1.0
+    )
+
+
+def test_집계_기간이_없으면_강수_패턴을_쓰지_않는다():
+    """period 는 계약상 선택값이다 — 없으면 일평균 분모를 만들 수 없다. 추측하지 않는다."""
+    from app.services.solution_focus import _condition_score
+
+    no_period = {k: v for k, v in _RAIN_METRICS["salesSummary"].items() if k != "period"}
+
+    assert (
+        _condition_score(
+            _RAIN_METRICS["conditionPatterns"], no_period, _RAIN_METRICS["weatherContext"]
+        )
+        == -1.0
+    )
+
+
+def test_강수가_아닌_조건은_쓰지_않는다():
+    """계약이 배열이라 조건이 늘 수 있다. 비 예보 게이트를 통과했다고 아무 조건이나 쓰면
+    틀린 문장이 된다."""
+    from app.services.solution_focus import _condition_score
+
+    other = [{**_RAIN_PATTERN, "condition": "HEAT"}]
+
+    assert (
+        _condition_score(other, _RAIN_METRICS["salesSummary"], _RAIN_METRICS["weatherContext"])
+        == -1.0
+    )
+
+
+def test_강수_패턴은_날씨와_한_카드로_묶인다():
+    """둘 다 "오늘 날씨" 얘기라 따로 배정하면 카드 두 장이 같은 소재가 된다."""
+    focus = assign(derive(_RAIN_METRICS))
+
+    weather = next(card for card in focus if "weatherContext" in card)
+    assert "conditionPatterns" in weather
+    assert not any("conditionPatterns" in card and "weatherContext" not in card for card in focus)
+
+
+def test_비_예보가_없으면_강수_패턴이_카드에_들어가지_않는다():
+    """점수에서 빠진 지표를 모델에게 주면 안 된다 — 쓰라고 준 걸로 읽는다."""
+    metrics = {
+        **_RAIN_METRICS,
+        "weatherContext": {**_RAIN_METRICS["weatherContext"], "rainHours": []},
+    }
+
+    focus = assign(derive(metrics))
+
+    assert all("conditionPatterns" not in card for card in focus)
+
+
+def test_강수_패턴만으로도_날씨_축이_후보가_된다():
+    """현재 동작을 고정한다 — isNotable 이 false 여도 과거 실측이 있으면 후보로 올라온다.
+
+    `_weather_score` 의 isNotable 게이트를 우회하는 셈이다. "BE 판정이 우선" 이라는 기존
+    결정과 부딪히는 지점이라 리뷰에서 정한다(`_condition_score` 주석 참고).
+    """
+    from app.services.solution_focus import _condition_score, _weather_score
+
+    not_notable = {**_RAIN_METRICS["weatherContext"], "isNotable": False}
+
+    assert _weather_score(not_notable) == -1.0
+    assert (
+        _condition_score(
+            _RAIN_METRICS["conditionPatterns"], _RAIN_METRICS["salesSummary"], not_notable
+        )
+        > 0.0
+    )
