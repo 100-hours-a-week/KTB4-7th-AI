@@ -19,6 +19,7 @@ from app.services.solution import (
     _VAGUE_ACTION,
     _VAGUE_PERIOD,
     _metric_figures,
+    _ungrounded,
     _violations,
 )
 from app.services.solution_focus import derive, peak_ratios
@@ -572,6 +573,35 @@ def test_잘못_붙인_배수는_어떤_검사에도_안_걸린다():
 
     assert not _violations(_ratio_card(wrong), metrics), "서비스는 못 잡는다"
     assert not _ungrounded(wrong, metrics), "채점기도 못 잡는다 — 50.2 는 두 자리다"
+
+
+# ── 백분율 접지 검사를 서비스에도 반영 (devtools/grade.py PR #249 와 동기화) ──────────
+# 백분율은 두 자리 면제를 받지 않는다. 그라더에서 먼저 고친 구멍인데 _ungrounded 가
+# 인사이트와 공유하는 실제 검증 로직이라, 반영 안 하면 서비스에서도 같은 날조가 샌다.
+
+
+def test_지표에_없는_두자리_백분율을_잡는다():
+    metrics = REQUEST_BODY["metrics"]
+    assert _ungrounded("매출이 77% 줄었습니다", metrics) == {"77"}
+
+
+def test_지표에_있는_백분율은_통과한다():
+    metrics = REQUEST_BODY["metrics"]  # categoryBreakdown 의 커피 비중 0.62 → 62%
+    assert _ungrounded("커피 비중이 62%입니다", metrics) == set()
+
+
+def test_백분율_반올림은_서비스에서도_날조로_보지_않는다():
+    metrics = {"categoryBreakdown": [{"name": "디저트", "share": 0.0885}]}
+
+    assert _ungrounded("비중이 8.85%입니다", metrics) == set()
+    assert _ungrounded("비중이 8.9%입니다", metrics) == set()
+    assert _ungrounded("비중이 9%입니다", metrics) == set()
+    assert _ungrounded("비중이 8.5%입니다", metrics) == {"8.5"}
+
+
+def test_시각과_인원은_백분율이_아니라_그대로_통과한다():
+    metrics = REQUEST_BODY["metrics"]
+    assert _ungrounded("21시까지 직원 2명을 배치하세요", metrics) == set()
 
 
 # ── 공허한 조언 패턴 확대 (2026-10-16) ──────────────────────────────

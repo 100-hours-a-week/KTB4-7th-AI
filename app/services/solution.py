@@ -233,18 +233,47 @@ def _metric_numbers(metrics: dict) -> set[str]:
 
 # 문장에서 뽑아낼 숫자. devtools/grade.py::_ANYNUM 과 같은 패턴.
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
+# devtools/grade.py::_PERCENT 와 같은 패턴.
+_PERCENT = re.compile(r"(\d+(?:\.\d+)?)%")
 
 
 def _numbers_in(text: str) -> set[str]:
     return {m.group().replace(",", "").rstrip(".") for m in _ANYNUM.finditer(text)}
 
 
+# 지표 비율을 백분율로 적을 때 한 자리까지 반올림하는 건 환각이 아니다 — _metric_numbers 가
+# 정수 반올림("9")까지는 이미 허용 집합에 넣는데, 한 자리("8.9")가 비면 반올림을 날조로
+# 오판한다. devtools/grade.py::_percent_grounded 와 같은 로직이어야 한다.
+_PERCENT_ROUNDING_TOLERANCE = 0.05 + 1e-9
+
+
+def _percent_grounded(token: str, metrics: dict) -> bool:
+    """ "40%" 의 40 이 지표 비율에서 나온 값인가. 반올림 오차만 허용한다."""
+    try:
+        value = float(token)
+    except ValueError:
+        return True
+    for allowed in _metric_numbers(metrics):
+        try:
+            if abs(value - float(allowed)) <= _PERCENT_ROUNDING_TOLERANCE:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _ungrounded(text: str, metrics: dict) -> set[str]:
     """지표에 없는 숫자. devtools/grade.py::_ungrounded 와 같은 로직이어야 한다.
 
     한두 자리는 시각·인원 같은 실행 지시로 보고 통과시킨다 — 프롬프트가 허용한다.
+
+    **백분율은 자릿수 면제를 받지 않는다**(devtools/grade.py PR #249와 동기화). 비율
+    주장은 실행 지시가 아니라 사실 주장인데, 거의 항상 두 자리라 이 면제로 통째로 빠져
+    있었다 — insight.py 가 이 함수를 그대로 가져다 쓰므로 인사이트의 날조 비율도
+    같이 새고 있었다.
     """
     allowed = _metric_numbers(metrics)
+    percents = {m.group(1) for m in _PERCENT.finditer(text)}
     bad = set()
     for number in _numbers_in(text):
         if number in allowed:
@@ -254,6 +283,10 @@ def _ungrounded(text: str, metrics: dict) -> set[str]:
                 continue
         except ValueError:
             pass
+        if number in percents:
+            if not _percent_grounded(number, metrics):
+                bad.add(number)
+            continue
         if len(number.split(".")[0]) <= 2:
             continue
         bad.add(number)
