@@ -889,8 +889,9 @@ def test_비_예보가_없으면_강수_패턴이_카드에_들어가지_않는�
 def test_강수_패턴만으로도_날씨_축이_후보가_된다():
     """현재 동작을 고정한다 — isNotable 이 false 여도 과거 실측이 있으면 후보로 올라온다.
 
-    `_weather_score` 의 isNotable 게이트를 우회하는 셈이다. "BE 판정이 우선" 이라는 기존
-    결정과 부딪히는 지점이라 리뷰에서 정한다(`_condition_score` 주석 참고).
+    `_weather_score` 의 isNotable 게이트를 우회하는 모양이지만 **관측 가능한 효과가 없다**
+    (2026-10-28 실측): 이 점수는 발동 시 평균 0.02 라 다른 축을 못 이기고 3 장 안에
+    들지 못한다. 쓸모는 focus 에 conditionPatterns 를 붙이는 게이트 쪽이다.
     """
     from app.services.solution_focus import _condition_score, _weather_score
 
