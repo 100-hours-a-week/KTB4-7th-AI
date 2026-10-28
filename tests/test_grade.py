@@ -962,3 +962,59 @@ def test_백분율_반올림은_날조로_보지_않는다():
 def test_시각과_인원은_백분율이_아니라_그대로_통과한다():
     """자릿수 면제는 백분율에만 거둬들였다 — 시각·인원은 그대로 실행 지시다."""
     assert grade._ungrounded("21시까지 직원 2명을 배치하세요", SOL_METRICS) == set()
+
+
+# ── 수량 접지 검사 (2026-10-28) ────────────────────────────────────────
+
+_QTY_METRICS = {
+    "menuRankings": [{"rank": 1, "menuName": "아이스 아메리카노", "quantity": 912, "ratio": 0.25}],
+    "conditionPatterns": [
+        {
+            "condition": "RAIN",
+            "menus": [
+                {
+                    "menuName": "아이스 아메리카노",
+                    "avgQuantity": 12,
+                    "baselineAvgQuantity": 20,
+                    "vsBaseline": -0.4,
+                    "avgSales": 12000,
+                    "baselineAvgSales": 20000,
+                }
+            ],
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "text,bad",
+    [
+        ("비 온 날에는 12잔 팔렸습니다", set()),
+        ("무강수 날에는 20잔 팔렸습니다", set()),
+        ("아이스 아메리카노가 912잔 팔렸습니다", set()),
+        ("비 온 날에는 15잔 팔렸습니다", {"15"}),
+        ("주문이 37건입니다", {"37"}),
+        ("디저트 3개를 묶으세요", {"3"}),
+    ],
+)
+def test_수량도_자릿수_면제를_받지_않는다(text, bad):
+    """#246 으로 avgQuantity·baselineAvgQuantity 가 카드 근거에 들어오는데, 잔 수는
+    거의 항상 두 자리라 "12잔" 을 "15잔" 으로 바꿔 써도 통과했다. 백분율과 같은 구멍이다.
+    """
+    assert grade._ungrounded(text, _QTY_METRICS) == bad
+
+
+@pytest.mark.parametrize(
+    "text", ["원두 5kg을 발주하세요", "21시까지 직원 2명을 배치하세요", "14시까지 준비하세요"]
+)
+def test_지표에_없는_차원은_접지_검사를_하지_않는다(text):
+    """`명`·`kg` 은 지표에 그 차원이 없어서 **무조건 미접지**가 된다 — 검사가 아니라
+    금지가 되고, 그 영역은 `_FABRICATED_AMOUNT` 가 이미 잡는다. 한 결함이 두 항목을
+    깎으면 측정이 흐려진다.
+    """
+    assert grade._ungrounded(text, _QTY_METRICS) == set()
+
+
+@pytest.mark.parametrize("text", ["건수가 늘었습니다", "개수를 줄이세요"])
+def test_건수_개수는_수량_단위가_아니다(text):
+    assert grade._ungrounded(text, _QTY_METRICS) == set()

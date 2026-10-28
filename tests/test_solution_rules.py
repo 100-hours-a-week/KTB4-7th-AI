@@ -85,9 +85,19 @@ def test_그라더와_서비스의_수치_인용_판정이_같다():
         "커피 비중은 62%입니다",
         "직원 1명을 배치하세요",
         "14시까지 준비하세요",
+        # 2026-10-28: 백분율·수량이 자릿수 면제에서 빠지면서 `_ungrounded` 가 복사본
+        # 두 개로 갈렸다. 공차나 단위 목록이 한쪽만 바뀌면 여기서 먼저 실패하게 둔다 —
+        # `_ROUNDED`·`_VAGUE_ACTION`·`_metric_numbers` 와 같은 이유다.
+        "매출이 77% 줄었습니다",
+        "비중이 11.9%입니다",
+        "아이스 아메리카노가 912잔 팔렸습니다",
+        "비 온 날에는 15잔 팔렸습니다",
+        "원두 5kg을 발주하세요",
+        "주문이 37건입니다",
     ]
     for case in cases:
         assert _metric_figures(case, metrics) == grade._metric_figures(case, metrics), case
+        assert _ungrounded(case, metrics) == grade._ungrounded(case, metrics), case
 
 
 @pytest.mark.parametrize(

@@ -102,6 +102,16 @@ _DISPLAY_NUM = re.compile(r"[\d,]{4,}\s*원|\d+\.?\d*\s*%")
 # 겹쳐 오탐한다(2026-10-22 실측에서 재현, PR #219) — 토큰 단위로 끊어야 한다.
 _PERCENT = re.compile(r"(\d+(?:\.\d+)?)%")
 
+# 수량 단위가 붙은 숫자. 백분율과 같은 이유로 자릿수 면제에서 뺀다 — "비 온 날에는
+# 12잔 팔렸습니다" 는 실행 지시가 아니라 **사실 주장**이고, 수량은 거의 항상 두 자리다.
+#
+# 단위는 **지표에 그 차원이 실재하는 것만** 넣는다 — 잔·개는 `quantity`·`avgQuantity`·
+# `baselineAvgQuantity`, 건은 주문 건수다. 접지 검사는 맞으면 통과하고 틀리면 걸려야
+# 의미가 있는데, 지표에 없는 차원(`명`·`kg`·`리터`)은 **무조건 미접지**가 되어 검사가
+# 아니라 금지가 된다. 그 영역은 `_FABRICATED_AMOUNT` 가 이미 잡으므로, 여기서 또 잡으면
+# 한 결함이 두 항목을 깎아 측정이 흐려진다.
+_QUANTITY = re.compile(r"(\d+(?:\.\d+)?)\s*(?:잔|개|건)(?![수당])")
+
 # 행동의 "얼마나" — 지표에 없는 값이라 지어낸 것이다. 마진을 모르는데 할인율을,
 # 인건비 대비 생산성을 모르는데 인원을 말할 근거가 없다(2026-10-07). 시각은 지표에
 # hour 로 있으므로 _ungrounded 가 따로 본다.
@@ -604,9 +614,14 @@ def _ungrounded(text: str, metrics) -> set[str]:
     있는 입력에서 "77%"·"99%" 가 그대로 통과했다. 이 구멍은 conditionPatterns(강수별
     메뉴 판매, #246)에서 특히 아프다. 그 축의 가치가 전부 "N% 덜 팔렸다" 이고 N 은
     두 자리다 — 모델이 40% 를 77% 로 바꿔 써도 못 잡고 있었다.
+    **수량도 같은 이유로 면제에서 뺀다**(2026-10-28). `conditionPatterns` 를 축에 연결하면서
+    (#246) `avgQuantity`·`baselineAvgQuantity` 가 카드 근거로 들어오는데, 잔 수는 거의 항상
+    두 자리라 "비 온 날 12잔" 을 "15잔" 으로 바꿔 써도 통과했다. 백분율(#248)과 같은 구멍의
+    다른 쪽이다.
     """
     allowed = _metric_numbers(metrics)
     percents = {m.group(1) for m in _PERCENT.finditer(text)}
+    quantities = {m.group(1) for m in _QUANTITY.finditer(text)}
     bad = set()
     for number in _numbers_in(text):
         if number in allowed:
@@ -619,6 +634,10 @@ def _ungrounded(text: str, metrics) -> set[str]:
         if number in percents:
             if not _percent_grounded(number, metrics):
                 bad.add(number)
+            continue
+        if number in quantities:
+            # 여기까지 왔으면 위에서 접지 검사를 이미 통과하지 못했다.
+            bad.add(number)
             continue
         if len(number.split(".")[0]) <= 2:
             continue
