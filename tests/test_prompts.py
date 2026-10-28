@@ -136,7 +136,7 @@ def test_인사이트_프롬프트는_문장마다_근거를_하나씩_붙인다
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-10-20"
+    assert solution.VERSION == "2026-10-28"
     assert insight.VERSION == "2026-10-24"
 
 
@@ -278,3 +278,16 @@ def test_프롬프트는_고정_규칙을_지표보다_앞에_둔다():
 
     ins = insight._USER
     assert ins.index("{focus_blocks}") > ins.index("같은 내용을 다른 표현으로 반복하지 마세요.")
+
+
+def test_강수_패턴_프롬프트는_관측_차이만_허용한다():
+    assert "conditionPatterns가 해당 카드 근거에 있을 때에만" in solution.SYSTEM
+    assert "인과관계" in solution.SYSTEM
+    assert "강수일·무강수일" in solution._USER
+    assert "오늘의 실적이나" in solution._USER
+    assert "차이·변화율을" in solution._USER
+
+
+def test_강수_패턴_없는_카드는_과거_판매를_추측하지_않는다():
+    assert "conditionPatterns가 없으면 과거 날씨별 판매 차이를" in solution.SYSTEM
+    assert "강수 자체가 판매 차이의 원인이라고 말하지 마세요" in solution._USER
