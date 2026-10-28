@@ -15,6 +15,7 @@
 """
 
 import logging
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +339,98 @@ def _category_score(points: list[dict]) -> float:
     return 0.5 * sum(abs(value) for value in shift.values())
 
 
+def _period_days(period: str | None) -> int:
+    """ "2026-01-01~2026-03-31" 에서 일수를 센다. 읽을 수 없으면 0.
+
+    `netSales` 는 하루가 아니라 분석 기간 합계다(2026-10-15 BE 확인). conditionPatterns 의
+    `avgSales` 는 **일평균**이라, 둘을 같은 잣대로 놓으려면 기간 일수가 있어야 한다.
+    `period` 는 계약상 선택값이다 — BE 어셈블러는 항상 `start + "~" + end` 를 보내지만,
+    안 오는 경우 축을 탈락시킨다(아래 `_condition_score`). 없는 분모를 추측하지 않는다.
+    """
+    if not period or "~" not in period:
+        return 0
+    start, _, end = period.partition("~")
+    try:
+        first = date.fromisoformat(start.strip())
+        last = date.fromisoformat(end.strip())
+    except ValueError:
+        return 0
+    return (last - first).days + 1 if last >= first else 0
+
+
+def _rain_patterns(patterns: list[dict] | None) -> list[dict]:
+    """강수 조건 패턴만. 지금 BE 가 보내는 condition 은 RAIN 하나뿐이다.
+
+    계약이 배열이라 나중에 다른 조건이 늘 수 있다. 그때 "오늘 비 예보" 게이트로 걸러 놓고
+    엉뚱한 조건의 패턴을 쓰면 틀린 문장이 되므로, 조건 이름을 보고 고른다.
+    """
+    return [p for p in patterns or [] if p.get("condition") == "RAIN"]
+
+
+def _condition_score(
+    patterns: list[dict] | None, summary: dict | None, weather: dict | None
+) -> float:
+    """과거 비 오는 날의 매출 변화가 하루 매출의 몇 %인가. **오늘 비 예보가 있을 때만.**
+
+    `weatherContext` 는 오늘 예보 스냅샷이라 "비가 와서 매출이 줄었다" 를 뒷받침할 수
+    없었고, 그래서 프롬프트가 그 주장을 금지해 왔다. `conditionPatterns` 가 바로 그
+    뒷받침 데이터다 — BE 가 최근 12 주의 ASOS 강수 관측과 날짜별 메뉴 판매를 비교해
+    결과만 보낸다(1.0mm 이상 RAIN, 0.1mm 미만 기준군, 각 5 일 이상일 때만).
+
+    잣대는 다른 축과 같다 — "전체 매출의 몇 %". `avgSales` 는 일평균이고 `netSales` 는
+    기간 합계라, 기간 일수로 나눠 일평균 전체 매출을 만들어 맞춘다. 자릿수를 맞추려고
+    곱하는 가중치가 없다.
+
+    **오늘 비 예보가 없으면 후보에서 뺀다.** "비 올 때는 이렇습니다" 는 비 오는 날에만
+    할 말이다. 맑은 날에 보내면 점주가 오늘 할 수 있는 게 없다. 판정은 BE 가 보낸
+    `rainHours` 를 그대로 쓴다 — 강수확률 몇 %부터 비로 볼지 우리가 고르지 않는다.
+
+    **이 값은 실질적으로 점수가 아니라 게이트다**(2026-10-28 실측). 매장 2 곳 604 창에서
+    발동 시 평균 0.019~0.022 · 최대 0.054 로, 다른 축(시간대 0.255 · 매출총액 0.240 ·
+    카테고리 0.19)보다 한 자리 작다. 축 순위를 바꾸는 일이 없다.
+
+    그래도 쓸모가 있는 건 `assign` 이 이 값으로 **focus 에 conditionPatterns 를 붙일지**
+    정하기 때문이다. 날씨 축은 기온으로 뽑히고(`_weather_score`), 뽑히면 강수 패턴이
+    같이 실린다 — 비 예보가 있고 패턴이 성립한 창에서 날씨 카드가 3 장 안에 든 비율이
+    18~25% 이고, **든 경우에는 100%(11/11, 13/13) conditionPatterns 를 함께 받았다.**
+    `max()` 로 묶여 있어 이 값이 작아도 해가 없다.
+
+    왜 작은가. BE 는 `|vsBaseline|` 가 큰 메뉴 **3 종만** 보낸다 — 상대 변화가 큰 순이라
+    절대 금액이 큰 순이 아니다. 그래서 이 세 종의 금액 변화 합은 매장 전체의 강수 영향을
+    대표하지 못한다. 매장 전체 효과를 점수로 쓰려면 비 온 날/무강수 날의 **일평균 전체
+    매출**이 계약에 있어야 한다(BE 에 요청 예정). 그 값이 오면 `_summary_score` 와 같은
+    단위(증감률)가 되고, 점주가 실제로 궁금한 숫자이기도 하다.
+
+    `isNotable` 은 보지 않는다. 그 값은 "오늘 예보가 카드 한 장 값을 하나" 에 대한 BE
+    판정이고, 이 값을 만드는 건 과거 실측이다. 게이트를 우회하는 모양이지만 **관측 가능한
+    효과가 없다** — 0.02 로는 3 장 안에 못 든다. 실측 전에는 리뷰에서 정할 문제로 올렸는데,
+    숫자가 나온 뒤로는 정할 것이 없다.
+
+    BE 가 "변화율은 상관관계이며 강수의 인과 효과로 단정하지 않는다" 고 명시했다.
+    `sampleWeekdayRatio`·`baselineWeekdayRatio` 가 다르면 비 온 날과 기준일의 평일/주말
+    구성이 달라 요일 효과가 섞인다. 거르는 문턱을 임의로 정하지 않고 두 값을 그대로
+    프롬프트에 넘긴다 — 아는 한계이고, 문턱은 실측 후에 정한다.
+    """
+    rain = _rain_patterns(patterns)
+    if not rain:
+        return -1.0
+    if not (weather or {}).get("rainHours"):
+        return -1.0
+    days = _period_days((summary or {}).get("period"))
+    net_sales = (summary or {}).get("netSales") or 0
+    if days <= 0 or net_sales <= 0:
+        return -1.0
+    daily = net_sales / days
+    shifts = [
+        sum(
+            abs((menu.get("avgSales") or 0) - (menu.get("baselineAvgSales") or 0))
+            for menu in pattern.get("menus") or []
+        )
+        for pattern in rain
+    ]
+    return min(max(shifts) / daily, 1.0)
+
+
 def _summary_score(summary: dict) -> float:
     """전체 매출 증감. 비교 기간이 없으면(첫 업로드) 할 말이 없다."""
     change = summary.get("vsPrevPeriod")
@@ -426,6 +519,7 @@ def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
     predicted = metrics.get("predictedSalesToday")
     weather = metrics.get("weatherContext")
     menus = metrics.get("menuRankings") or []
+    conditions = metrics.get("conditionPatterns") or []
 
     total_focus: dict = {"salesSummary": summary} if summary else {}
     if predicted is not None and total_focus:
@@ -434,6 +528,16 @@ def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
         _summary_score(summary) if summary else -1.0,
         _prediction_score(predicted, summary.get("netSales") or 0) if predicted else -1.0,
     )
+
+    # conditionPatterns 는 weatherContext 와 한 축으로 묶는다 — 둘 다 "오늘 날씨" 얘기라
+    # 따로 배정하면 카드 두 장이 같은 소재가 된다(salesSummary + predictedSalesToday 를
+    # 묶은 것과 같은 판단). 묶으면 카드 한 장이 "오늘 비 예보 → 과거 비 오는 날 이 메뉴가
+    # 이만큼 덜 팔렸다 → 그래서 이렇게 하라" 로 이어진다.
+    weather_focus: dict = {"weatherContext": weather} if weather else {}
+    condition_score = _condition_score(conditions, summary, weather)
+    if condition_score >= 0.0:
+        weather_focus["conditionPatterns"] = _rain_patterns(conditions)
+    weather_score = max(_weather_score(weather), condition_score)
 
     # 점수는 받은 행 전부로 내고, 프롬프트에 넣는 행만 줄인다 — 격차 판단이 둔해지면
     # 어느 지표가 특이한지부터 틀린다.
@@ -449,7 +553,7 @@ def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
         (total_focus, total_score if total_focus else -1.0),
         # 맨 뒤에 둔다 — 동점(1.0)이면 안정 정렬이라 앞선 세 축이 우선한다. 날씨는 "다른
         # 축이 오늘 할 말이 없을 때만" 보충하는 자리다.
-        ({"weatherContext": weather}, _weather_score(weather)),
+        (weather_focus, weather_score),
         # 메뉴는 카테고리보다 한 단계 구체적이다 — "커피 62%" 로는 행동이 안 나오지만
         # "아이스 아메리카노 912잔" 이면 발주를 말할 수 있다(2026-10-18).
         (
