@@ -326,10 +326,12 @@ POS 분류 미설정 신규 매장)에 대한 보험일 뿐이다. 넣을지는 
 자릿수 맞추는 임의 가중치를 쓰지 않는다.
 
 ```python
-if maxTempC >= 33 or minTempC <= -12:          return 1.0    # 기상청 주의보 기준
-if not (minTempC < 18 <= maxTempC):            return -1.0   # 구성이 안 갈린다 → 탈락
-swing = (18 - max(minTempC, -10)) * 0.0061                   # 1도당 아이스 비중 +0.61%p
-return min(swing / 0.14, 1.0)                                # 0.14 = 실험 관측 전체 변동폭
+if maxTempC >= 33 or minTempC <= -12:
+    return 1.0  # 기상청 주의보 기준
+if not (minTempC < 18 <= maxTempC):
+    return -1.0  # 구성이 안 갈린다 → 탈락
+swing = (18 - max(minTempC, -10)) * 0.0061  # 1도당 아이스 비중 +0.61%p
+return min(swing / 0.14, 1.0)  # 0.14 = 실험 관측 전체 변동폭
 ```
 
 - **18℃** = 아이스 비중 포화점 (실험 §1)
