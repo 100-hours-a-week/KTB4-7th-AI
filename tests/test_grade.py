@@ -890,3 +890,45 @@ def test_년_분기_표기도_잡는다():
 
     assert result["상권_분기_인용됨"] is True
     assert result["상권_분기_날조_없음"] is True
+
+
+# ── judge 입력 복원 (devtools/judge.py, 2026-10-29) ───────────────────
+
+
+def test_judge는_행_순서로_케이스를_복원한다():
+    """bench 덤프 행에는 케이스 이름이 없다 — `bench._run` 이 케이스별로 n 번씩 차례로
+    쌓는 순서로 되돌린다. 케이스 구성이 바뀌면 이 매핑이 조용히 틀어지므로 고정한다.
+    """
+    from devtools.bench import SOLUTION_CASES
+    from devtools.judge import load_jobs
+
+    per_case = 2
+    rows = [
+        {"sample": [{"rankNo": 1, "title": f"{name} {i}"}]}
+        for name, _ in SOLUTION_CASES
+        for i in range(per_case)
+    ]
+    jobs = load_jobs({"solution": rows})
+
+    assert len(jobs) == len(SOLUTION_CASES) * per_case
+    assert [name for name, _, _ in jobs[:per_case]] == [SOLUTION_CASES[0][0]] * per_case
+    assert jobs[0][1] is SOLUTION_CASES[0][1]
+
+
+def test_judge는_케이스_수가_안_맞으면_멈춘다():
+    """행 수가 케이스 수로 나눠지지 않으면 순서 복원이 틀린다 — 조용히 섞이게 두지 않는다."""
+    from devtools.judge import load_jobs
+
+    with pytest.raises(SystemExit):
+        load_jobs({"solution": [{"sample": [{"rankNo": 1}]}]})
+
+
+def test_judge는_카드가_없는_행을_건너뛴다():
+    """실패한 호출은 sample 이 비어 있다 — 판정 대상이 아니다."""
+    from devtools.bench import SOLUTION_CASES
+    from devtools.judge import load_jobs
+
+    rows = [{"sample": None} for _ in SOLUTION_CASES]
+    rows[0] = {"sample": [{"rankNo": 1, "title": "x"}]}
+
+    assert len(load_jobs({"solution": rows})) == 1

@@ -16,6 +16,7 @@ Backend가 전달한 데이터만 사용하며 **서비스 DB에 직접 접근�
 | 실호출 검증 | `uv run python -m devtools.llm_smoke --with-chat` (요금 발생 · 스텁 BE 필요) |
 | 프롬프트 측정 | `uv run python -m devtools.bench --n 50` (요금·GPU 시간 발생 · 순차 호출) |
 | 동시성 측정 | `uv run python -m devtools.concurrency_bench --concurrency 1 3 5 10 --n 20` (요금·GPU 시간 발생 · 채점 없음, 지연/실패율/처리량만) |
+| 공허함 판정 | `uv run python -m devtools.judge --dump <bench 덤프>` (요금 발생 · GPU 불필요 — 판정자는 Claude) |
 | 요청 계약 대조 | `uv run python -m devtools.contract_check --check <엔드포인트> <BE 샘플>` |
 
 배포에 필요한 환경변수는 `docs/DEPLOY.md` 에 있다.
