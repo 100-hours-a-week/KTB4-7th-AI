@@ -190,7 +190,29 @@ BE 재시도 정책이 504 를 재시도 대상으로 둔다. 실제로 그 경�
 
 RunPod A40 Pod를 새로 띄울 때(재고 부족으로 다른 Pod를 사는 경우 포함) 빠뜨리기 쉬운 것들.
 
-- [ ] `infra/vllm/serve.sh`·`watchdog.sh`로 vLLM 기동 (`VLLM_API_KEY` export 필요)
+- [ ] **vLLM 기동은 Start Command로 자동화한다** (2026-10-28) — `runpod/pytorch` 이미지에는
+  vLLM이 없어서, Start Command 없이 띄우면 설치·기동이 한 번도 안 돌고 8000 포트가
+  `Initializing...` 로 계속 남는다(2026-10-28 실제로 겪음. 로그 파일도 없고 GPU 메모리 0).
+  Deploy 화면의 "Edit template overrides"는 **그 배포 1회에만** 적용되므로, 다음 Pod부터
+  쓰려면 Account → Templates 에서 템플릿으로 저장한다.
+  - Container image `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`, Container disk 50GB,
+    HTTP ports `8888`·`8000`, TCP port `22`, Jupyter·SSH 체크 유지
+  - 환경변수 `VLLM_API_KEY`(가능하면 RunPod Secret `{{ RUNPOD_SECRET_... }}` 참조 — 환경변수는 암호화되지 않는다)
+  - Start Command — `/start.sh &` 를 빼고 통째로 덮어쓰면 SSH·Jupyter 가 안 뜬다:
+    ```
+    bash -c '/start.sh & sleep 5 && pip install --break-system-packages vllm==0.32.0 && mkdir -p /workspace/infra/vllm && cd /workspace/infra/vllm && for f in serve.sh watchdog.sh; do curl -fsSL https://raw.githubusercontent.com/100-hours-a-week/KTB4-7th-AI/dev/infra/vllm/$f -o "$f" || exit 1; done && chmod +x serve.sh watchdog.sh && exec ./watchdog.sh'
+    ```
+    레포가 public 이라 토큰 없이 받는다. `dev` 최신 스크립트를 그대로 받으므로 고정하려면
+    URL의 `dev` 를 커밋 SHA 로 바꾼다. Pod 생성 후 약 5분(설치 약 2분 + 모델 로딩 약 3분)에
+    `/health` 200. Stop→Start 하면 설치·캐시가 날아가 5분 재기동이 다시 걸린다.
+  - 실패하면 아래 순서로 본다 — `exec ./watchdog.sh` 이후 출력은 전부 파일로 리다이렉트돼
+    RunPod Container 로그에는 안 잡힌다(`pip install` 완료 시점에서 끊긴다):
+    1. RunPod **System** 탭 — 이미지 pull·컨테이너 시작 등 Pod 수준 이벤트
+    2. RunPod **Container** 탭 — Start Command 초반 실행과 `pip install` 로그
+    3. SSH·Jupyter 로 접속해 `/root/vllm_serve.log`·`/root/vllm_watchdog.log` —
+       `watchdog.sh` 기동 이후 vLLM 기동·재시작 로그는 이 두 파일에만 남는다
+  - 수동으로 띄울 때: 이미 떠 있는 `vllm serve` 를 먼저 `kill` 한다(안 내리고 워치독을 붙이면
+    새 프로세스가 OOM 으로 반복 죽고, 기존 vLLM 은 감시 밖에 남는다).
 - [ ] AI 컨테이너 쪽 env var 7개 갱신: `LLM_PROVIDER`·`LLM_BASE_URL`(새 Pod의 proxy
   URL, `.../v1` 접미사 필수)·`LLM_MODEL`·`LLM_DISABLE_THINKING`·`LLM_FALLBACK_PROVIDER`·
   `LLM_FALLBACK_MODEL`·`OPENAI_API_KEY`(Pod의 `VLLM_API_KEY`와 동일 값) — 클라우드팀에
