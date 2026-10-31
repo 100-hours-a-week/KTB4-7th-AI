@@ -1107,3 +1107,41 @@ def test_오늘_예보_준비는_과거_추측이_아니다(sentence):
 )
 def test_대비_준비_눈에_의_글자를_날씨로_보지_않는다(sentence):
     assert not grade._WEATHER_CAUSAL.search(sentence)
+
+
+# ── 수량 접지 검사 보완 (2026-10-30 리뷰, #255) ────────────────────────────
+
+
+def test_정수_표기_차이는_수량_접지에도_허용한다():
+    assert grade._ungrounded("비 온 날에는 12.0잔 팔렸습니다", _QTY_METRICS) == set()
+
+
+def test_주문_건수가_지표에_있으면_통과한다():
+    metrics = {**_QTY_METRICS, "salesSummary": {"orderCount": 37}}
+    assert grade._ungrounded("주문이 37건입니다", metrics) == set()
+
+
+def test_수량_숫자가_무관한_지표_숫자와_우연히_같아도_잡는다():
+    """allowed(지표 전체)를 먼저 보면 hour 같은 무관한 숫자와 우연히 일치해도 통과한다 —
+    수량은 _quantity_numbers(수량 차원만)로만 접지해야 한다."""
+    metrics = {**_QTY_METRICS, "hourlyProfile": [{"hour": 15, "menuSales": 30000}]}
+    assert grade._ungrounded("비 온 날에는 15잔 팔렸습니다", metrics) == {"15"}
+
+
+def test_쉼표_있는_수량도_같은_토큰으로_맞춰_접지한다():
+    """_QUANTITY 가 쉼표를 못 받으면 "1,234" 에서 "234" 만 뽑혀 _numbers_in() 의 "1234" 와
+    어긋난다 — 정규식을 _ANYNUM 과 맞춰 같은 토큰이 되게 한다."""
+    metrics = {"menuRankings": [{"rank": 1, "menuName": "아이스 아메리카노", "quantity": 1234}]}
+    assert grade._ungrounded("아이스 아메리카노가 1,234잔 팔렸습니다", metrics) == set()
+
+
+def test_비정상_쉼표_수량도_정규화된_토큰으로_접지_검사한다():
+    assert grade._ungrounded("강수일에는 1,5잔 팔렸습니다", _QTY_METRICS) == {"15"}
+
+
+def test_비정상_쉼표_수량이_우연히_실제_수량과_같으면_통과한다():
+    """쉼표 형식 자체의 정합성은 검사하지 않는다 — "1,5잔" 을 정규화하면 "15" 가 되는데,
+    지표에 실제로 15가 있으면 그대로 통과한다. 이 한계는 이번 변경(#255)의 범위 밖이다.
+    """
+    metrics = {"menuRankings": [{"rank": 1, "menuName": "아이스 아메리카노", "quantity": 15}]}
+    assert grade._ungrounded("강수일에는 1,5잔 팔렸습니다", metrics) == set()

@@ -55,6 +55,32 @@ _ROWS_PER_SERIES = 2
 _TOP_SHARES = 5
 
 
+def _window(hours: dict | None, day_type: str | None) -> tuple[int, int] | None:
+    """그 계열의 영업시간을 (여는 시, 닫는 시) 로 돌려준다. 없으면 None.
+
+    닫는 시가 여는 시보다 작거나 같으면 **자정을 넘긴 영업**이라 24 를 더한다.
+    BE 는 StoreBusinessHours 의 opensAt·closesAt 을 그대로 내보내고 둘의 순서를 검사하지
+    않는다(BE `SalesSolutionMetricsAssembler.businessHours`). 그래서 11:00~02:00 매장이
+    그 값 그대로 온다. 24 를 더하지 않으면 `opens <= hour < closes` 가 11~2 사이에서
+    **한 번도 참이 되지 않아 시간대 행이 통째로 사라지고** 축 자체가 후보에서 빠진다.
+    24 시간 영업(00:00~00:00)도 같은 경로로 0~24 가 된다.
+
+    `opensAt`·`closesAt`의 분은 버리고 시만 쓴다. `HourlyPoint`가 1 시간 단위 집계라
+    분 단위로 가를 수 없기 때문이다 — 11:30 개점이면 11 시 행(11:00~11:59 집계)이
+    통째로 열려 개점 전 30 분이 섞이고, 22:30 폐점이면 22 시 행이 통째로 닫혀 실제
+    영업 중인 30 분이 빠진다. 부분 영업시간을 정확히 가르지 못하는 근사라는 걸 알고
+    있는 한계로 남긴다.
+    """
+    window = (hours or {}).get(day_type or "")
+    if not window:
+        return None
+    opens = int(str(window.get("opensAt", "00:00")).split(":")[0])
+    closes = int(str(window.get("closesAt", "24:00")).split(":")[0])
+    if closes <= opens:
+        closes += 24
+    return opens, closes
+
+
 def _open_hours(points: list[dict], hours: dict | None) -> list[dict]:
     """영업시간 밖 행을 뺀다. 영업시간이 없으면 그대로 둔다.
 
@@ -65,22 +91,29 @@ def _open_hours(points: list[dict], hours: dict | None) -> list[dict]:
 
     0 원 행 가드는 그대로 둔다 — 영업 중인데 0 원인 시간은 할 말이 있는 사실이지만,
     그걸 최저로 쓰면 격차 점수가 1.0 으로 포화돼 시간대 축이 늘 1 순위가 된다.
-    같이 풀려면 점수식을 손봐야 해서 이번 범위 밖이다.
+    대신 그 시간을 **분모에서는 센다**(`_hourly_score`) — 빠진 매출은 점수에 들어가고,
+    "0시에 뭘 하세요" 가 될 행만 모델에게서 가린다.
+
+    `_window`는 행이 보낸 `dayType`을 그대로 키로 써서 그 dayType의 영업시간을 찾는다.
+    자정을 넘긴 영업(예: 금요일 밤 영업이 토요일 새벽으로 이어지는 경우)에서 그 새벽
+    행의 `dayType`이 거래 발생일(캘린더) 기준인지 영업 시작일 기준인지는 **BE 계약으로
+    확정되지 않았다.** 두 기준이 다르면 WEEKDAY/WEEKEND 중 잘못된 영업시간으로 걸러질
+    수 있다. 확인 전까지는 추측으로 두 dayType을 다 찾아보는 fallback을 넣지 않는다 —
+    잘못하면 실제 영업시간 밖 매출까지 포함시킬 위험이 있다(알고 있는 한계).
     """
     if not hours:
         return points
     out = []
     for point in points:
-        window = hours.get(point.get("dayType") or "")
-        if not window:
+        window = _window(hours, point.get("dayType"))
+        if window is None:
             out.append(point)
             continue
         hour = point.get("hour")
         if hour is None:
             continue
-        opens = int(str(window.get("opensAt", "00:00")).split(":")[0])
-        closes = int(str(window.get("closesAt", "24:00")).split(":")[0]) or 24
-        if opens <= hour < closes:
+        opens, closes = window
+        if opens <= hour < closes or opens <= hour + 24 < closes:
             out.append(point)
     return out
 
@@ -109,6 +142,17 @@ def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
     할 말이 없고, 쏠릴수록 커진다. 자릿수를 맞추려고 곱하는 가중치가 없고, 메뉴·카테고리·
     매출총액과 같은 단위(전체 매출 대비 몫)가 된다.
 
+    **분모 n 은 영업시간 수다 — 매출이 찍힌 행 수가 아니다.** `_selling` 이 0 원 행을
+    빼므로 행 수로 재면 영업 중인데 한 잔도 안 팔린 시간이 분모에서 같이 사라져, 가장
+    유휴인 시간이 점수에 반영되지 않고 **쏠림을 과소평가한다**. 영업시간을 받으면 센다 —
+    그 시간의 몫 `1/n` 은 통째로 빠진 매출이다. 영업시간이 없거나(BE 미전송) 행 수가
+    영업시간 수보다 많으면(계약이 표현 못 한 시간대) 행 수로 떨어진다.
+
+    우리 POS 실측에서는 두 매장 모두 영업시간 내 모든 시간에 매출이 있어 점수가 바뀌지
+    않았다(평균 0.255 → 0.255, 0.254 → 0.254). 바뀌는 건 한가한 매장이다. 점주 선언
+    영업시간이 실제보다 넓을 수 있어 포화 위험을 같이 봤는데, 선언창을 +4 시간 부풀려도
+    평균 0.364 · 최대 0.426 · 포화 0% 로 다른 축이 이길 자리가 남는다.
+
     평일과 주말은 섞지 않는다 — `_hourly_rows` 와 같은 이유다. 따로 재서 더 쏠린 쪽을
     쓴다. 카드는 한 계열을 짚기 때문이다.
 
@@ -136,8 +180,11 @@ def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
         total = sum(amounts)
         if len(amounts) < 2 or total <= 0:
             continue
-        even = 1.0 / len(amounts)
-        scores.append(sum(max(0.0, even - amount / total) for amount in amounts))
+        window = _window(hours, day_type)
+        span = max(window[1] - window[0], len(amounts)) if window else len(amounts)
+        even = 1.0 / span
+        idle = sum(max(0.0, even - amount / total) for amount in amounts)
+        scores.append(idle + (span - len(amounts)) * even)
     return max(scores) if scores else -1.0
 
 
@@ -222,8 +269,20 @@ def _menu_share_delta(point: dict) -> float:
                       = (menuSales/전체) x (menuSales - prev)/menuSales
                       = ratio x vsPrevPeriod/(1 + vsPrevPeriod)
 
-    vsPrevPeriod 가 null 이면 비교할 게 없어 0.0 이다. -1.0(전기 매출이 통째로 사라진
-    경우)이면 분모가 0 이 되는데, 그 메뉴는 현재 매출이 0 이라 랭킹에 올 수 없다.
+    vsPrevPeriod 가 null 이면 비교할 게 없어 0.0 이다.
+
+    **-1.0 은 0.0 으로 두지만, 그건 "변화 없음" 이 아니라 "크기를 모름" 이다.**
+    2026-10-27 정정: 전에는 "그 메뉴는 현재 매출이 0 이라 랭킹에 올 수 없다" 고 적었는데
+    사실이 아니다. BE 는 랭킹을 현재·이전 **합집합**으로 만들고(`menuRankings` 의
+    `allMenuTotals`), 변화율 큰 순으로 다섯 종을 더 끼워 넣는다. 사라진 메뉴의 변화율은
+    -1.0 이라 `abs` 가 가능한 최댓값이어서 **BE 가 1 순위로 올려 보내는 행**이다.
+    그런데 그 행은 `ratio` 가 0 이라 위 등식으로 크기를 복원할 수 없다 — 잃은 몫
+    `이전매출/전체` 를 내려면 `previousRatio` 가 계약에 있어야 한다(BE #623).
+
+    지금 버리는 양: 매장 2 곳 604 창(창 7 일, BE 선정 로직 재현)에서 -1.0 행이 온 창이
+    54(9%)이고, 그 행이 잃은 비중은 중앙 0.01~0.70% · 최대 3.35% 다. 축 점수가 뒤집히는
+    창은 54 중 1(+0.0062)뿐이지만, 제대로 세면 **표시 5 행에 드는 창이 54 중 12** 다 —
+    BE 가 일부러 올려 보낸 행을 우리가 매번 맨 뒤로 밀어 잘라내고 있다.
     """
     change = point.get("vsPrevPeriod")
     if change is None or change == -1.0:
@@ -251,8 +310,14 @@ def _category_share_shift(points: list[dict]) -> dict[str, float]:
     값이라, 그 합으로 나눠 비중으로 되돌린다.
 
     vsPrevPeriod 가 null 이면 이전 기간에 없던 카테고리다 — 등장 자체가 구성 변화라
-    이전 비중 0 으로 둔다. -1.0(이전 매출이 통째로 사라진 경우)은 분모가 0 이 되는데,
-    그 카테고리는 현재 매출이 0 이라 비중도 0 이다 — `_menu_share_delta` 와 같은 처리다.
+    이전 비중 0 으로 둔다. BE 의 `changeRate` 는 이전이 0 일 때만 null 이라(`previous == 0`)
+    이 해석이 계약과 정확히 맞는다. -1.0 은 `_menu_share_delta` 와 같은 처리다.
+
+    **사라진 카테고리는 아예 안 온다 — 이 식이 못 메우는 구멍이다.** BE 의
+    `categoryBreakdown` 은 현재 기간 합계만 훑어서(`currentTotals.entrySet()`) 이전에만
+    있던 카테고리가 목록에 없다. 매장 2 곳 604 창에서 **164 창(22~31%)** 이 그런 창이고,
+    사라진 카테고리의 이전 비중은 중앙 0.34~0.69% · 최대 4.41% 였다. 그만큼 총변동이
+    과소평가된다. 메뉴 랭킹은 합집합인데 카테고리는 아니라 BE 에 맞춰 달라고 요청했다(BE #623).
     """
     current: dict[str, float] = {}
     previous: dict[str, float] = {}
