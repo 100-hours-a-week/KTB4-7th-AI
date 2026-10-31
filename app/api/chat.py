@@ -44,17 +44,76 @@ router = APIRouter(prefix="/internal/v1/ai", dependencies=[Depends(verify_intern
 
 # ChatRequest.history(app/schemas/chat.py)에 길이 제한이 없어 BE가 쌓인 대화를 그대로
 # 보내면 시스템 프롬프트 + 툴 스키마 7종 + 히스토리가 로컬 vLLM의 --max-model-len
-# (infra/vllm/serve.sh, 8192)을 넘긴다 — 2026-10-22 챗봇 전면 장애 원인. 정확한 토큰
-# 수가 아니라 메시지 개수로 자르는 근사치지만, Qwen 토크나이저 없이도 바로 적용 가능한
-# 보수적인 안전장치다. 넘겨도 fallback(llm.is_capacity_error)이 받아주지만, 그쪽은
-# GPU 활용을 포기하고 Claude로 새는 경로라 여기서 먼저 줄여 빈도를 낮춘다.
-MAX_HISTORY_MESSAGES = 12
+# (infra/vllm/serve.sh, 8192)을 넘긴다 — 2026-10-22 챗봇 전면 장애 원인.
+#
+# 처음엔 메시지 12개로 잘랐는데, 터지는 지점이 개수로 정해지지 않는다. Qwen3-32B-AWQ
+# 토크나이저로 실측하면(2026-10-26) 한 턴이 짧으면 99 토큰, 길면 319 토큰이라 8192를
+# 넘기는 히스토리가 20개~88개 사이 어디서든 나온다. 안전한 개수를 고르면 짧은 대화를
+# 과도하게 자르고, 넉넉한 개수를 고르면 안 터진다는 보장이 없다. 그래서 개수가 아니라
+# 토큰 예산으로 자른다.
+MAX_MODEL_LEN = 8192
+
+# 툴 스키마 7종(app/services/chat/tools.py) 실측값. 시스템 프롬프트는 context 카드 수에
+# 따라 변해서 요청마다 추정하고, 이쪽은 고정이다.
+TOOL_SCHEMA_TOKENS = 1029
+
+# agent↔tools 사이클(app/services/chat/graph.py)이 한 요청 안에서 쌓는 툴 결과. tools_node는
+# json.dumps(result)를 자르지 않고 그대로 메시지에 넣고, 성공하는 한 라운드 수에 상한이 없다.
+# 7종을 모두 조회하는 질문에서 2,430 토큰 실측(get_category_breakdown 한 건이 983).
+TOOL_RESULT_RESERVE = 2500
+
+# 모델이 답을 쓸 자리. 챗봇 경로는 max_tokens를 보내지 않아서(graph.py get_model) vLLM이
+# max_model_len - 프롬프트 만큼만 생성한다 — 프롬프트가 7,900까지 차면 400도 안 나고 폴백도
+# 안 타고 답변이 문장 중간에 끊긴다. 실측 답변이 ~320 토큰이라 여유를 둬서 떼놓는다.
+OUTPUT_RESERVE = 1024
 
 
-def _to_lc_messages(history: list[ChatMessage]) -> list:
+def _estimate_tokens(text: str) -> int:
+    """글자 하나를 토큰 하나로 센다 — 과대 추정이지만 자르기는 그쪽이 안전하다.
+
+    Qwen3 토크나이저 실측(2026-10-26) 토큰/글자 비율은 한국어 산문 0.76~0.85, 숫자·한자·
+    이모지가 1.00 이고 1.00 을 넘기는 입력은 찾지 못했다(자모 분리·제로폭 문자·깨진 바이트
+    포함). 5 는 chat template 이 메시지 하나에 더하는 고정 토큰(실측).
+    """
+    return len(text) + 5
+
+
+def _history_budget(system: str, question: str, provider: str) -> int | None:
+    """로컬 vLLM 으로 갈 때만 예산을 매긴다. 아니면 None — 자르지 않는다.
+
+    위 상수는 전부 로컬 vLLM 창(8192) 기준이다. fallback 으로 Claude(200k)에 가는 요청까지
+    같은 자로 자르면 이유 없이 대화를 버린다. 조건은 app/services/chat/graph.py 의 get_model
+    이 base_url 을 붙이는 분기와 같다 — core.config.uses_local_llm_server 는 settings 의
+    provider 를 보는데, 여기서 봐야 하는 건 llm.resolve_primary_or_fallback 이 고른 provider 다.
+
+    요청 중간에 fallback 으로 넘어가면(app/api/chat.py _stream) 이미 자른 히스토리로 Claude 를
+    부르게 된다. 좁은 쪽으로 자른 거라 안전한 방향이고, 되돌리려면 메시지를 다시 만들어야 한다.
+    """
+    if not (provider == "openai" and settings.llm_base_url):
+        return None
+    return (
+        MAX_MODEL_LEN
+        - TOOL_SCHEMA_TOKENS
+        - TOOL_RESULT_RESERVE
+        - OUTPUT_RESERVE
+        - _estimate_tokens(system)
+        - _estimate_tokens(question)
+    )
+
+
+def _to_lc_messages(history: list[ChatMessage], budget: int | None) -> list:
+    """예산 안에 들어가는 만큼 최근 대화부터 담는다. 시간순은 유지한다."""
     role_map = {"USER": HumanMessage, "ASSISTANT": AIMessage}
-    recent = history[-MAX_HISTORY_MESSAGES:]
-    return [role_map[m.role](m.content) for m in recent]
+    if budget is None:
+        return [role_map[m.role](m.content) for m in history]
+    kept: list = []
+    for message in reversed(history):
+        budget -= _estimate_tokens(message.content)
+        if budget < 0:
+            break
+        kept.append(role_map[message.role](message.content))
+    kept.reverse()
+    return kept
 
 
 def _sse(content: str, evidence: dict | None) -> str:
@@ -162,7 +221,8 @@ async def chat_messages(req: ChatRequest) -> StreamingResponse:
     provider, model_name, started_on_fallback = await llm.resolve_primary_or_fallback()
 
     system = chat_prompt.build_system([card.model_dump() for card in req.context], req.chatDate)
-    messages = [SystemMessage(system), *_to_lc_messages(req.history), HumanMessage(req.question)]
+    history = _to_lc_messages(req.history, _history_budget(system, req.question, provider))
+    messages = [SystemMessage(system), *history, HumanMessage(req.question)]
     initial_state = {"messages": messages, "failures": 0, "last_evidence": None}
 
     return StreamingResponse(
