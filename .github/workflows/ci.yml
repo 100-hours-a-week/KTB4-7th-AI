@@ -110,3 +110,21 @@ jobs:
             echo "- Image tag: $image_uri"
             echo "- Image digest: $digest"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  trigger-cd:
+    name: Request Cloud auto deploy
+    needs: publish-image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send deploy request to Cloud
+        env:
+          GH_TOKEN: ${{ secrets.CLOUD_DEPLOY_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::CLOUD_DEPLOY_DISPATCH_TOKEN is not set; auto deploy request skipped"
+            exit 0
+          fi
+          gh api repos/100-hours-a-week/KTB4-7th-Cloud/dispatches \
+            -f event_type=ai-ci-success -f "client_payload[sha]=$GITHUB_SHA" \
+            || echo "::warning::Cloud auto deploy request failed; deploy by hand"
