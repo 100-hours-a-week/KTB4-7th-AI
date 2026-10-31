@@ -7,8 +7,17 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 
-from app.api.chat import MAX_HISTORY_MESSAGES, _to_lc_messages
+from app.api.chat import (
+    MAX_MODEL_LEN,
+    OUTPUT_RESERVE,
+    TOOL_RESULT_RESERVE,
+    TOOL_SCHEMA_TOKENS,
+    _estimate_tokens,
+    _history_budget,
+    _to_lc_messages,
+)
 from app.clients import backend
+from app.core.config import settings
 from app.main import app
 from app.prompts import chat as chat_prompt
 from app.schemas.chat import ChatMessage
@@ -394,22 +403,88 @@ async def test_chatDate_가_없어도_통과한다(monkeypatch):
     assert res.status_code == 200
 
 
-def test_히스토리가_길면_최근_N개만_남긴다():
-    """BE가 쌓인 대화 전체를 그대로 보내면(길이 제한 없음, app/schemas/chat.py)
-    시스템 프롬프트 + 툴 스키마 + 히스토리가 로컬 vLLM의 --max-model-len(8192)을
-    넘긴다 — 2026-10-22 챗봇 전면 장애. 정확한 토큰 수 대신 메시지 개수로 자른다."""
-    history = [
-        ChatMessage(role="USER" if i % 2 == 0 else "ASSISTANT", content=f"msg-{i}")
-        for i in range(MAX_HISTORY_MESSAGES + 5)
+def _history(count: int, content: str) -> list[ChatMessage]:
+    return [
+        ChatMessage(role="USER" if i % 2 == 0 else "ASSISTANT", content=content)
+        for i in range(count)
     ]
-
-    messages = _to_lc_messages(history)
-
-    assert len(messages) == MAX_HISTORY_MESSAGES
-    assert messages[0].content == "msg-5"
-    assert messages[-1].content == f"msg-{MAX_HISTORY_MESSAGES + 4}"
 
 
 def test_히스토리가_짧으면_그대로_쓴다():
     history = [ChatMessage(role="USER", content="안녕")]
-    assert len(_to_lc_messages(history)) == 1
+    assert len(_to_lc_messages(history, 1000)) == 1
+
+
+def test_예산을_넘으면_최근_대화부터_남기고_시간순을_지킨다():
+    history = [
+        ChatMessage(role="USER" if i % 2 == 0 else "ASSISTANT", content=f"msg-{i}")
+        for i in range(10)
+    ]
+
+    messages = _to_lc_messages(history, _estimate_tokens("msg-0") * 3)
+
+    assert [m.content for m in messages] == ["msg-7", "msg-8", "msg-9"]
+
+
+def test_예산이_없으면_히스토리를_전부_버린다():
+    assert _to_lc_messages(_history(10, "안녕하세요"), 0) == []
+
+
+def test_같은_개수여도_메시지가_길면_덜_남는다():
+    """2026-10-22 장애가 개수로 안 잡히는 이유 — 터지는 지점이 길이에 달려 있다.
+    메시지 12개 제한은 짧은 대화를 과도하게 자르고, 긴 대화에서는 여유가 거의 없었다."""
+    budget = 1000
+    short = _to_lc_messages(_history(40, "네 알겠습니다"), budget)
+    long = _to_lc_messages(_history(40, "이번 달 순매출은 18,420,000원" * 10), budget)
+
+    assert len(short) > 12 > len(long)
+
+
+def test_예산대로_담으면_출력_자리가_남는다(monkeypatch):
+    """프롬프트가 max_model_len 을 꽉 채우면 vLLM 이 생성할 자리가 없어 답변이 문장
+    중간에 끊긴다 — 400 도 안 나고 폴백(llm.is_capacity_error)도 안 탄다."""
+    monkeypatch.setattr(settings, "llm_base_url", "http://127.0.0.1:8000/v1")
+    system = "시스템 프롬프트" * 200
+    question = "이번 달 매출 정리해줘"
+    budget = _history_budget(system, question, "openai")
+    answer = "이번 달 순매출은 18,420,000원으로 지난달보다 12.5% 늘었습니다. " * 5
+    history = _history(200, answer)
+
+    messages = _to_lc_messages(history, budget)
+
+    used = (
+        TOOL_SCHEMA_TOKENS
+        + TOOL_RESULT_RESERVE
+        + _estimate_tokens(system)
+        + _estimate_tokens(question)
+        + sum(_estimate_tokens(m.content) for m in messages)
+    )
+    assert MAX_MODEL_LEN - used >= OUTPUT_RESERVE
+
+
+def test_예산이_None이면_히스토리를_전부_쓴다():
+    history = _history(50, "이번 달 순매출은 18,420,000원" * 10)
+    assert len(_to_lc_messages(history, None)) == 50
+
+
+def test_로컬_vLLM일_때만_예산을_매긴다(monkeypatch):
+    """상수는 전부 로컬 vLLM 창(8192) 기준이다 — fallback 으로 Claude(200k)에 가는
+    요청까지 같은 자로 자르면 이유 없이 대화를 버린다."""
+    monkeypatch.setattr(settings, "llm_base_url", "http://127.0.0.1:8000/v1")
+
+    assert _history_budget("시스템", "질문", "openai") is not None
+    assert _history_budget("시스템", "질문", "anthropic") is None
+
+
+def test_base_url이_없으면_openai여도_자르지_않는다(monkeypatch):
+    """LLM_BASE_URL 이 없으면 로컬 서버가 아니라 OpenAI 본진이다 — 창이 좁지 않다."""
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    assert _history_budget("시스템", "질문", "openai") is None
+
+
+def test_시스템_프롬프트가_길어지면_히스토리_예산이_줄어든다(monkeypatch):
+    """context 카드 수에 따라 시스템 프롬프트가 변한다 — 고정값으로 둘 수 없다."""
+    monkeypatch.setattr(settings, "llm_base_url", "http://127.0.0.1:8000/v1")
+    assert _history_budget("짧은 시스템", "질문", "openai") > _history_budget(
+        "시스템" * 500, "질문", "openai"
+    )

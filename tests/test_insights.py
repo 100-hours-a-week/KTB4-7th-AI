@@ -600,6 +600,30 @@ async def test_지표에_없는_수치를_쓴_문장도_버린다(monkeypatch):
     assert "12,345" not in insights[0]
 
 
+async def test_지표에_없는_백분율을_쓴_문장도_버린다(monkeypatch):
+    """두 자리 백분율은 전엔 "실행 지시"로 면제돼 어떤 날조든 통과했다(devtools/grade.py
+    PR #249 와 동기화, app/services/solution.py::_ungrounded 참고) — 인사이트가 그
+    함수를 그대로 가져다 쓰므로 같은 구멍이 있었다. 실제 vsPrevPeriod 는 0.042(4.2%)다."""
+
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+        return json.dumps(
+            {
+                "insights": [
+                    "9월 총 매출은 이전 기간보다 15.4% 증가했습니다.",  # 날조된 증감률
+                    "주문 건수는 923건입니다.",
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    res = await _post(REQUEST_BODY)
+
+    insights = res.json()["data"]["insights"]
+    assert len(insights) == 1
+    assert "15.4" not in insights[0]
+
+
 async def test_전부_위반이면_재시도하고_그래도_안_되면_500이다(monkeypatch):
     calls = []
 
