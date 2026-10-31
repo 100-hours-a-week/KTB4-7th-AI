@@ -103,7 +103,9 @@ def test_솔루션_케이스가_모든_근거_축을_덮는다():
     #   conditionPatterns  — 받기만 하고 프롬프트·점수식에 연결 전이다(#194). 연결하면
     #                        tests/test_condition_patterns.py 의 "아직 연결되지 않았다"
     #                        테스트가 먼저 깨진다 — 그때 여기 제외 목록에서도 뺀다.
-    axes = set(Metrics.model_fields) - {"reviewSummary", "conditionPatterns"}
+    #   districtBenchmark  — 같은 이유다(#149). BE 가 2026-10-29(PR #637)부터 보내지만
+    #                        _category_rows 처럼 focus 에 실어 주는 자리가 아직 없다.
+    axes = set(Metrics.model_fields) - {"reviewSummary", "conditionPatterns", "districtBenchmark"}
     covered = {key for _, metrics in SOLUTION_CASES for key, value in metrics.items() if value}
 
     assert not (axes - covered), f"케이스가 덮지 않는 지표: {sorted(axes - covered)}"
