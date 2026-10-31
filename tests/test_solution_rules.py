@@ -85,9 +85,25 @@ def test_그라더와_서비스의_수치_인용_판정이_같다():
         "커피 비중은 62%입니다",
         "직원 1명을 배치하세요",
         "14시까지 준비하세요",
+        # 2026-10-28: 백분율·수량이 자릿수 면제에서 빠지면서 `_ungrounded` 가 복사본
+        # 두 개로 갈렸다. 공차나 단위 목록이 한쪽만 바뀌면 여기서 먼저 실패하게 둔다 —
+        # `_ROUNDED`·`_VAGUE_ACTION`·`_metric_numbers` 와 같은 이유다.
+        "매출이 77% 줄었습니다",
+        "비중이 11.9%입니다",
+        "아이스 아메리카노가 912잔 팔렸습니다",
+        "비 온 날에는 15잔 팔렸습니다",
+        "원두 5kg을 발주하세요",
+        "주문이 37건입니다",
+        # 2026-10-30 리뷰(#255): 쉼표 포함 수량·정수 표기 차이도 두 복사본이 같이 맞는지
+        # 고정한다 — _QUANTITY 정규식이나 _quantity_numbers 가 한쪽만 바뀌면 여기서 먼저
+        # 실패하게 둔다.
+        "아이스 아메리카노가 1,234잔 팔렸습니다",
+        "비 온 날에는 12.0잔 팔렸습니다",
+        "강수일에는 1,5잔 팔렸습니다",
     ]
     for case in cases:
         assert _metric_figures(case, metrics) == grade._metric_figures(case, metrics), case
+        assert _ungrounded(case, metrics) == grade._ungrounded(case, metrics), case
 
 
 @pytest.mark.parametrize(
@@ -602,6 +618,64 @@ def test_백분율_반올림은_서비스에서도_날조로_보지_않는다():
 def test_시각과_인원은_백분율이_아니라_그대로_통과한다():
     metrics = REQUEST_BODY["metrics"]
     assert _ungrounded("21시까지 직원 2명을 배치하세요", metrics) == set()
+
+
+# ── 수량 접지 검사 보완 (2026-10-30 리뷰, #255) ─────────────────────────────
+# allowed(지표 전체)를 먼저 보면 수량 숫자가 hour·rank 같은 무관한 지표 숫자와 우연히
+# 같아도 통과한다. 수량은 _quantity_numbers(수량 차원만)로만 접지해야 한다. 서비스 쪽도
+# insight.py 가 이 함수를 그대로 가져다 쓰므로 반영 안 하면 같은 구멍이 샌다.
+
+_QTY_METRICS = {
+    "menuRankings": [{"rank": 1, "menuName": "아이스 아메리카노", "quantity": 912, "ratio": 0.25}],
+    "conditionPatterns": [
+        {
+            "condition": "RAIN",
+            "menus": [
+                {
+                    "menuName": "아이스 아메리카노",
+                    "avgQuantity": 12,
+                    "baselineAvgQuantity": 20,
+                    "vsBaseline": -0.4,
+                    "avgSales": 12000,
+                    "baselineAvgSales": 20000,
+                }
+            ],
+        }
+    ],
+}
+
+
+def test_정수_표기_차이는_수량_접지에도_허용한다():
+    assert _ungrounded("비 온 날에는 12.0잔 팔렸습니다", _QTY_METRICS) == set()
+
+
+def test_주문_건수가_지표에_있으면_통과한다():
+    metrics = {**_QTY_METRICS, "salesSummary": {"orderCount": 37}}
+    assert _ungrounded("주문이 37건입니다", metrics) == set()
+
+
+def test_수량_숫자가_무관한_지표_숫자와_우연히_같아도_잡는다():
+    metrics = {**_QTY_METRICS, "hourlyProfile": [{"hour": 15, "menuSales": 30000}]}
+    assert _ungrounded("비 온 날에는 15잔 팔렸습니다", metrics) == {"15"}
+
+
+def test_쉼표_있는_수량도_같은_토큰으로_맞춰_접지한다():
+    """_QUANTITY 가 쉼표를 못 받으면 "1,234" 에서 "234" 만 뽑혀 _numbers_in() 의 "1234" 와
+    어긋난다 — 정규식을 _ANYNUM 과 맞춰 같은 토큰이 되게 한다."""
+    metrics = {"menuRankings": [{"rank": 1, "menuName": "아이스 아메리카노", "quantity": 1234}]}
+    assert _ungrounded("아이스 아메리카노가 1,234잔 팔렸습니다", metrics) == set()
+
+
+def test_비정상_쉼표_수량도_정규화된_토큰으로_접지_검사한다():
+    assert _ungrounded("강수일에는 1,5잔 팔렸습니다", _QTY_METRICS) == {"15"}
+
+
+def test_비정상_쉼표_수량이_우연히_실제_수량과_같으면_통과한다():
+    """쉼표 형식 자체의 정합성은 검사하지 않는다 — "1,5잔" 을 정규화하면 "15" 가 되는데,
+    지표에 실제로 15가 있으면 그대로 통과한다. 이 한계는 이번 변경(#255)의 범위 밖이다.
+    """
+    metrics = {"menuRankings": [{"rank": 1, "menuName": "아이스 아메리카노", "quantity": 15}]}
+    assert _ungrounded("강수일에는 1,5잔 팔렸습니다", metrics) == set()
 
 
 # ── 공허한 조언 패턴 확대 (2026-10-16) ──────────────────────────────

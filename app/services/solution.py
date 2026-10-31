@@ -236,9 +236,51 @@ _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
 # devtools/grade.py::_PERCENT 와 같은 패턴.
 _PERCENT = re.compile(r"(\d+(?:\.\d+)?)%")
 
+# 수량 단위가 붙은 숫자. 백분율과 같은 이유로 자릿수 면제에서 뺀다 — "비 온 날에는
+# 12잔 팔렸습니다" 는 실행 지시가 아니라 **사실 주장**이고, 수량은 거의 항상 두 자리다.
+#
+# 단위는 **지표에 그 차원이 실재하는 것만** 넣는다 — 잔·개는 `quantity`·`avgQuantity`·
+# `baselineAvgQuantity`, 건은 주문 건수다. 접지 검사는 맞으면 통과하고 틀리면 걸려야
+# 의미가 있는데, 지표에 없는 차원(`명`·`kg`·`리터`)은 **무조건 미접지**가 되어 검사가
+# 아니라 금지가 된다. 그 영역은 `_FABRICATED_AMOUNT` 가 이미 잡으므로, 여기서 또 잡으면
+# 한 결함이 두 항목을 깎아 측정이 흐려진다.
+#
+# 자릿수 그룹(쉼표)도 _ANYNUM 과 같이 받는다 — 그래야 _numbers_in() 이 "1,234" 에서
+# 뽑는 토큰("1234")과 여기서 뽑는 토큰이 같아진다. 다르면 쉼표 낀 수량이 검사를 비껴간다
+# (2026-10-30 리뷰, #255). 단 이건 토큰 일치를 맞추는 것일 뿐, "1,5잔" 같은 비정상
+# 쉼표 표기 자체를 틀렸다고 잡아주지는 않는다 — 정규화하면 "15" 가 되어 버려서, 지표에
+# 실제로 15가 있으면 그대로 통과한다. 쉼표 형식 자체의 정합성은 이번 변경의 범위 밖이다.
+_QUANTITY = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:잔|개|건)(?![수당])")
+
 
 def _numbers_in(text: str) -> set[str]:
     return {m.group().replace(",", "").rstrip(".") for m in _ANYNUM.finditer(text)}
+
+
+# 수량 접지는 이 차원의 필드에서만 받는다 — _metric_numbers 전체를 쓰면 hour·rank·연도
+# 같은 무관한 숫자가 우연히 일치해도 통과한다. hourlyPeakRatio 전용 _allowed_ratios 와
+# 같은 이유(144~146줄 참고).
+_QUANTITY_KEYS = ("quantity", "avgQuantity", "baselineAvgQuantity", "orderCount")
+
+
+def _quantity_numbers(metrics: dict) -> set[str]:
+    out: set[str] = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in _QUANTITY_KEYS and isinstance(item, int) and not isinstance(item, bool):
+                    out.add(str(item))
+                elif key in _QUANTITY_KEYS and isinstance(item, float):
+                    out.add(f"{item:g}")
+                else:
+                    walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(metrics)
+    return out
 
 
 # 지표 비율을 백분율로 적을 때 한 자리까지 반올림하는 건 환각이 아니다 — _metric_numbers 가
@@ -271,11 +313,33 @@ def _ungrounded(text: str, metrics: dict) -> set[str]:
     주장은 실행 지시가 아니라 사실 주장인데, 거의 항상 두 자리라 이 면제로 통째로 빠져
     있었다 — insight.py 가 이 함수를 그대로 가져다 쓰므로 인사이트의 날조 비율도
     같이 새고 있었다.
+    **수량도 같은 이유로 면제에서 뺀다**(2026-10-28). `conditionPatterns` 를 축에 연결하면서
+    (#246) `avgQuantity`·`baselineAvgQuantity` 가 카드 근거로 들어오는데, 잔 수는 거의 항상
+    두 자리라 "비 온 날 12잔" 을 "15잔" 으로 바꿔 써도 통과했다. 백분율(#248)과 같은 구멍의
+    다른 쪽이다.
+
+    수량은 `_metric_numbers`(지표 전체)가 아니라 `_quantity_numbers`(수량 차원만)로
+    접지한다(2026-10-30 리뷰, #255) — `allowed`를 먼저 보면 수량 숫자가 hour·rank 같은
+    무관한 지표 숫자와 우연히 같아도 통과해 버린다.
     """
     allowed = _metric_numbers(metrics)
+    quantity_allowed = _quantity_numbers(metrics)
     percents = {m.group(1) for m in _PERCENT.finditer(text)}
+    quantities = {m.group(1).replace(",", "").rstrip(".") for m in _QUANTITY.finditer(text)}
     bad = set()
     for number in _numbers_in(text):
+        if number in quantities:
+            # allowed(지표 전체)를 먼저 보면 hour·rank 같은 무관한 숫자와 우연히
+            # 일치해도 통과한다 — 수량 전용 집합으로만 판정한다.
+            if number in quantity_allowed:
+                continue
+            try:  # 12.0 == 12 같은 표기 차이는 허용
+                if any(abs(float(number) - float(a)) < 1e-9 for a in quantity_allowed):
+                    continue
+            except ValueError:
+                pass
+            bad.add(number)
+            continue
         if number in allowed:
             continue
         try:  # 12.0 == 12 같은 표기 차이는 허용
