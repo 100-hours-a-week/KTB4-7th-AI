@@ -15,6 +15,7 @@
 """
 
 import logging
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,32 @@ _ROWS_PER_SERIES = 2
 _TOP_SHARES = 5
 
 
+def _window(hours: dict | None, day_type: str | None) -> tuple[int, int] | None:
+    """그 계열의 영업시간을 (여는 시, 닫는 시) 로 돌려준다. 없으면 None.
+
+    닫는 시가 여는 시보다 작거나 같으면 **자정을 넘긴 영업**이라 24 를 더한다.
+    BE 는 StoreBusinessHours 의 opensAt·closesAt 을 그대로 내보내고 둘의 순서를 검사하지
+    않는다(BE `SalesSolutionMetricsAssembler.businessHours`). 그래서 11:00~02:00 매장이
+    그 값 그대로 온다. 24 를 더하지 않으면 `opens <= hour < closes` 가 11~2 사이에서
+    **한 번도 참이 되지 않아 시간대 행이 통째로 사라지고** 축 자체가 후보에서 빠진다.
+    24 시간 영업(00:00~00:00)도 같은 경로로 0~24 가 된다.
+
+    `opensAt`·`closesAt`의 분은 버리고 시만 쓴다. `HourlyPoint`가 1 시간 단위 집계라
+    분 단위로 가를 수 없기 때문이다 — 11:30 개점이면 11 시 행(11:00~11:59 집계)이
+    통째로 열려 개점 전 30 분이 섞이고, 22:30 폐점이면 22 시 행이 통째로 닫혀 실제
+    영업 중인 30 분이 빠진다. 부분 영업시간을 정확히 가르지 못하는 근사라는 걸 알고
+    있는 한계로 남긴다.
+    """
+    window = (hours or {}).get(day_type or "")
+    if not window:
+        return None
+    opens = int(str(window.get("opensAt", "00:00")).split(":")[0])
+    closes = int(str(window.get("closesAt", "24:00")).split(":")[0])
+    if closes <= opens:
+        closes += 24
+    return opens, closes
+
+
 def _open_hours(points: list[dict], hours: dict | None) -> list[dict]:
     """영업시간 밖 행을 뺀다. 영업시간이 없으면 그대로 둔다.
 
@@ -64,22 +91,29 @@ def _open_hours(points: list[dict], hours: dict | None) -> list[dict]:
 
     0 원 행 가드는 그대로 둔다 — 영업 중인데 0 원인 시간은 할 말이 있는 사실이지만,
     그걸 최저로 쓰면 격차 점수가 1.0 으로 포화돼 시간대 축이 늘 1 순위가 된다.
-    같이 풀려면 점수식을 손봐야 해서 이번 범위 밖이다.
+    대신 그 시간을 **분모에서는 센다**(`_hourly_score`) — 빠진 매출은 점수에 들어가고,
+    "0시에 뭘 하세요" 가 될 행만 모델에게서 가린다.
+
+    `_window`는 행이 보낸 `dayType`을 그대로 키로 써서 그 dayType의 영업시간을 찾는다.
+    자정을 넘긴 영업(예: 금요일 밤 영업이 토요일 새벽으로 이어지는 경우)에서 그 새벽
+    행의 `dayType`이 거래 발생일(캘린더) 기준인지 영업 시작일 기준인지는 **BE 계약으로
+    확정되지 않았다.** 두 기준이 다르면 WEEKDAY/WEEKEND 중 잘못된 영업시간으로 걸러질
+    수 있다. 확인 전까지는 추측으로 두 dayType을 다 찾아보는 fallback을 넣지 않는다 —
+    잘못하면 실제 영업시간 밖 매출까지 포함시킬 위험이 있다(알고 있는 한계).
     """
     if not hours:
         return points
     out = []
     for point in points:
-        window = hours.get(point.get("dayType") or "")
-        if not window:
+        window = _window(hours, point.get("dayType"))
+        if window is None:
             out.append(point)
             continue
         hour = point.get("hour")
         if hour is None:
             continue
-        opens = int(str(window.get("opensAt", "00:00")).split(":")[0])
-        closes = int(str(window.get("closesAt", "24:00")).split(":")[0]) or 24
-        if opens <= hour < closes:
+        opens, closes = window
+        if opens <= hour < closes or opens <= hour + 24 < closes:
             out.append(point)
     return out
 
@@ -108,6 +142,17 @@ def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
     할 말이 없고, 쏠릴수록 커진다. 자릿수를 맞추려고 곱하는 가중치가 없고, 메뉴·카테고리·
     매출총액과 같은 단위(전체 매출 대비 몫)가 된다.
 
+    **분모 n 은 영업시간 수다 — 매출이 찍힌 행 수가 아니다.** `_selling` 이 0 원 행을
+    빼므로 행 수로 재면 영업 중인데 한 잔도 안 팔린 시간이 분모에서 같이 사라져, 가장
+    유휴인 시간이 점수에 반영되지 않고 **쏠림을 과소평가한다**. 영업시간을 받으면 센다 —
+    그 시간의 몫 `1/n` 은 통째로 빠진 매출이다. 영업시간이 없거나(BE 미전송) 행 수가
+    영업시간 수보다 많으면(계약이 표현 못 한 시간대) 행 수로 떨어진다.
+
+    우리 POS 실측에서는 두 매장 모두 영업시간 내 모든 시간에 매출이 있어 점수가 바뀌지
+    않았다(평균 0.255 → 0.255, 0.254 → 0.254). 바뀌는 건 한가한 매장이다. 점주 선언
+    영업시간이 실제보다 넓을 수 있어 포화 위험을 같이 봤는데, 선언창을 +4 시간 부풀려도
+    평균 0.364 · 최대 0.426 · 포화 0% 로 다른 축이 이길 자리가 남는다.
+
     평일과 주말은 섞지 않는다 — `_hourly_rows` 와 같은 이유다. 따로 재서 더 쏠린 쪽을
     쓴다. 카드는 한 계열을 짚기 때문이다.
 
@@ -135,8 +180,11 @@ def _hourly_score(points: list[dict], hours: dict | None = None) -> float:
         total = sum(amounts)
         if len(amounts) < 2 or total <= 0:
             continue
-        even = 1.0 / len(amounts)
-        scores.append(sum(max(0.0, even - amount / total) for amount in amounts))
+        window = _window(hours, day_type)
+        span = max(window[1] - window[0], len(amounts)) if window else len(amounts)
+        even = 1.0 / span
+        idle = sum(max(0.0, even - amount / total) for amount in amounts)
+        scores.append(idle + (span - len(amounts)) * even)
     return max(scores) if scores else -1.0
 
 
@@ -221,8 +269,20 @@ def _menu_share_delta(point: dict) -> float:
                       = (menuSales/전체) x (menuSales - prev)/menuSales
                       = ratio x vsPrevPeriod/(1 + vsPrevPeriod)
 
-    vsPrevPeriod 가 null 이면 비교할 게 없어 0.0 이다. -1.0(전기 매출이 통째로 사라진
-    경우)이면 분모가 0 이 되는데, 그 메뉴는 현재 매출이 0 이라 랭킹에 올 수 없다.
+    vsPrevPeriod 가 null 이면 비교할 게 없어 0.0 이다.
+
+    **-1.0 은 0.0 으로 두지만, 그건 "변화 없음" 이 아니라 "크기를 모름" 이다.**
+    2026-10-27 정정: 전에는 "그 메뉴는 현재 매출이 0 이라 랭킹에 올 수 없다" 고 적었는데
+    사실이 아니다. BE 는 랭킹을 현재·이전 **합집합**으로 만들고(`menuRankings` 의
+    `allMenuTotals`), 변화율 큰 순으로 다섯 종을 더 끼워 넣는다. 사라진 메뉴의 변화율은
+    -1.0 이라 `abs` 가 가능한 최댓값이어서 **BE 가 1 순위로 올려 보내는 행**이다.
+    그런데 그 행은 `ratio` 가 0 이라 위 등식으로 크기를 복원할 수 없다 — 잃은 몫
+    `이전매출/전체` 를 내려면 `previousRatio` 가 계약에 있어야 한다(BE #623).
+
+    지금 버리는 양: 매장 2 곳 604 창(창 7 일, BE 선정 로직 재현)에서 -1.0 행이 온 창이
+    54(9%)이고, 그 행이 잃은 비중은 중앙 0.01~0.70% · 최대 3.35% 다. 축 점수가 뒤집히는
+    창은 54 중 1(+0.0062)뿐이지만, 제대로 세면 **표시 5 행에 드는 창이 54 중 12** 다 —
+    BE 가 일부러 올려 보낸 행을 우리가 매번 맨 뒤로 밀어 잘라내고 있다.
     """
     change = point.get("vsPrevPeriod")
     if change is None or change == -1.0:
@@ -250,8 +310,14 @@ def _category_share_shift(points: list[dict]) -> dict[str, float]:
     값이라, 그 합으로 나눠 비중으로 되돌린다.
 
     vsPrevPeriod 가 null 이면 이전 기간에 없던 카테고리다 — 등장 자체가 구성 변화라
-    이전 비중 0 으로 둔다. -1.0(이전 매출이 통째로 사라진 경우)은 분모가 0 이 되는데,
-    그 카테고리는 현재 매출이 0 이라 비중도 0 이다 — `_menu_share_delta` 와 같은 처리다.
+    이전 비중 0 으로 둔다. BE 의 `changeRate` 는 이전이 0 일 때만 null 이라(`previous == 0`)
+    이 해석이 계약과 정확히 맞는다. -1.0 은 `_menu_share_delta` 와 같은 처리다.
+
+    **사라진 카테고리는 아예 안 온다 — 이 식이 못 메우는 구멍이다.** BE 의
+    `categoryBreakdown` 은 현재 기간 합계만 훑어서(`currentTotals.entrySet()`) 이전에만
+    있던 카테고리가 목록에 없다. 매장 2 곳 604 창에서 **164 창(22~31%)** 이 그런 창이고,
+    사라진 카테고리의 이전 비중은 중앙 0.34~0.69% · 최대 4.41% 였다. 그만큼 총변동이
+    과소평가된다. 메뉴 랭킹은 합집합인데 카테고리는 아니라 BE 에 맞춰 달라고 요청했다(BE #623).
     """
     current: dict[str, float] = {}
     previous: dict[str, float] = {}
@@ -336,6 +402,98 @@ def _category_score(points: list[dict]) -> float:
     """
     shift = _category_share_shift(points)
     return 0.5 * sum(abs(value) for value in shift.values())
+
+
+def _period_days(period: str | None) -> int:
+    """ "2026-01-01~2026-03-31" 에서 일수를 센다. 읽을 수 없으면 0.
+
+    `netSales` 는 하루가 아니라 분석 기간 합계다(2026-10-15 BE 확인). conditionPatterns 의
+    `avgSales` 는 **일평균**이라, 둘을 같은 잣대로 놓으려면 기간 일수가 있어야 한다.
+    `period` 는 계약상 선택값이다 — BE 어셈블러는 항상 `start + "~" + end` 를 보내지만,
+    안 오는 경우 축을 탈락시킨다(아래 `_condition_score`). 없는 분모를 추측하지 않는다.
+    """
+    if not period or "~" not in period:
+        return 0
+    start, _, end = period.partition("~")
+    try:
+        first = date.fromisoformat(start.strip())
+        last = date.fromisoformat(end.strip())
+    except ValueError:
+        return 0
+    return (last - first).days + 1 if last >= first else 0
+
+
+def _rain_patterns(patterns: list[dict] | None) -> list[dict]:
+    """강수 조건 패턴만. 지금 BE 가 보내는 condition 은 RAIN 하나뿐이다.
+
+    계약이 배열이라 나중에 다른 조건이 늘 수 있다. 그때 "오늘 비 예보" 게이트로 걸러 놓고
+    엉뚱한 조건의 패턴을 쓰면 틀린 문장이 되므로, 조건 이름을 보고 고른다.
+    """
+    return [p for p in patterns or [] if p.get("condition") == "RAIN"]
+
+
+def _condition_score(
+    patterns: list[dict] | None, summary: dict | None, weather: dict | None
+) -> float:
+    """과거 비 오는 날의 매출 변화가 하루 매출의 몇 %인가. **오늘 비 예보가 있을 때만.**
+
+    `weatherContext` 는 오늘 예보 스냅샷이라 "비가 와서 매출이 줄었다" 를 뒷받침할 수
+    없었고, 그래서 프롬프트가 그 주장을 금지해 왔다. `conditionPatterns` 가 바로 그
+    뒷받침 데이터다 — BE 가 최근 12 주의 ASOS 강수 관측과 날짜별 메뉴 판매를 비교해
+    결과만 보낸다(1.0mm 이상 RAIN, 0.1mm 미만 기준군, 각 5 일 이상일 때만).
+
+    잣대는 다른 축과 같다 — "전체 매출의 몇 %". `avgSales` 는 일평균이고 `netSales` 는
+    기간 합계라, 기간 일수로 나눠 일평균 전체 매출을 만들어 맞춘다. 자릿수를 맞추려고
+    곱하는 가중치가 없다.
+
+    **오늘 비 예보가 없으면 후보에서 뺀다.** "비 올 때는 이렇습니다" 는 비 오는 날에만
+    할 말이다. 맑은 날에 보내면 점주가 오늘 할 수 있는 게 없다. 판정은 BE 가 보낸
+    `rainHours` 를 그대로 쓴다 — 강수확률 몇 %부터 비로 볼지 우리가 고르지 않는다.
+
+    **이 값은 실질적으로 점수가 아니라 게이트다**(2026-10-28 실측). 매장 2 곳 604 창에서
+    발동 시 평균 0.019~0.022 · 최대 0.054 로, 다른 축(시간대 0.255 · 매출총액 0.240 ·
+    카테고리 0.19)보다 한 자리 작다. 축 순위를 바꾸는 일이 없다.
+
+    그래도 쓸모가 있는 건 `assign` 이 이 값으로 **focus 에 conditionPatterns 를 붙일지**
+    정하기 때문이다. 날씨 축은 기온으로 뽑히고(`_weather_score`), 뽑히면 강수 패턴이
+    같이 실린다 — 비 예보가 있고 패턴이 성립한 창에서 날씨 카드가 3 장 안에 든 비율이
+    18~25% 이고, **든 경우에는 100%(11/11, 13/13) conditionPatterns 를 함께 받았다.**
+    `max()` 로 묶여 있어 이 값이 작아도 해가 없다.
+
+    왜 작은가. BE 는 `|vsBaseline|` 가 큰 메뉴 **3 종만** 보낸다 — 상대 변화가 큰 순이라
+    절대 금액이 큰 순이 아니다. 그래서 이 세 종의 금액 변화 합은 매장 전체의 강수 영향을
+    대표하지 못한다. 매장 전체 효과를 점수로 쓰려면 비 온 날/무강수 날의 **일평균 전체
+    매출**이 계약에 있어야 한다(BE 에 요청 예정). 그 값이 오면 `_summary_score` 와 같은
+    단위(증감률)가 되고, 점주가 실제로 궁금한 숫자이기도 하다.
+
+    `isNotable` 은 보지 않는다. 그 값은 "오늘 예보가 카드 한 장 값을 하나" 에 대한 BE
+    판정이고, 이 값을 만드는 건 과거 실측이다. 게이트를 우회하는 모양이지만 **관측 가능한
+    효과가 없다** — 0.02 로는 3 장 안에 못 든다. 실측 전에는 리뷰에서 정할 문제로 올렸는데,
+    숫자가 나온 뒤로는 정할 것이 없다.
+
+    BE 가 "변화율은 상관관계이며 강수의 인과 효과로 단정하지 않는다" 고 명시했다.
+    `sampleWeekdayRatio`·`baselineWeekdayRatio` 가 다르면 비 온 날과 기준일의 평일/주말
+    구성이 달라 요일 효과가 섞인다. 거르는 문턱을 임의로 정하지 않고 두 값을 그대로
+    프롬프트에 넘긴다 — 아는 한계이고, 문턱은 실측 후에 정한다.
+    """
+    rain = _rain_patterns(patterns)
+    if not rain:
+        return -1.0
+    if not (weather or {}).get("rainHours"):
+        return -1.0
+    days = _period_days((summary or {}).get("period"))
+    net_sales = (summary or {}).get("netSales") or 0
+    if days <= 0 or net_sales <= 0:
+        return -1.0
+    daily = net_sales / days
+    shifts = [
+        sum(
+            abs((menu.get("avgSales") or 0) - (menu.get("baselineAvgSales") or 0))
+            for menu in pattern.get("menus") or []
+        )
+        for pattern in rain
+    ]
+    return min(max(shifts) / daily, 1.0)
 
 
 def _summary_score(summary: dict) -> float:
@@ -443,6 +601,7 @@ def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
     predicted = metrics.get("predictedSalesToday")
     weather = metrics.get("weatherContext")
     menus = metrics.get("menuRankings") or []
+    conditions = metrics.get("conditionPatterns") or []
 
     total_focus: dict = {"salesSummary": summary} if summary else {}
     if predicted is not None and total_focus:
@@ -451,6 +610,16 @@ def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
         _summary_score(summary) if summary else -1.0,
         _prediction_score(predicted, summary.get("netSales") or 0) if predicted else -1.0,
     )
+
+    # conditionPatterns 는 weatherContext 와 한 축으로 묶는다 — 둘 다 "오늘 날씨" 얘기라
+    # 따로 배정하면 카드 두 장이 같은 소재가 된다(salesSummary + predictedSalesToday 를
+    # 묶은 것과 같은 판단). 묶으면 카드 한 장이 "오늘 비 예보 → 과거 비 오는 날 이 메뉴가
+    # 이만큼 덜 팔렸다 → 그래서 이렇게 하라" 로 이어진다.
+    weather_focus: dict = {"weatherContext": weather} if weather else {}
+    condition_score = _condition_score(conditions, summary, weather)
+    if condition_score >= 0.0:
+        weather_focus["conditionPatterns"] = _rain_patterns(conditions)
+    weather_score = max(_weather_score(weather), condition_score)
 
     # 점수는 받은 행 전부로 내고, 프롬프트에 넣는 행만 줄인다 — 격차 판단이 둔해지면
     # 어느 지표가 특이한지부터 틀린다.
@@ -466,7 +635,7 @@ def assign(metrics: dict, store_id: int | None = None) -> list[dict]:
         (total_focus, total_score if total_focus else -1.0),
         # 맨 뒤에 둔다 — 동점(1.0)이면 안정 정렬이라 앞선 세 축이 우선한다. 날씨는 "다른
         # 축이 오늘 할 말이 없을 때만" 보충하는 자리다.
-        ({"weatherContext": weather}, _weather_score(weather)),
+        (weather_focus, weather_score),
         # 메뉴는 카테고리보다 한 단계 구체적이다 — "커피 62%" 로는 행동이 안 나오지만
         # "아이스 아메리카노 912잔" 이면 발주를 말할 수 있다(2026-10-18).
         (
