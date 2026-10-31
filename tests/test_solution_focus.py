@@ -470,15 +470,94 @@ def test_영업시간_밖_매출은_비교에서_뺀다():
     """
     from app.services.solution_focus import _hourly_score, peak_ratios
 
+    # 영업시간(08~11)을 꽉 채운다 — 유휴 시간이 섞이면 그쪽이 점수를 끌어올려서
+    # "마감 뒤 행을 뺐다" 는 효과만 따로 볼 수 없다.
+    hours = {"WEEKDAY": {"opensAt": "08:00", "closesAt": "11:00"}}
     rows = [
         {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
-        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        {"dayType": "WEEKDAY", "hour": 9, "amount": 100000},
+        {"dayType": "WEEKDAY", "hour": 10, "amount": 210000},
         {"dayType": "WEEKDAY", "hour": 23, "amount": 4000},  # 마감 뒤
     ]
 
     assert peak_ratios(rows)[0]["lowHour"] == 23
-    assert peak_ratios(rows, HOURS)[0]["lowHour"] == 8
-    assert _hourly_score(rows, HOURS) < _hourly_score(rows)
+    assert peak_ratios(rows, hours)[0]["lowHour"] == 8
+    assert _hourly_score(rows, hours) < _hourly_score(rows)
+
+
+def test_안_팔린_영업시간도_분모에_센다():
+    """`_selling` 이 0 원 행을 빼므로 행 수로 나누면 가장 유휴인 시간이 분모에서 같이
+    사라진다 — 쏠림을 과소평가한다. 영업시간을 받으면 그 시간의 몫을 통째로 센다.
+
+    08~22 (14 시간) 중 두 시간만 팔린 매장이면 12 시간치 몫(12/14)이 빠져 있다.
+    """
+    from app.services.solution_focus import _hourly_score
+
+    rows = [
+        {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ]
+
+    # 행 수(2)로 나누면 "두 시간 중 한 시간이 한가하다" 가 되어 0.375 에 머문다.
+    assert _hourly_score(rows) == pytest.approx(0.375)
+    assert _hourly_score(rows, HOURS) == pytest.approx(12 / 14)
+
+
+def test_영업시간이_있어도_매출_발생_시간이_하나면_시간대_축을_제외한다():
+    """유휴 비중은 계산 가능하다(14 시간 중 13 시간 유휴) — 하지만 비교할 매출 발생
+    행이 1 개뿐이면 `_hourly_rows`도 1 행만 돌려주고, 모델은 배정받은 지표로 뭐든
+    써야 하니 없는 비교를 지어낸다(2026-10-16). 영업시간 선언 여부와 무관하게
+    여전히 후보에서 뺀다.
+    """
+    from app.services.solution_focus import _hourly_score
+
+    rows = [{"dayType": "WEEKDAY", "hour": 14, "amount": 30000}]
+
+    assert _hourly_score(rows, HOURS) == -1.0
+
+
+def test_자정을_넘긴_영업시간에도_행이_남는다():
+    """BE 는 opensAt·closesAt 의 순서를 검사하지 않고 그대로 보낸다 — 11:00~02:00 매장이
+    실제로 온다. `opens <= hour < closes` 로만 보면 **단 한 행도 남지 않아** 시간대 축이
+    통째로 사라진다. 24 를 더해 0~2 시를 영업시간 안으로 본다.
+    """
+    from app.services.solution_focus import _hourly_rows, _hourly_score
+
+    hours = {"WEEKDAY": {"opensAt": "11:00", "closesAt": "02:00"}}
+    rows = [
+        {"dayType": "WEEKDAY", "hour": 1, "amount": 40000},  # 자정 넘김
+        {"dayType": "WEEKDAY", "hour": 12, "amount": 210000},
+        {"dayType": "WEEKDAY", "hour": 23, "amount": 90000},
+        {"dayType": "WEEKDAY", "hour": 9, "amount": 7000},  # 개점 전
+    ]
+    kept = {p["hour"] for p in _hourly_rows(rows, hours)}
+
+    assert kept == {1, 12, 23}
+    assert _hourly_score(rows, hours) > 0.0
+
+
+def test_24시간_영업은_전체_시간을_연다():
+    """`closes <= opens` 면 24 를 더한다 — `00:00~00:00` 도 같은 경로로 0~24 가 된다."""
+    from app.services.solution_focus import _open_hours
+
+    hours = {"WEEKDAY": {"opensAt": "00:00", "closesAt": "00:00"}}
+    rows = [{"dayType": "WEEKDAY", "hour": h, "amount": 1000} for h in (0, 12, 23)]
+
+    assert {p["hour"] for p in _open_hours(rows, hours)} == {0, 12, 23}
+
+
+def test_분_단위_영업시간은_시_단위로_근사한다():
+    """시·분 둘 다 내려버려서 양쪽에서 반대로 틀린다. `opensAt="11:30"` 은 11 로
+    내려가 11 시 행(11:00~11:59 집계)이 통째로 열린다 — 실제로는 개점 전 30 분이
+    섞여 있다. `closesAt="22:30"` 도 22 로 내려가 22 시 행이 통째로 닫힌다 — 실제로는
+    22:00~22:30 영업 중인 매출이다. 분 단위로 가를 수 없는 근사다(알고 있는 한계).
+    """
+    from app.services.solution_focus import _open_hours
+
+    hours = {"WEEKDAY": {"opensAt": "11:30", "closesAt": "22:30"}}
+    rows = [{"dayType": "WEEKDAY", "hour": h, "amount": 1000} for h in (10, 11, 22)]
+
+    assert {p["hour"] for p in _open_hours(rows, hours)} == {11}
 
 
 def test_영업시간이_없으면_지금처럼_동작한다():
