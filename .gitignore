@@ -6,3 +6,6 @@ __pycache__/
 .env
 .DS_Store
 *.log
+# bench/judge 덤프 — 측정 원본은 레포에 두지 않는다
+bench*.json
+judge*.json
