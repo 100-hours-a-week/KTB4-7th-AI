@@ -98,7 +98,11 @@ def strip_fence(raw: str) -> str:
 # 2026-10-30 은 예시 문장의 "비 온 날" 을 "강수가 있었던 날" 로 고친 변경이다(PR #254
 # 후속) — BE 의 RAIN 분류(precipitation_mm >= 1.0mm)가 적설의 수상당량도 포함해 비로
 # 한정되지 않는다. 규칙·검사 대상은 그대로고 문구만 바뀌었다.
-TARGET_SOLUTION_VERSION = "2026-10-30"
+#
+# 2026-10-31 은 weatherContext.alerts(기상청 특보 발효 현황)를 받은 변경이다(#226,
+# PR #227). 특보명은 BE 가 완성 문자열로 주므로 그대로 인용하게 했다 — 규칙이 "주어진
+# 문자열을 그대로" 라서 접지 검사가 그대로 잰다. 새 검사 항목은 추가하지 않았다.
+TARGET_SOLUTION_VERSION = "2026-10-31"
 TARGET_INSIGHT_VERSION = "2026-10-24"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)

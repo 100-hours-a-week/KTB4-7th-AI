@@ -70,6 +70,13 @@ class WeatherContext(Contract):
     rainHours: list[int]
     precipitationMm: float | None = None
     isNotable: bool
+    # 기상청 특보 발효 현황(2026-10-22 BE 협의 확정). BE 가 API허브 특보현황에서 매장
+    # 권역·상위 권역의 **발효 중**인 것만 추려 같은 특보명은 중복 제거해 보낸다.
+    #
+    # 기본값이 None 이어야 한다 — [] 로 두면 "조회했는데 특보 없음"(=[]) 과 "조회 실패라
+    # 모름"(=키 없음) 이 섞인다. BE 에 그 둘을 나눠 달라고 요청해 받아낸 구분이라, 우리가
+    # 기본값으로 도로 합치면 "오늘 특보 없습니다" 라고 단정하게 된다.
+    alerts: list[str] | None = None
 
 
 class ConditionMenu(Contract):
