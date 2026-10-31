@@ -102,6 +102,22 @@ _DISPLAY_NUM = re.compile(r"[\d,]{4,}\s*원|\d+\.?\d*\s*%")
 # 겹쳐 오탐한다(2026-10-22 실측에서 재현, PR #219) — 토큰 단위로 끊어야 한다.
 _PERCENT = re.compile(r"(\d+(?:\.\d+)?)%")
 
+# 수량 단위가 붙은 숫자. 백분율과 같은 이유로 자릿수 면제에서 뺀다 — "비 온 날에는
+# 12잔 팔렸습니다" 는 실행 지시가 아니라 **사실 주장**이고, 수량은 거의 항상 두 자리다.
+#
+# 단위는 **지표에 그 차원이 실재하는 것만** 넣는다 — 잔·개는 `quantity`·`avgQuantity`·
+# `baselineAvgQuantity`, 건은 주문 건수다. 접지 검사는 맞으면 통과하고 틀리면 걸려야
+# 의미가 있는데, 지표에 없는 차원(`명`·`kg`·`리터`)은 **무조건 미접지**가 되어 검사가
+# 아니라 금지가 된다. 그 영역은 `_FABRICATED_AMOUNT` 가 이미 잡으므로, 여기서 또 잡으면
+# 한 결함이 두 항목을 깎아 측정이 흐려진다.
+#
+# 자릿수 그룹(쉼표)도 _ANYNUM 과 같이 받는다 — 그래야 _numbers_in() 이 "1,234" 에서
+# 뽑는 토큰("1234")과 여기서 뽑는 토큰이 같아진다. 다르면 쉼표 낀 수량이 검사를 비껴간다
+# (2026-10-30 리뷰, #255). 단 이건 토큰 일치를 맞추는 것일 뿐, "1,5잔" 같은 비정상
+# 쉼표 표기 자체를 틀렸다고 잡아주지는 않는다 — 정규화하면 "15" 가 되어 버려서, 지표에
+# 실제로 15가 있으면 그대로 통과한다. 쉼표 형식 자체의 정합성은 이번 변경의 범위 밖이다.
+_QUANTITY = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:잔|개|건)(?![수당])")
+
 # 행동의 "얼마나" — 지표에 없는 값이라 지어낸 것이다. 마진을 모르는데 할인율을,
 # 인건비 대비 생산성을 모르는데 인원을 말할 근거가 없다(2026-10-07). 시각은 지표에
 # hour 로 있으므로 _ungrounded 가 따로 본다.
@@ -126,9 +142,41 @@ _VAGUE_ACTION = re.compile(
 # 날짜 없이 기간을 가리키는 말. app/services/solution.py::_VAGUE_PERIOD 와 같은 패턴.
 _VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
 # weatherContext 는 오늘 예보 스냅샷이라 과거 매출과의 인과를 뒷받침할 지표가 없다
-# (conditionPatterns 미도입, 2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
+# (2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
+#
+# 2026-10-28: 옛 패턴은 주석이 말하는 것의 **절반만** 잡고, 잡아서는 안 되는 것을 잡았다.
+# `(?:와서|내려서|오는 바람에)?` 가 선택이고 `(?:때문에|탓에|...)` 가 필수여서:
+#
+#   안 걸림  비가 와서 매출이 줄었습니다      ← 주석이 잡는다고 적어둔 문장
+#   안 걸림  비가 내려서 손님이 줄었습니다
+#   걸림     비 때문에 우산 거치대를 내놓으세요  ← 오늘 예보 기반 준비. 프롬프트가 허용한다
+#
+# 결과를 같이 보게 바꿨다. 막아야 하는 건 "날씨 → 과거 매출 변화" 주장 하나이고, 오늘
+# 예보에 맞춰 무엇을 준비하라는 문장은 프롬프트가 명시적으로 허용한다. 어순이 뒤집힌
+# "매출이 비 때문에 줄었다" 도 같이 본다.
+_WEATHER_WORD = r"(?:비|눈|날씨|기온|강수|더위|추위)[가이은는]?\s*"
+# 기온은 "떨어져서/올라서" 로도 인과를 만든다 — 연결어만 늘리고 결과 조건은 그대로 둬서
+# "기온이 올라서 얼음을 준비하세요" 같은 준비 문장은 걸리지 않는다.
+_WEATHER_LINK = (
+    r"(?:와서|내려서|오는\s*바람에|때문에|탓에|영향으로|영향을\s*받아|영향을\s*줘서"
+    r"|떨어져서|떨어지면서|올라서|오르면서|낮아서|높아서|추워서|더워서)"
+)
+_SALES_WORD = r"(?:매출|판매|손님|고객|방문|객수|주문)"
+_PAST_CHANGE = r"(?:줄었|늘었|감소|증가|떨어졌|올랐|하락|상승|빠졌)"
 _WEATHER_CAUSAL = re.compile(
-    r"(?:비|눈|날씨|기온|강수)[가이]?\s*(?:와서|내려서|오는\s*바람에)?\s*(?:때문에|탓에|영향으로|영향을\s*받아)"
+    _WEATHER_WORD
+    + _WEATHER_LINK
+    + r"[^.。\n]{0,25}?"
+    + _SALES_WORD
+    + r"[^.。\n]{0,15}?"
+    + _PAST_CHANGE
+    + r"|"
+    + _SALES_WORD
+    + r"[^.。\n]{0,15}?"
+    + _WEATHER_WORD
+    + _WEATHER_LINK
+    + r"[^.。\n]{0,15}?"
+    + _PAST_CHANGE
 )
 # districtBenchmark 는 행정동 평균 추정치일 뿐 매장 개별 실적이 아니다(2026-10-15, #157).
 # "상권이 좋아서/나빠서 매출이 ~했다" 식 인과 주장을 잡는다.
@@ -540,14 +588,91 @@ def _numbers_in(text: str) -> set[str]:
     return {m.group().replace(",", "").rstrip(".") for m in _ANYNUM.finditer(text)}
 
 
+# 수량 접지는 이 차원의 필드에서만 받는다 — _metric_numbers 전체를 쓰면 hour·rank·연도
+# 같은 무관한 숫자가 우연히 일치해도 통과한다. hourlyPeakRatio 전용 _allowed_ratios 와
+# 같은 이유(504~506줄 참고).
+_QUANTITY_KEYS = ("quantity", "avgQuantity", "baselineAvgQuantity", "orderCount")
+
+
+def _quantity_numbers(metrics) -> set[str]:
+    out: set[str] = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in _QUANTITY_KEYS and isinstance(item, int) and not isinstance(item, bool):
+                    out.add(str(item))
+                elif key in _QUANTITY_KEYS and isinstance(item, float):
+                    out.add(f"{item:g}")
+                else:
+                    walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(metrics)
+    return out
+
+
+# 지표 비율을 백분율로 적을 때 한 자리까지 반올림하는 건 환각이 아니다 — 프롬프트가
+# 0.0885 → 8.85% 로 바꿔 쓰라고 하고, _metric_numbers 가 정수 반올림("9")까지는 이미
+# 허용 집합에 넣는다. 한 자리("8.9")가 비면 반올림을 날조로 오판한다.
+_PERCENT_ROUNDING_TOLERANCE = 0.05 + 1e-9
+
+
+def _percent_grounded(token: str, metrics) -> bool:
+    """ "40%" 의 40 이 지표 비율에서 나온 값인가. 반올림 오차만 허용한다."""
+    try:
+        value = float(token)
+    except ValueError:
+        return True
+    for allowed in _metric_numbers(metrics):
+        try:
+            if abs(value - float(allowed)) <= _PERCENT_ROUNDING_TOLERANCE:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _ungrounded(text: str, metrics) -> set[str]:
     """지표에 없는 숫자. 자릿수 오류·환각을 잡는다.
 
-    한두 자리는 시각·인원·할인율 같은 실행 지시로 보고 통과시킨다 — 프롬프트가 허용한다.
+    한두 자리는 시각·인원 같은 실행 지시로 보고 통과시킨다 — 시각은 지표에 hour 로
+    들어 있고, 인원·수량·할인율은 `_FABRICATED_AMOUNT` 가 따로 잡는다.
+
+    **백분율은 자릿수 면제를 받지 않는다**(2026-10-28). 비율 주장은 실행 지시가 아니라
+    사실 주장인데, 거의 항상 두 자리라 검사에서 통째로 빠져 있었다 — 지표에 40% 하나만
+    있는 입력에서 "77%"·"99%" 가 그대로 통과했다. 이 구멍은 conditionPatterns(강수별
+    메뉴 판매, #246)에서 특히 아프다. 그 축의 가치가 전부 "N% 덜 팔렸다" 이고 N 은
+    두 자리다 — 모델이 40% 를 77% 로 바꿔 써도 못 잡고 있었다.
+    **수량도 같은 이유로 면제에서 뺀다**(2026-10-28). `conditionPatterns` 를 축에 연결하면서
+    (#246) `avgQuantity`·`baselineAvgQuantity` 가 카드 근거로 들어오는데, 잔 수는 거의 항상
+    두 자리라 "비 온 날 12잔" 을 "15잔" 으로 바꿔 써도 통과했다. 백분율(#248)과 같은 구멍의
+    다른 쪽이다.
+
+    수량은 `_metric_numbers`(지표 전체)가 아니라 `_quantity_numbers`(수량 차원만)로
+    접지한다(2026-10-30 리뷰, #255) — `allowed`를 먼저 보면 수량 숫자가 hour·rank 같은
+    무관한 지표 숫자와 우연히 같아도 통과해 버린다.
     """
     allowed = _metric_numbers(metrics)
+    quantity_allowed = _quantity_numbers(metrics)
+    percents = {m.group(1) for m in _PERCENT.finditer(text)}
+    quantities = {m.group(1).replace(",", "").rstrip(".") for m in _QUANTITY.finditer(text)}
     bad = set()
     for number in _numbers_in(text):
+        if number in quantities:
+            # allowed(지표 전체)를 먼저 보면 hour·rank 같은 무관한 숫자와 우연히
+            # 일치해도 통과한다 — 수량 전용 집합으로만 판정한다.
+            if number in quantity_allowed:
+                continue
+            try:  # 12.0 == 12 같은 표기 차이는 허용
+                if any(abs(float(number) - float(a)) < 1e-9 for a in quantity_allowed):
+                    continue
+            except ValueError:
+                pass
+            bad.add(number)
+            continue
         if number in allowed:
             continue
         try:  # 12.0 == 12 같은 표기 차이는 허용
@@ -555,6 +680,10 @@ def _ungrounded(text: str, metrics) -> set[str]:
                 continue
         except ValueError:
             pass
+        if number in percents:
+            if not _percent_grounded(number, metrics):
+                bad.add(number)
+            continue
         if len(number.split(".")[0]) <= 2:
             continue
         bad.add(number)
