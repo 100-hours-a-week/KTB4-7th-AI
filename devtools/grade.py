@@ -126,9 +126,41 @@ _VAGUE_ACTION = re.compile(
 # 날짜 없이 기간을 가리키는 말. app/services/solution.py::_VAGUE_PERIOD 와 같은 패턴.
 _VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
 # weatherContext 는 오늘 예보 스냅샷이라 과거 매출과의 인과를 뒷받침할 지표가 없다
-# (conditionPatterns 미도입, 2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
+# (2026-10-14). "비가 와서/때문에 매출이 줄었다" 식 주장을 잡는다.
+#
+# 2026-10-28: 옛 패턴은 주석이 말하는 것의 **절반만** 잡고, 잡아서는 안 되는 것을 잡았다.
+# `(?:와서|내려서|오는 바람에)?` 가 선택이고 `(?:때문에|탓에|...)` 가 필수여서:
+#
+#   안 걸림  비가 와서 매출이 줄었습니다      ← 주석이 잡는다고 적어둔 문장
+#   안 걸림  비가 내려서 손님이 줄었습니다
+#   걸림     비 때문에 우산 거치대를 내놓으세요  ← 오늘 예보 기반 준비. 프롬프트가 허용한다
+#
+# 결과를 같이 보게 바꿨다. 막아야 하는 건 "날씨 → 과거 매출 변화" 주장 하나이고, 오늘
+# 예보에 맞춰 무엇을 준비하라는 문장은 프롬프트가 명시적으로 허용한다. 어순이 뒤집힌
+# "매출이 비 때문에 줄었다" 도 같이 본다.
+_WEATHER_WORD = r"(?:비|눈|날씨|기온|강수|더위|추위)[가이은는]?\s*"
+# 기온은 "떨어져서/올라서" 로도 인과를 만든다 — 연결어만 늘리고 결과 조건은 그대로 둬서
+# "기온이 올라서 얼음을 준비하세요" 같은 준비 문장은 걸리지 않는다.
+_WEATHER_LINK = (
+    r"(?:와서|내려서|오는\s*바람에|때문에|탓에|영향으로|영향을\s*받아|영향을\s*줘서"
+    r"|떨어져서|떨어지면서|올라서|오르면서|낮아서|높아서|추워서|더워서)"
+)
+_SALES_WORD = r"(?:매출|판매|손님|고객|방문|객수|주문)"
+_PAST_CHANGE = r"(?:줄었|늘었|감소|증가|떨어졌|올랐|하락|상승|빠졌)"
 _WEATHER_CAUSAL = re.compile(
-    r"(?:비|눈|날씨|기온|강수)[가이]?\s*(?:와서|내려서|오는\s*바람에)?\s*(?:때문에|탓에|영향으로|영향을\s*받아)"
+    _WEATHER_WORD
+    + _WEATHER_LINK
+    + r"[^.。\n]{0,25}?"
+    + _SALES_WORD
+    + r"[^.。\n]{0,15}?"
+    + _PAST_CHANGE
+    + r"|"
+    + _SALES_WORD
+    + r"[^.。\n]{0,15}?"
+    + _WEATHER_WORD
+    + _WEATHER_LINK
+    + r"[^.。\n]{0,15}?"
+    + _PAST_CHANGE
 )
 # districtBenchmark 는 행정동 평균 추정치일 뿐 매장 개별 실적이 아니다(2026-10-15, #157).
 # "상권이 좋아서/나빠서 매출이 ~했다" 식 인과 주장을 잡는다.
@@ -540,12 +572,41 @@ def _numbers_in(text: str) -> set[str]:
     return {m.group().replace(",", "").rstrip(".") for m in _ANYNUM.finditer(text)}
 
 
+# 지표 비율을 백분율로 적을 때 한 자리까지 반올림하는 건 환각이 아니다 — 프롬프트가
+# 0.0885 → 8.85% 로 바꿔 쓰라고 하고, _metric_numbers 가 정수 반올림("9")까지는 이미
+# 허용 집합에 넣는다. 한 자리("8.9")가 비면 반올림을 날조로 오판한다.
+_PERCENT_ROUNDING_TOLERANCE = 0.05 + 1e-9
+
+
+def _percent_grounded(token: str, metrics) -> bool:
+    """ "40%" 의 40 이 지표 비율에서 나온 값인가. 반올림 오차만 허용한다."""
+    try:
+        value = float(token)
+    except ValueError:
+        return True
+    for allowed in _metric_numbers(metrics):
+        try:
+            if abs(value - float(allowed)) <= _PERCENT_ROUNDING_TOLERANCE:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _ungrounded(text: str, metrics) -> set[str]:
     """지표에 없는 숫자. 자릿수 오류·환각을 잡는다.
 
-    한두 자리는 시각·인원·할인율 같은 실행 지시로 보고 통과시킨다 — 프롬프트가 허용한다.
+    한두 자리는 시각·인원 같은 실행 지시로 보고 통과시킨다 — 시각은 지표에 hour 로
+    들어 있고, 인원·수량·할인율은 `_FABRICATED_AMOUNT` 가 따로 잡는다.
+
+    **백분율은 자릿수 면제를 받지 않는다**(2026-10-28). 비율 주장은 실행 지시가 아니라
+    사실 주장인데, 거의 항상 두 자리라 검사에서 통째로 빠져 있었다 — 지표에 40% 하나만
+    있는 입력에서 "77%"·"99%" 가 그대로 통과했다. 이 구멍은 conditionPatterns(강수별
+    메뉴 판매, #246)에서 특히 아프다. 그 축의 가치가 전부 "N% 덜 팔렸다" 이고 N 은
+    두 자리다 — 모델이 40% 를 77% 로 바꿔 써도 못 잡고 있었다.
     """
     allowed = _metric_numbers(metrics)
+    percents = {m.group(1) for m in _PERCENT.finditer(text)}
     bad = set()
     for number in _numbers_in(text):
         if number in allowed:
@@ -555,6 +616,10 @@ def _ungrounded(text: str, metrics) -> set[str]:
                 continue
         except ValueError:
             pass
+        if number in percents:
+            if not _percent_grounded(number, metrics):
+                bad.add(number)
+            continue
         if len(number.split(".")[0]) <= 2:
             continue
         bad.add(number)
