@@ -42,6 +42,12 @@ class CategoryPoint(Contract):
     name: str
     share: float
     vsPrevPeriod: float | None = None
+    # 2026-10-29 BE PR #636. share 만 보면 "비중이 올랐다 = 늘었다"로 읽히는데, 전체가 더
+    # 많이 줄어서 비중만 오른 경우가 구분되지 않았다. 이전 비중을 같이 받으면 vsPrevPeriod
+    # 와 묶어 그 구분을 모델이 할 수 있다. 이전 기간 전체 매출이 0인 매장은 비교 기준이
+    # 없어 BE 가 null 을 보낸다. 같은 PR 로 이전 기간에만 있던 카테고리도 share=0,
+    # vsPrevPeriod=-1.0 으로 들어온다 — 사라진 카테고리가 응답에서 빠지지 않는다.
+    previousShare: float | None = None
 
 
 class WeatherContext(Contract):
@@ -64,6 +70,13 @@ class WeatherContext(Contract):
     rainHours: list[int]
     precipitationMm: float | None = None
     isNotable: bool
+    # 기상청 특보 발효 현황(2026-10-22 BE 협의 확정). BE 가 API허브 특보현황에서 매장
+    # 권역·상위 권역의 **발효 중**인 것만 추려 같은 특보명은 중복 제거해 보낸다.
+    #
+    # 기본값이 None 이어야 한다 — [] 로 두면 "조회했는데 특보 없음"(=[]) 과 "조회 실패라
+    # 모름"(=키 없음) 이 섞인다. BE 에 그 둘을 나눠 달라고 요청해 받아낸 구분이라, 우리가
+    # 기본값으로 도로 합치면 "오늘 특보 없습니다" 라고 단정하게 된다.
+    alerts: list[str] | None = None
 
 
 class ConditionMenu(Contract):
@@ -101,6 +114,12 @@ class ConditionPattern(Contract):
     sampleWeekdayRatio: float
     baselineWeekdayRatio: float
     menus: list[ConditionMenu] = []
+    # 2026-10-29 BE PR #636. 그전에는 변화가 큰 메뉴 3종의 평균만 있어서 매장 전체 효과를
+    # 그 3종으로 추정해야 했다. 전체 메뉴 순매출의 일평균을 직접 받는다. 구 BE 는 보내지
+    # 않으므로 선택값으로 두고, 기본값은 0 이 아니라 None 이다 — 0 원과 "값 없음"이
+    # 구분되지 않으면 프롬프트에 접지된 0 으로 들어간다.
+    avgNetSales: int | None = None
+    baselineAvgNetSales: int | None = None
 
 
 class DayHours(Contract):
@@ -147,6 +166,14 @@ class Metrics(Contract):
     # 들어간다 — 3자리 이상은 avgSales·baselineAvgSales 둘뿐이고 모델이 보지 못하는
     # 값이라 날조가 우연히 일치할 확률은 낮다. 3단계에서 어차피 접지돼야 하는 값이다.
     conditionPatterns: list[ConditionPattern] = []
+    # 2026-10-29 BE PR #637(이슈 #635). 인사이트에 보내던 값을 솔루션 요청에도 같은 모양으로
+    # 넣어준다 — 새 집계나 외부 API 호출이 아니라 적재된 서울시 분기 상권 데이터 조회다.
+    # 매장 피크 시간대가 행정동 카페 피크와 어긋나는지는 이 값 없이는 알 수 없다(이슈 #149).
+    # 같은 행정동 카페가 3곳 미만이면 BE 가 필드를 생략한다.
+    #
+    # DistrictBenchmark 도 아래 "인사이트 전용 지표" 절에 있어 menuRankings 와 같은 이유로
+    # 문자열로 참조한다. 아직 프롬프트·점수식에 연결하지 않았다(#149).
+    districtBenchmark: "DistrictBenchmark | None" = None
 
 
 # ── 인사이트 전용 지표 ──────────────────────────────────────────────
@@ -200,6 +227,10 @@ class MenuRankingPoint(Contract):
     quantity: int
     ratio: float
     vsPrevPeriod: float | None = None
+    # 2026-10-29 BE PR #636. 이전 기간 매출 비중. 이전 기간에만 팔린 메뉴의 매출 영향을
+    # ratio 하나로는 역산할 수 없었다. 솔루션 요청에만 채워진다 — 인사이트도 이 모델을
+    # 공유하지만 BE 가 인사이트 쪽에는 아직 넣지 않았다.
+    previousRatio: float | None = None
 
 
 class DistrictBenchmark(Contract):

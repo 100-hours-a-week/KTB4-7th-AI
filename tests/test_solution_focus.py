@@ -470,15 +470,94 @@ def test_영업시간_밖_매출은_비교에서_뺀다():
     """
     from app.services.solution_focus import _hourly_score, peak_ratios
 
+    # 영업시간(08~11)을 꽉 채운다 — 유휴 시간이 섞이면 그쪽이 점수를 끌어올려서
+    # "마감 뒤 행을 뺐다" 는 효과만 따로 볼 수 없다.
+    hours = {"WEEKDAY": {"opensAt": "08:00", "closesAt": "11:00"}}
     rows = [
         {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
-        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+        {"dayType": "WEEKDAY", "hour": 9, "amount": 100000},
+        {"dayType": "WEEKDAY", "hour": 10, "amount": 210000},
         {"dayType": "WEEKDAY", "hour": 23, "amount": 4000},  # 마감 뒤
     ]
 
     assert peak_ratios(rows)[0]["lowHour"] == 23
-    assert peak_ratios(rows, HOURS)[0]["lowHour"] == 8
-    assert _hourly_score(rows, HOURS) < _hourly_score(rows)
+    assert peak_ratios(rows, hours)[0]["lowHour"] == 8
+    assert _hourly_score(rows, hours) < _hourly_score(rows)
+
+
+def test_안_팔린_영업시간도_분모에_센다():
+    """`_selling` 이 0 원 행을 빼므로 행 수로 나누면 가장 유휴인 시간이 분모에서 같이
+    사라진다 — 쏠림을 과소평가한다. 영업시간을 받으면 그 시간의 몫을 통째로 센다.
+
+    08~22 (14 시간) 중 두 시간만 팔린 매장이면 12 시간치 몫(12/14)이 빠져 있다.
+    """
+    from app.services.solution_focus import _hourly_score
+
+    rows = [
+        {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ]
+
+    # 행 수(2)로 나누면 "두 시간 중 한 시간이 한가하다" 가 되어 0.375 에 머문다.
+    assert _hourly_score(rows) == pytest.approx(0.375)
+    assert _hourly_score(rows, HOURS) == pytest.approx(12 / 14)
+
+
+def test_영업시간이_있어도_매출_발생_시간이_하나면_시간대_축을_제외한다():
+    """유휴 비중은 계산 가능하다(14 시간 중 13 시간 유휴) — 하지만 비교할 매출 발생
+    행이 1 개뿐이면 `_hourly_rows`도 1 행만 돌려주고, 모델은 배정받은 지표로 뭐든
+    써야 하니 없는 비교를 지어낸다(2026-10-16). 영업시간 선언 여부와 무관하게
+    여전히 후보에서 뺀다.
+    """
+    from app.services.solution_focus import _hourly_score
+
+    rows = [{"dayType": "WEEKDAY", "hour": 14, "amount": 30000}]
+
+    assert _hourly_score(rows, HOURS) == -1.0
+
+
+def test_자정을_넘긴_영업시간에도_행이_남는다():
+    """BE 는 opensAt·closesAt 의 순서를 검사하지 않고 그대로 보낸다 — 11:00~02:00 매장이
+    실제로 온다. `opens <= hour < closes` 로만 보면 **단 한 행도 남지 않아** 시간대 축이
+    통째로 사라진다. 24 를 더해 0~2 시를 영업시간 안으로 본다.
+    """
+    from app.services.solution_focus import _hourly_rows, _hourly_score
+
+    hours = {"WEEKDAY": {"opensAt": "11:00", "closesAt": "02:00"}}
+    rows = [
+        {"dayType": "WEEKDAY", "hour": 1, "amount": 40000},  # 자정 넘김
+        {"dayType": "WEEKDAY", "hour": 12, "amount": 210000},
+        {"dayType": "WEEKDAY", "hour": 23, "amount": 90000},
+        {"dayType": "WEEKDAY", "hour": 9, "amount": 7000},  # 개점 전
+    ]
+    kept = {p["hour"] for p in _hourly_rows(rows, hours)}
+
+    assert kept == {1, 12, 23}
+    assert _hourly_score(rows, hours) > 0.0
+
+
+def test_24시간_영업은_전체_시간을_연다():
+    """`closes <= opens` 면 24 를 더한다 — `00:00~00:00` 도 같은 경로로 0~24 가 된다."""
+    from app.services.solution_focus import _open_hours
+
+    hours = {"WEEKDAY": {"opensAt": "00:00", "closesAt": "00:00"}}
+    rows = [{"dayType": "WEEKDAY", "hour": h, "amount": 1000} for h in (0, 12, 23)]
+
+    assert {p["hour"] for p in _open_hours(rows, hours)} == {0, 12, 23}
+
+
+def test_분_단위_영업시간은_시_단위로_근사한다():
+    """시·분 둘 다 내려버려서 양쪽에서 반대로 틀린다. `opensAt="11:30"` 은 11 로
+    내려가 11 시 행(11:00~11:59 집계)이 통째로 열린다 — 실제로는 개점 전 30 분이
+    섞여 있다. `closesAt="22:30"` 도 22 로 내려가 22 시 행이 통째로 닫힌다 — 실제로는
+    22:00~22:30 영업 중인 매출이다. 분 단위로 가를 수 없는 근사다(알고 있는 한계).
+    """
+    from app.services.solution_focus import _open_hours
+
+    hours = {"WEEKDAY": {"opensAt": "11:30", "closesAt": "22:30"}}
+    rows = [{"dayType": "WEEKDAY", "hour": h, "amount": 1000} for h in (10, 11, 22)]
+
+    assert {p["hour"] for p in _open_hours(rows, hours)} == {11}
 
 
 def test_영업시간이_없으면_지금처럼_동작한다():
@@ -760,3 +839,223 @@ def test_isNotable이_아니면_특보_기온이어도_후보에서_빠진다():
     focus = assign({**_BUSY_DAY, "weatherContext": cold})
 
     assert not any("weatherContext" in card for card in focus)
+
+
+# ── 기상특보 (2026-10-27, 이슈 #226) ─────────────────────────────────
+# BE 가 기상청 API허브 특보현황을 붙여 alerts 를 보낸다. 풍속·적설이 계약에 없어
+# 우리가 판정할 수 없던 태풍·대설이 이걸로 들어온다.
+
+
+def test_특보가_발효_중이면_1순위가_된다():
+    """기온은 평범한데 강풍주의보만 떠 있는 날 — 지금 필드로는 판정할 수 없던 경우다."""
+    wx = {**_MILD, "alerts": ["강풍주의보"]}
+    focus = assign({**_BUSY_DAY, "weatherContext": wx})
+
+    assert "weatherContext" in focus[0]
+
+
+def test_특보가_없으면_기온_판정으로_떨어진다():
+    """alerts: [] 는 "조회했는데 발효 특보 없음" 이다 — 특보 가점 없이 기온만 본다.
+
+    _MILD(19~26℃)는 아이스 비중 포화점(18℃)을 가로지르지 않아 탈락한다. 2026-10-22 에
+    이 테스트를 쓸 때는 notable 이면 고정값 0.3 을 받아 "보충 자리" 에 남았는데, #241 에서
+    그 고정값을 없앴다 — 이름만 그 시절 것이었다.
+    """
+    wx = {**_MILD, "alerts": []}
+    focus = assign({**_BUSY_DAY, "weatherContext": wx})
+
+    assert not any("weatherContext" in card for card in focus)
+
+
+def test_조회_실패는_특보_없음과_같게_다루되_값은_구분된다():
+    """alerts 가 없으면(키 생략) "모름" 이다 — 특보로 치지 않는 건 [] 와 같다.
+
+    둘을 같은 기본값으로 합치지 않는 이유는 스키마 주석에 있다 — 섞으면 나중에
+    "모르는데 없다고 말한" 사고를 못 가린다.
+
+    2026-10-27: 원래 "둘 다 카드에서 빠진다" 로 쟀는데, #241 이 날씨 점수를 기온 실측으로
+    바꾼 뒤로는 9~19℃ 가 포화점(18℃)을 가로질러 점수가 난다 — 빠지지 않는다. 이 테스트가
+    고정해야 하는 건 탈락이 아니라 **두 값이 같게 동작하면서 값으로는 구분된다**는 것이다.
+    """
+    from app.schemas.common import WeatherContext
+
+    unknown = WeatherContext(
+        basisDateTime="2026-10-22 08:00",
+        skyText="흐림",
+        minTempC=9,
+        maxTempC=19,
+        maxPop=0.6,
+        rainHours=[],
+        isNotable=True,
+    )
+    none_found = WeatherContext(
+        basisDateTime="2026-10-22 08:00",
+        skyText="흐림",
+        minTempC=9,
+        maxTempC=19,
+        maxPop=0.6,
+        rainHours=[],
+        isNotable=True,
+        alerts=[],
+    )
+
+    from app.services.solution_focus import _WEATHER_ALERT_SCORE, _weather_score
+
+    # 값으로는 구분된다 — 스키마가 기본값을 [] 로 두지 않는 이유다
+    assert unknown.alerts is None
+    assert none_found.alerts == []
+    # 점수는 같고, 둘 다 특보 가점을 받지 않는다 (9~19℃ 는 포화점을 가로질러 기온 점수만 난다)
+    assert _weather_score(unknown.model_dump()) == _weather_score(none_found.model_dump())
+    assert _weather_score(unknown.model_dump()) < _WEATHER_ALERT_SCORE
+
+
+def test_isNotable이_아니면_특보가_있어도_후보에서_빠진다():
+    """BE 판정이 우선이다 — 다만 BE 는 특보가 있으면 isNotable=true 로 보내기로 했다."""
+    wx = {**_MILD, "alerts": ["강풍주의보"], "isNotable": False}
+    focus = assign({**_BUSY_DAY, "weatherContext": wx})
+
+    assert not any("weatherContext" in card for card in focus)
+
+
+# ── 강수 패턴 (conditionPatterns, 2026-10-28) ──────────────────────────
+
+_RAIN_PATTERN = {
+    "condition": "RAIN",
+    "basisWeeks": 12,
+    "thresholdMm": 1.0,
+    "sampleDays": 7,
+    "baselineDays": 9,
+    "sampleWeekdayRatio": 0.57,
+    "baselineWeekdayRatio": 0.67,
+    "menus": [
+        # 일평균 금액. 비 오는 날 8,000원 덜 팔리고, 다른 메뉴는 2,000원 더 팔린다.
+        {
+            "menuName": "아이스 아메리카노",
+            "avgQuantity": 12,
+            "baselineAvgQuantity": 20,
+            "vsBaseline": -0.4,
+            "avgSales": 12000,
+            "baselineAvgSales": 20000,
+        },
+        {
+            "menuName": "핫 아메리카노",
+            "avgQuantity": 9,
+            "baselineAvgQuantity": 5,
+            "vsBaseline": 0.8,
+            "avgSales": 5000,
+            "baselineAvgSales": 3000,
+        },
+    ],
+}
+# 기간 10 일 · 순매출 1,000,000원 → 일평균 100,000원.
+# 변화 합계 8,000 + 2,000 = 10,000원 → 점수 0.1
+_RAIN_METRICS = {
+    "salesSummary": {"netSales": 1000000, "vsPrevPeriod": -0.01, "period": "2026-01-01~2026-01-10"},
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 210000},
+    ],
+    "categoryBreakdown": [{"name": "커피", "share": 0.62, "vsPrevPeriod": -0.01}],
+    "weatherContext": {
+        "skyText": "흐림",
+        "minTempC": 12,
+        "maxTempC": 15,
+        "maxPop": 0.8,
+        "rainHours": [15, 16],
+        "isNotable": True,
+    },
+    "conditionPatterns": [_RAIN_PATTERN],
+}
+
+
+def test_강수_패턴은_하루_매출_대비_몫으로_점수를_낸다():
+    """avgSales 는 일평균이고 netSales 는 기간 합계다 — 기간 일수로 맞춰야 같은 잣대가 된다."""
+    from app.services.solution_focus import _condition_score
+
+    score = _condition_score(
+        _RAIN_METRICS["conditionPatterns"],
+        _RAIN_METRICS["salesSummary"],
+        _RAIN_METRICS["weatherContext"],
+    )
+
+    assert score == pytest.approx(0.1)
+
+
+def test_오늘_비_예보가_없으면_강수_패턴을_쓰지_않는다():
+    """ "비 올 때는 이렇습니다" 는 비 오는 날에만 할 말이다. 맑은 날엔 할 수 있는 게 없다."""
+    from app.services.solution_focus import _condition_score
+
+    dry = {**_RAIN_METRICS["weatherContext"], "rainHours": []}
+
+    assert (
+        _condition_score(_RAIN_METRICS["conditionPatterns"], _RAIN_METRICS["salesSummary"], dry)
+        == -1.0
+    )
+
+
+def test_집계_기간이_없으면_강수_패턴을_쓰지_않는다():
+    """period 는 계약상 선택값이다 — 없으면 일평균 분모를 만들 수 없다. 추측하지 않는다."""
+    from app.services.solution_focus import _condition_score
+
+    no_period = {k: v for k, v in _RAIN_METRICS["salesSummary"].items() if k != "period"}
+
+    assert (
+        _condition_score(
+            _RAIN_METRICS["conditionPatterns"], no_period, _RAIN_METRICS["weatherContext"]
+        )
+        == -1.0
+    )
+
+
+def test_강수가_아닌_조건은_쓰지_않는다():
+    """계약이 배열이라 조건이 늘 수 있다. 비 예보 게이트를 통과했다고 아무 조건이나 쓰면
+    틀린 문장이 된다."""
+    from app.services.solution_focus import _condition_score
+
+    other = [{**_RAIN_PATTERN, "condition": "HEAT"}]
+
+    assert (
+        _condition_score(other, _RAIN_METRICS["salesSummary"], _RAIN_METRICS["weatherContext"])
+        == -1.0
+    )
+
+
+def test_강수_패턴은_날씨와_한_카드로_묶인다():
+    """둘 다 "오늘 날씨" 얘기라 따로 배정하면 카드 두 장이 같은 소재가 된다."""
+    focus = assign(derive(_RAIN_METRICS))
+
+    weather = next(card for card in focus if "weatherContext" in card)
+    assert "conditionPatterns" in weather
+    assert not any("conditionPatterns" in card and "weatherContext" not in card for card in focus)
+
+
+def test_비_예보가_없으면_강수_패턴이_카드에_들어가지_않는다():
+    """점수에서 빠진 지표를 모델에게 주면 안 된다 — 쓰라고 준 걸로 읽는다."""
+    metrics = {
+        **_RAIN_METRICS,
+        "weatherContext": {**_RAIN_METRICS["weatherContext"], "rainHours": []},
+    }
+
+    focus = assign(derive(metrics))
+
+    assert all("conditionPatterns" not in card for card in focus)
+
+
+def test_강수_패턴만으로도_날씨_축이_후보가_된다():
+    """현재 동작을 고정한다 — isNotable 이 false 여도 과거 실측이 있으면 후보로 올라온다.
+
+    `_weather_score` 의 isNotable 게이트를 우회하는 모양이지만 **관측 가능한 효과가 없다**
+    (2026-10-28 실측): 이 점수는 발동 시 평균 0.02 라 다른 축을 못 이기고 3 장 안에
+    들지 못한다. 쓸모는 focus 에 conditionPatterns 를 붙이는 게이트 쪽이다.
+    """
+    from app.services.solution_focus import _condition_score, _weather_score
+
+    not_notable = {**_RAIN_METRICS["weatherContext"], "isNotable": False}
+
+    assert _weather_score(not_notable) == -1.0
+    assert (
+        _condition_score(
+            _RAIN_METRICS["conditionPatterns"], _RAIN_METRICS["salesSummary"], not_notable
+        )
+        > 0.0
+    )
