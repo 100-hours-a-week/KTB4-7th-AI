@@ -41,6 +41,7 @@ import httpx
 
 from app.core.config import settings
 from app.prompts import solution as prompt
+from app.services import solution as service
 from app.services.solution_focus import assign, derive
 from devtools import grade
 from devtools.bench import SOLUTION_CASES
@@ -229,6 +230,11 @@ async def _one(
     row["_raw"] = raw
     # judge.py 가 읽는 자리다 — bench.py 의 덤프와 같은 이름을 쓴다.
     row["sample"] = row.get("cards")
+    # 재시도율·폐기율은 채점기 복제본이 아니라 서비스의 판정을 그대로 쓴다. 2026-10-16 에
+    # 채점기에만 있던 규칙 때문에 위반이 측정에서 100% 통과로 보인 적이 있다.
+    kept, _ = service._parse(raw, metrics)
+    row["_retry"] = kept is None
+    row["_kept"] = len(kept or [])
     return row
 
 
@@ -275,6 +281,30 @@ def report(results: dict[str, list[dict]], arms: list[str]) -> None:
         ]
         rate = sum(passed) / len(passed) * 100 if passed else float("nan")
         line += f"{rate:>19.1f}%"
+    print(line)
+
+    # 아래 셋은 비율 채점이 아니라 서비스 동작·비용이다. 4번 비교에서 품질이 비슷하면
+    # 이쪽이 판단 근거가 된다 — 재시도는 호출을 두 배로 쓴다.
+    line = f"{'재시도율(카드 0장)':<24}"
+    for arm in arms:
+        judged = [r for r in results[arm] if "_retry" in r]
+        rate = sum(r["_retry"] for r in judged) / len(judged) * 100 if judged else float("nan")
+        line += f"{rate:>19.1f}%"
+    print(line)
+
+    line = f"{'카드_폐기율':<24}"
+    for arm in arms:
+        judged = [r for r in results[arm] if "_retry" in r and r.get("cards")]
+        made = sum(len(r["cards"]) for r in judged)
+        kept = sum(r["_kept"] for r in judged)
+        rate = (1 - kept / made) * 100 if made else float("nan")
+        line += f"{rate:>19.1f}%"
+    print(line)
+
+    line = f"{'지연 p50(초)':<24}"
+    for arm in arms:
+        took = [r["_took"] for r in results[arm] if "_took" in r]
+        line += f"{statistics.median(took):>20.1f}" if took else f"{'-':>20}"
     print(line)
 
 
