@@ -44,7 +44,7 @@ from app.prompts import solution as prompt
 from app.services.solution_focus import assign, derive
 from devtools import grade
 from devtools.bench import SOLUTION_CASES
-from devtools.fewshot_shots import SHOTS_V2, SHOTS_V3
+from devtools.fewshot_shots import SHOTS_RELAXED, SHOTS_V2, SHOTS_V3
 
 print = functools.partial(print, flush=True)  # 파일로 리다이렉트해도 진행이 보이게
 
@@ -68,6 +68,63 @@ _PLAYBOOK = """실행 문장은 아래 예시만큼 구체적으로 쓰세요. �
 - 마감 [N] 시간 전에 남은 디저트를 계산대 앞으로 모아 눈에 띄게 두세요.
 """
 
+# ── 2026-11-02 "문제 해결 강제" 완화 (헥터 제안) ─────────────────────────
+#
+# 현행 _USER 는 카드마다 **문제 → 원인 → 해결 → 기대효과** 를 강제한다. 지표가 아무
+# 문제도 가리키지 않는 날에도 모델은 문제를 하나 만들어야 하고, 그래서 "매출이 줄었으니
+# 발주를 줄이세요" 류가 나온다 — judge 가 공허하다고 판정하는 바로 그 모양이다.
+#
+# 완화하는 것은 **서술 구조 강제**뿐이다. 금지 규칙("마케팅을 강화하세요" 류, 행동의
+# "얼마나" 금지, 수치 접지)은 하나도 건드리지 않는다 — 금지 문단을 통째로 뺀
+# C_금지제거_예시만 이 역효과였다(judge specific 1.3% vs A 5.9%, 수치 정확도도 하락).
+#
+# detailText 문장 수는 3개로 유지한다. `devtools/grade.py::detail_3문장` 이 줄바꿈을
+# 정확히 2개로 세기 때문에, 문장 수를 건드리면 arm 마다 채점 기준이 달라진다. 대신
+# **세 문장의 배분 강제**를 푼다 — 기대효과가 뻔하면 그 자리에 실행을 한 문장 더 쓴다.
+
+_FORCED_ORDER = """title 이
+결론(무엇을 할지)을 먼저 던지고, 그 다음 문장들이 왜 그런지(문제·원인) → 구체적으로
+어떻게 할지 → 그렇게 하면 어떤 효과가 있을지 순서로 뒷받침하게 쓰세요."""
+
+_RELAXED_ORDER = """title 이
+결론(무엇을 할지)을 먼저 던지고, 그 다음 문장들이 왜 그렇게 판단했는지(근거) →
+구체적으로 어떻게 할지 순서로 뒷받침하게 쓰세요. 지표가 문제를 가리키면 문제를 쓰고,
+그렇지 않으면 읽어낸 사실을 그대로 쓰세요 — 없는 문제를 만들지 마세요."""
+
+_FORCED_SUMMARY = (
+    "summaryText 는 지금 어떤 문제가 있고 왜 그런지를 근거 수치와 함께 한 문장으로 쓰세요."
+)
+
+_RELAXED_SUMMARY = """\
+summaryText 는 그 카드의 판단 근거를 지표 수치와 함께 한 문장으로 쓰세요. 문제일 수도
+있고, 기회일 수도 있고, 평소와 같다는 사실일 수도 있습니다."""
+
+_FORCED_DETAIL = """\
+detailText 는 세 문장을 줄바꿈(\\n)으로 구분해 쓰세요: 그 원인을 해결하려면 구체적으로
+무엇을 해야 하는지 실행 방법 두 문장, 그리고 마지막에 그렇게 했을 때 기대되는 효과 한
+문장."""
+
+_RELAXED_DETAIL = """\
+detailText 는 세 문장을 줄바꿈(\\n)으로 구분해 쓰세요. 오늘 무엇을 어떻게 할지가
+중심입니다. 기대 효과는 그 행동만 봐도 바로 알 수 있는 내용이면 쓰지 말고, 그 자리에
+실행 내용을 한 문장 더 쓰세요."""
+
+_RELAXED = (
+    (_FORCED_ORDER, _RELAXED_ORDER),
+    (_FORCED_SUMMARY, _RELAXED_SUMMARY),
+    (_FORCED_DETAIL, _RELAXED_DETAIL),
+)
+
+
+def _relaxed_template() -> str:
+    text = prompt._USER
+    for old, new in _RELAXED:
+        if old not in text:
+            raise SystemExit(f"완화 대상 문단을 못 찾았다 — 프롬프트가 바뀌었다:\n{old[:40]}")
+        text = text.replace(old, new, 1)
+    return text
+
+
 # arm 이름 → (USER 템플릿, 예시 쌍)
 ARMS: dict[str, tuple[str, list]] = {
     "A_현행": (prompt._USER, []),
@@ -76,6 +133,8 @@ ARMS: dict[str, tuple[str, list]] = {
     "D_fewshot1": (prompt._USER, SHOTS_V2[:1]),
     "D_fewshot2": (prompt._USER, SHOTS_V2),
     "D_fewshot3": (prompt._USER, SHOTS_V3),
+    "E_완화": (_relaxed_template(), []),
+    "E_완화_예시1": (_relaxed_template(), SHOTS_RELAXED[:1]),
 }
 
 KEYS = [
