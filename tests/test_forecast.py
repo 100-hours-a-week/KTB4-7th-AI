@@ -13,7 +13,7 @@ from app.main import app
 from app.schemas.forecast import DailySale, ForecastRequest
 from app.services.forecast import run_forecast
 from app.services.forecast.features import build_future_frame, month_stats
-from app.services.forecast.intervals import DEFAULT_QUANTILES, bounds, residual_quantiles
+from app.services.forecast.intervals import bounds, residual_quantiles
 from app.services.forecast.model import MODEL_VERSION
 
 PATH = "/internal/v1/ai/forecast/batch"
@@ -213,26 +213,46 @@ def test_analysisRunId_가_있어도_없어도_받는다():
 
 
 def test_예측구간이_예측값을_감싼다():
+    """비대칭 방향은 단정하지 않는다.
+
+    전에는 "상단이 더 멀다" 를 같이 단정했는데, 그건 alpha 가 5 로 고정됐을 때 이 합성
+    데이터에서 남던 편향이었다. 매장마다 alpha 를 고르면 이 데이터는 거의 그대로 맞아
+    잔차가 대칭에 가까워진다. **비대칭이 생길 수 있다는 것** 이 상·하한을 따로 두는
+    이유이고, 방향이 늘 한쪽이라는 뜻은 아니다 — 실측도 매장마다 달랐다.
+    """
     res = run_forecast(_request("2025-12-08", "2026-08-31", "2026-09-01"))
 
     for p in res.data.predictions:
         assert p.lowerBound <= p.predictedSalesAmount <= p.upperBound
         assert p.lowerBound >= 0
-    # 비대칭이라 ±x 로 복원되지 않는다 — 상단이 더 멀다
-    first = res.data.predictions[0]
-    assert (
-        first.upperBound - first.predictedSalesAmount
-        > first.predictedSalesAmount - first.lowerBound
-    )
 
 
-def test_잔차_표본이_모자라면_기본_분위수를_쓴다():
-    """게이트를 막 통과한 신규 매장은 백테스트 원점이 몇 개 안 된다."""
+def test_잔차_표본이_모자라면_그_매장_변동성으로_만든다():
+    """게이트를 막 통과한 신규 매장은 백테스트 원점이 몇 개 안 된다.
+
+    그래도 고정값을 주지 않는다 — 매장 한 곳에서 고른 상수를 모든 신규 매장에 주면
+    변동 큰 매장은 구간이 좁고 안정적인 매장은 넓다. 그 매장 학습 잔차로 만든다.
+    """
     history = pd.Series(
         {pd.Timestamp(r.date): float(r.amount) for r in _daily("2026-01-01", "2026-03-05")}
     )
 
-    assert residual_quantiles(history) == DEFAULT_QUANTILES
+    low, high = residual_quantiles(history)
+
+    assert low < 0 < high
+
+
+def test_변동이_큰_매장은_신규여도_구간이_더_넓다():
+    """고정값이 아니라 그 매장 변동성에 비례한다는 것 — 상수로 돌아가면 이 테스트가 깨진다."""
+    rows = _daily("2026-01-01", "2026-03-05")
+    dates = [pd.Timestamp(r.date) for r in rows]
+    calm = pd.Series({d: 1_000_000.0 + (i % 7) * 10_000 for i, d in enumerate(dates)})
+    wild = pd.Series({d: 1_000_000.0 + (i % 7) * 400_000 for i, d in enumerate(dates)})
+
+    calm_low, calm_high = residual_quantiles(calm)
+    wild_low, wild_high = residual_quantiles(wild)
+
+    assert wild_high - wild_low > calm_high - calm_low
 
 
 def test_분위수가_뒤집혀도_순서가_유지된다():
