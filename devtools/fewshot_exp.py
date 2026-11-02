@@ -110,10 +110,17 @@ detailText 는 세 문장을 줄바꿈(\\n)으로 구분해 쓰세요. 오늘 �
 중심입니다. 기대 효과는 그 행동만 봐도 바로 알 수 있는 내용이면 쓰지 말고, 그 자리에
 실행 내용을 한 문장 더 쓰세요."""
 
+# 완화 문단 뒤에 "기대효과 문장에는 ..." 이 그대로 남아 있어서, 앞에서 안 써도 된다고
+# 하고 뒤에서 그 문장이 있다고 전제했다. 조건부로 읽히게 어미만 바꾼다 — 새 수치 금지
+# 규칙 자체는 그대로다.
+_FORCED_EFFECT = "기대효과 문장에는 지표에 없는 새 수치를"
+_RELAXED_EFFECT = "기대 효과를 쓸 때는 지표에 없는 새 수치를"
+
 _RELAXED = (
     (_FORCED_ORDER, _RELAXED_ORDER),
     (_FORCED_SUMMARY, _RELAXED_SUMMARY),
     (_FORCED_DETAIL, _RELAXED_DETAIL),
+    (_FORCED_EFFECT, _RELAXED_EFFECT),
 )
 
 
