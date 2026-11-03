@@ -45,7 +45,7 @@ from app.services import solution as service
 from app.services.solution_focus import assign, derive
 from devtools import grade
 from devtools.bench import SOLUTION_CASES
-from devtools.fewshot_shots import SHOTS_RELAXED, SHOTS_V2, SHOTS_V3
+from devtools.fewshot_shots import SHOTS_RELAXED, SHOTS_V2, SHOTS_V3, SHOTS_V4
 
 print = functools.partial(print, flush=True)  # 파일로 리다이렉트해도 진행이 보이게
 
@@ -124,9 +124,38 @@ _RELAXED = (
 )
 
 
-def _relaxed_template() -> str:
+# 문장 수 자체를 푸는 쌍 (2026-11-03). 위 _RELAXED 는 기대효과 칸만 조건으로 바꿨고
+# "세 문장" 은 그대로 뒀다 — 할 말이 하나뿐인 카드는 여전히 세 칸을 채운다. 예시 6장을
+# 세어보니 세 문장을 버는 건 1장이었다. 상한만 남긴다.
+_FORCED_COUNT = """\
+detailText 는 세 문장을 줄바꿈(\\n)으로 구분해 쓰세요: 그 원인을 해결하려면 구체적으로
+무엇을 해야 하는지 실행 방법 두 문장, 그리고 마지막에 그렇게 했을 때 기대되는 효과 한
+문장."""
+
+_FREE_COUNT = """\
+detailText 는 근거 지표가 말해주는 만큼만 쓰세요: 한 문장이면 한 문장, 많아도 세
+문장까지입니다. 여러 문장이면 줄바꿈(\\n)으로 구분하고, 채우려고 당연한 말이나 앞
+문장을 바꿔 말한 문장을 넣지 마세요."""
+
+# 뒤따르는 "기대효과 문장에는 ... 정성적으로만 쓰세요" 도 기대효과 칸을 전제한다.
+_FORCED_QUALITATIVE = (
+    "기대효과 문장에는 지표에 없는 새 수치를\n"
+    '지어내지 말고("매출 15% 증가" 등 금지) "~를 늘릴 수 있습니다"처럼 정성적으로만 쓰세요.'
+)
+_FREE_QUALITATIVE = (
+    "어느 문장에서도 지표에 없는 새 수치를\n"
+    '지어내지 마세요 — 특히 결과를 수치로 약속하는 말("매출 15% 증가" 등)은 쓰지 않습니다.'
+)
+
+_FREE_LENGTH = (
+    (_FORCED_COUNT, _FREE_COUNT),
+    (_FORCED_QUALITATIVE, _FREE_QUALITATIVE),
+)
+
+
+def _relaxed_template(pairs=_RELAXED) -> str:
     text = prompt._USER
-    for old, new in _RELAXED:
+    for old, new in pairs:
         if old not in text:
             raise SystemExit(f"완화 대상 문단을 못 찾았다 — 프롬프트가 바뀌었다:\n{old[:40]}")
         text = text.replace(old, new, 1)
@@ -143,6 +172,8 @@ ARMS: dict[str, tuple[str, list]] = {
     "D_fewshot3": (prompt._USER, SHOTS_V3),
     "E_완화": (_relaxed_template(), []),
     "E_완화_예시1": (_relaxed_template(), SHOTS_RELAXED[:1]),
+    "F_길이자유": (_relaxed_template(_FREE_LENGTH), []),
+    "F_길이자유_예시V4": (_relaxed_template(_FREE_LENGTH), SHOTS_V4[:1]),
 }
 
 KEYS = [
