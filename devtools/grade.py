@@ -165,6 +165,19 @@ _VAGUE_ACTION = re.compile(
     r"|(?:추천|이벤트|관리|메뉴|매출|비중|고객층|경험)[^.。\n]{0,10}?"
     r"(?:강화|개선|활성화|제고|증대|도모|최적화|극대화)"
 )
+# "매출이 15% 증가합니다" 처럼 지표에 없는 결과를 수치로 약속하는 문장(2026-11-03).
+# 옛 `기대효과_정성적` 은 이걸 "마지막 문장에 금액·%가 있으면 탈락" 으로 막았다. 마지막
+# 문장이 기대효과라는 전제가 깨지면서(3문장 고정 해제) 그 자리에 해악만 직접 잡는다 —
+# 실행 문장에 있어도 똑같이 약속이고, 이 매장 지표를 인용하는 건 막지 않는다.
+_RESULT_CLAIM = re.compile(r"\d+\.?\d*\s*%\s*(?:증가|상승|향상|개선|성장)")
+# 과거 사실("이전 기간 대비 64% 늘었습니다")과 구분하는 비교 기준.
+_COMPARISON_BASIS = re.compile(r"이전 기간|지난|전주|전월|대비|보다|에서")
+
+
+def _promises_result(text: str) -> bool:
+    return bool(_RESULT_CLAIM.search(text)) and not _COMPARISON_BASIS.search(text)
+
+
 # 날짜 없이 기간을 가리키는 말. app/services/solution.py::_VAGUE_PERIOD 와 같은 패턴.
 _VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
 # weatherContext 는 오늘 예보 스냅샷이라 과거 매출과의 인과를 뒷받침할 지표가 없다
@@ -856,8 +869,9 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["detail_1000자"] = all(len(d) <= 1000 for d in details)
     result["evidence_있음"] = all(e.strip() for e in evidences)
 
-    # 실행 방법 두 문장 + 기대효과 한 문장 = 줄바꿈 2개 (2026-10-01 재설계)
-    result["detail_3문장"] = all(d.count("\n") == 2 for d in details)
+    # 세 문장 고정(2026-10-01)은 지표가 한 가지만 말해주는 카드에서 나머지 칸을 메우게
+    # 만들었다. 예시 6장을 세어보니 세 문장을 버는 건 1장이었다(2026-11-03). 상한만 둔다.
+    result["detail_최대3문장"] = all(d.count("\n") <= 2 for d in details)
 
     # summaryText 가 쓴 지표 수치를 title·detailText 가 다시 쓰면 안 된다. evidence 는 예외.
     # 지표에 없는 수(시각·인원·할인율)는 실행 지시라 중복 대상이 아니다.
@@ -888,14 +902,14 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["evidence_수치_정확"] = not any(_ungrounded(e, metrics) for e in evidences)
     result["detail_수치_정확"] = not any(_ungrounded(d, metrics) for d in details)
 
-    # 기대효과(detailText 마지막 문장)는 정성적으로만 — "매출 15% 증가" 같은 날조 금지
-    # 실행 문장(detailText 앞 두 문장)과 title 만 본다 — 기대효과 문장은 "매출을 늘릴 수
-    # 있습니다" 가 허용이라 같은 잣대로 보면 오탐이 난다.
-    actions = titles + [line for d in details for line in d.split("\n")[:2]]
+    # 2026-11-03 까지는 마지막 문장을 기대효과로 보고 두 검사에서 뺐고(`[:2]`), 그 문장에
+    # 금액·%가 있으면 따로 떨어뜨렸다(`기대효과_정성적`). 기대효과 칸이 의무가 아니게 되면서
+    # 둘 다 근거가 없어졌다 — 마지막 문장도 실행 문장이다. 문장을 가리지 않고 본다.
+    # 공허함을 재는 지표가 가장 공허한 문장을 빼고 세던 문제도 이걸로 없어진다.
+    actions = titles + [line for d in details for line in d.split("\n")]
     result["실행수치_날조_없음"] = not any(_FABRICATED_AMOUNT.search(t) for t in actions)
     result["공허한_조언_없음"] = not any(_VAGUE_ACTION.search(t) for t in actions)
-
-    result["기대효과_정성적"] = not any(_DISPLAY_NUM.search(d.split("\n")[-1]) for d in details)
+    result["효과_수치_약속_없음"] = not any(_promises_result(t) for t in visible)
 
     # 카드끼리 같은 지표를 근거로 쓰면 "서로 다른 지표" 지시 위반이다. 문장이 달라도 중복이다.
     index = _metric_paths(metrics)

@@ -124,11 +124,23 @@ def test_지표에_없는_수는_실행_지시라_중복으로_보지_않는다(
     assert result["수치_필드간_중복없음"] is True
 
 
-def test_detailText가_세_문장이_아니면_걸린다():
-    """실행 2문장 + 기대효과 1문장 — 2026-10-01 재설계. 이전 판은 두 문장이었다."""
-    result = _three_cards(detail="할인 안내를 띄우세요.\n방문을 늘릴 수 있습니다.")
+def test_detailText가_세_문장을_넘기면_걸린다():
+    """2026-11-03 부터 상한만 본다 — 지표가 한 가지만 말해주는 카드는 짧게 쓴다."""
+    result = _three_cards(
+        detail="할인 안내를 띄우세요.\n직원을 배치하세요.\n재고를 채우세요.\n한 줄 더."
+    )
 
-    assert result["detail_3문장"] is False
+    assert result["detail_최대3문장"] is False
+
+
+@pytest.mark.parametrize(
+    "detail",
+    ["할인 안내를 띄우세요.", "할인 안내를 띄우세요.\n재고를 채우세요."],
+)
+def test_detailText가_세_문장보다_짧아도_통과한다(detail):
+    result = _three_cards(detail=detail)
+
+    assert result["detail_최대3문장"] is True
 
 
 def test_12시간제로_바꿔_쓰면_걸린다():
@@ -145,11 +157,18 @@ def test_배율을_직접_계산하면_걸린다(phrase):
     assert result["배율_없음"] is False
 
 
-def test_기대효과에_수치를_지어내면_걸린다():
-    """마지막 문장은 "~를 늘릴 수 있습니다"처럼 정성적으로만 쓰게 돼 있다."""
+def test_효과를_수치로_약속하면_걸린다():
+    """`기대효과_정성적` 을 지운 자리. 문장 위치를 가리지 않는다 — 실행 문장에 있어도 약속이다."""
     result = _three_cards(detail="할인하세요.\n배치하세요.\n매출이 15% 증가합니다.")
 
-    assert result["기대효과_정성적"] is False
+    assert result["효과_수치_약속_없음"] is False
+
+
+def test_과거_증감을_수치로_쓰는_건_통과한다():
+    """비교 기준이 있으면 사실 진술이다 — 약속과 구분한다."""
+    result = _three_cards(summary="커피 매출이 이전 기간 대비 15% 증가했습니다.")
+
+    assert result["효과_수치_약속_없음"] is True
 
 
 @pytest.mark.parametrize(
