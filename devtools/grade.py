@@ -165,6 +165,18 @@ _VAGUE_ACTION = re.compile(
     r"|(?:추천|이벤트|관리|메뉴|매출|비중|고객층|경험)[^.。\n]{0,10}?"
     r"(?:강화|개선|활성화|제고|증대|도모|최적화|극대화)"
 )
+# 사람을 쓰라는 조언(2026-11-03). 지표에 직원 수·근무 시간·교대가 **하나도 없다** —
+# `Metrics` 에 그런 필드가 없고 BE 도 보내지 않는다. 그러니 "인력을 늘리세요" 는 근거
+# 없는 말이고, 혼자 일하는 매장에는 애초에 할 수 없는 일이다. `_FABRICATED_AMOUNT` 는
+# "직원 2명 추가" 처럼 **수를 말할 때만** 잡아서 수 없는 형태가 전부 통과했다 — 실측에서
+# 카드의 32~42% 가 이 조언을 담고 있었고(네 arm, 334 장), 원인은 프롬프트가
+# `app/prompts/solution.py:190` 에서 "인력을 늘리세요" 를 좋은 표현의 본보기로
+# 보여주고 있던 것이다.
+#
+# "인건비" 는 넣지 않는다 — 순이익 지표(v2)가 들어오면 할 수 있는 말이 된다.
+_STAFFING = re.compile(r"인력|직원|알바|아르바이트|점원|캐시어|교대|근무\s*(?:시간|조|인원)")
+
+
 # "매출이 15% 증가합니다" 처럼 지표에 없는 결과를 수치로 약속하는 문장(2026-11-03).
 # 옛 `기대효과_정성적` 은 이걸 "마지막 문장에 금액·%가 있으면 탈락" 으로 막았다. 마지막
 # 문장이 기대효과라는 전제가 깨지면서(3문장 고정 해제) 그 자리에 해악만 직접 잡는다 —
@@ -910,6 +922,7 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["실행수치_날조_없음"] = not any(_FABRICATED_AMOUNT.search(t) for t in actions)
     result["공허한_조언_없음"] = not any(_VAGUE_ACTION.search(t) for t in actions)
     result["효과_수치_약속_없음"] = not any(_promises_result(t) for t in visible)
+    result["인력_조언_없음"] = not any(_STAFFING.search(t) for t in visible)
 
     # 카드끼리 같은 지표를 근거로 쓰면 "서로 다른 지표" 지시 위반이다. 문장이 달라도 중복이다.
     index = _metric_paths(metrics)

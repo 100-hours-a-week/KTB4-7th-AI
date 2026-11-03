@@ -82,7 +82,11 @@ def _three_cards(**overrides) -> dict:
         3,
         title="오늘 예상 매출에 맞춘 준비",
         summary="오늘 예상 매출은 1,250,000원입니다.",
-        detail="재료를 그에 맞춰 발주하세요.\n마감 인력을 늘리세요.\n품절을 줄일 수 있습니다.",
+        detail=(
+            "재료를 그에 맞춰 발주하세요.\n"
+            "마감 전에 남은 수량을 확인하세요.\n"
+            "품절을 줄일 수 있습니다."
+        ),
         evidence="오늘 예상 매출은 1,250,000원입니다.",
     )
     return _graded(first, second, third)
@@ -1206,3 +1210,22 @@ def test_judge는_카드가_없는_행을_건너뛴다():
     rows[0] = {"sample": [{"rankNo": 1, "title": "x"}]}
 
     assert len(load_jobs({"solution": rows})) == 1
+
+
+def test_인력을_쓰라는_조언이_걸린다():
+    """지표에 직원 수·근무 시간·교대가 하나도 없다 — 근거 없는 말이고 1인 매장은 못 한다."""
+    result = _three_cards(detail="18시에는 인력을 늘리세요.\n14시에는 직원을 줄여도 됩니다.")
+    assert result["인력_조언_없음"] is False
+
+
+def test_수를_안_말해도_걸린다():
+    """`_FABRICATED_AMOUNT` 는 "직원 2명 추가" 처럼 수를 말할 때만 잡았다."""
+    assert _three_cards(detail="직원 2명을 추가하세요.")["실행수치_날조_없음"] is False
+    assert _three_cards(detail="인력을 집중해 주세요.")["실행수치_날조_없음"] is True
+    assert _three_cards(detail="인력을 집중해 주세요.")["인력_조언_없음"] is False
+
+
+def test_발주_재고_조언은_통과한다():
+    """점주가 혼자 할 수 있는 일이다 — 막으려는 건 사람을 쓰라는 말뿐이다."""
+    result = _three_cards(detail="16시에 원두와 우유 발주를 받아 두세요.\n재고를 먼저 확인하세요.")
+    assert result["인력_조언_없음"] is True
