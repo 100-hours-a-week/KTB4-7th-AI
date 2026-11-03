@@ -45,7 +45,7 @@ from app.services import solution as service
 from app.services.solution_focus import assign, derive
 from devtools import grade
 from devtools.bench import SOLUTION_CASES
-from devtools.fewshot_shots import SHOTS_RELAXED, SHOTS_V2, SHOTS_V3, SHOTS_V4
+from devtools.fewshot_shots import SHOTS_RELAXED, SHOTS_V2, SHOTS_V3, SHOTS_V4, SHOTS_V5
 
 print = functools.partial(print, flush=True)  # 파일로 리다이렉트해도 진행이 보이게
 
@@ -199,6 +199,11 @@ ARMS: dict[str, tuple[str, list]] = {
     "F_길이자유": (_relaxed_template(_FREE_LENGTH), []),
     "F_길이자유_예시V4": (_relaxed_template(_FREE_LENGTH), SHOTS_V4[:1]),
     "G_인력금지_예시V4": (_relaxed_template(_NO_STAFFING), SHOTS_V4[:1]),
+    # V4 의 개선이 시간대 축 한 곳에 몰렸고 거기서도 인력 조언·공허한 마무리가 남았다.
+    # 원인이 "시간대 예시가 한 장" 이라고 보고 두 장으로 늘린 arm 이다 — 시각·작업·하루
+    # 모양을 다 다르게 둬서 "비는 시각에 준비 작업" 같은 한 규칙으로 뭉개지지 않게 한다.
+    # 예시 2 쌍이라 V4(1 쌍)보다 입력이 길다. 근거: devtools/fewshot_shots.py V5 절.
+    "H_길이자유_예시V5": (_relaxed_template(_FREE_LENGTH), SHOTS_V5),
 }
 
 KEYS = [
