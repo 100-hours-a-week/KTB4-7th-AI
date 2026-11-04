@@ -1,8 +1,7 @@
-"""위키 [AI] 단계4 §4.2. 챗봇이 부족한 지표를 조회할 때 쓰는 툴 8종 중 활성화된 7종
+"""위키 [AI] 단계4 §4.2. 챗봇이 부족한 지표를 조회할 때 쓰는 툴 7종
 (2026-10-16, Issue #170 — 순이익·날씨·상권 추가).
 
 storeId는 요청 범위 값이라 LLM에 노출하지 않고 클로저로 고정한다.
-리뷰(v3)만 app/clients/backend.py TOOL_PATHS 와 동일하게 MVP 범위 밖이다.
 get_weather/get_district_benchmark는 경로는 BE와 협의 완료, 응답 필드는 확정 전이라
 devtools/stub_backend.py 의 AI 쪽 제안 모양 기준으로만 동작한다.
 """
