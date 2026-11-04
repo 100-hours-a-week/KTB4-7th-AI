@@ -2,8 +2,9 @@
 (2026-10-16, Issue #170 — 순이익·날씨·상권 추가).
 
 storeId는 요청 범위 값이라 LLM에 노출하지 않고 클로저로 고정한다.
-get_weather/get_district_benchmark는 경로는 BE와 협의 완료, 응답 필드는 확정 전이라
-devtools/stub_backend.py 의 AI 쪽 제안 모양 기준으로만 동작한다.
+get_weather/get_district_benchmark 응답 DTO는 BE dev에 구현돼 있으나, AI 쪽 Pydantic
+응답 검증은 아직 붙이지 않아 devtools/stub_backend.py 의 AI 쪽 제안 모양 기준으로만
+동작한다.
 """
 
 from langchain_core.tools import tool

@@ -9,8 +9,10 @@ from app.core.errors import ApiError
 # get_weather/get_district_benchmark 경로는 BE와 협의 완료(2026-10-16, Issue #170).
 # v2인 이유는 get_profit과 같다 — 팀 릴리스 버전 체계(v1 MVP / v2 순이익·날씨·상권)에서
 # 날씨·상권도 순이익과 같은 V2 묶음이다(docs/STATE.md "v2 의 나머지 — 날씨·공휴일·상권").
-# 응답 필드 상세는 아직 BE 확정 전이라 devtools/stub_backend.py 는 AI 쪽 제안 모양
-# (WeatherContext/DistrictBenchmark와 동일)으로 개발·테스트한다.
+# 응답 DTO(ChatWeatherResponse/ChatDistrictBenchmarkResponse/ChatLookupResponse)는 BE dev에
+# 구현돼 있다(KTB4-7th-BE, com.memme.dto.chat). AI 쪽 Pydantic 응답 검증은 아직 붙이지
+# 않아 devtools/stub_backend.py 는 AI 쪽 제안 모양(WeatherContext/DistrictBenchmark와
+# 동일)으로만 개발·테스트한다 — 응답 검증 추가는 별도 작업으로 진행한다.
 TOOL_PATHS = {
     "get_sales_summary": "/internal/v1/sales/summary",
     "get_category_breakdown": "/internal/v1/sales/categories",
