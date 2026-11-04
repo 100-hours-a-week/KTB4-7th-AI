@@ -45,7 +45,15 @@ from app.services import solution as service
 from app.services.solution_focus import assign, derive
 from devtools import grade
 from devtools.bench import SOLUTION_CASES
-from devtools.fewshot_shots import SHOTS_RELAXED, SHOTS_V2, SHOTS_V3, SHOTS_V4, SHOTS_V5
+from devtools.fewshot_shots import (
+    SHOTS_RELAXED,
+    SHOTS_V2,
+    SHOTS_V3,
+    SHOTS_V4,
+    SHOTS_V5,
+    SHOTS_V6,
+    SHOTS_V7,
+)
 
 print = functools.partial(print, flush=True)  # 파일로 리다이렉트해도 진행이 보이게
 
@@ -212,6 +220,12 @@ ARMS: dict[str, tuple[str, list]] = {
     # I 와 J 끼리만 비교하고, F·H 나 11/3 n=15 숫자와 섞어 읽지 않는다.
     "I_예시V4_근거만": (_relaxed_template(_FREE_LENGTH), SHOTS_V4[:1]),
     "J_예시V5_근거만": (_relaxed_template(_FREE_LENGTH), SHOTS_V5),
+    # V5 예시 6장 중 제대로 일한 게 1장뿐이었다. 셋을 고쳤다 — judge 가 obvious 로
+    # 적어둔 문장, 축과 어긋난 내용, 실제 입력에 없는 필드(previousShare)로 한 추론.
+    # 매출총액 축은 예시로 살리지 않는다(netSales 가 기간 합계라 예측과 단위가 안 맞는다).
+    "K_예시V6": (_relaxed_template(_FREE_LENGTH), SHOTS_V6),
+    # V6 + 날씨 쌍. conditionPatterns(이 매장 강수일 실측)를 쓰는 카드를 보여준다.
+    "L_예시V7_날씨": (_relaxed_template(_FREE_LENGTH), SHOTS_V7),
 }
 
 # 예시 user 턴을 근거 블록만으로 줄이는 arm.

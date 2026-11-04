@@ -423,3 +423,234 @@ SHOT2_OUTPUT_V5 = {
 }
 
 SHOTS_V5 = [(SHOT1_METRICS_V3, SHOT1_OUTPUT_V4), (SHOT2_METRICS_V5, SHOT2_OUTPUT_V5)]
+
+# ── V6 (2026-11-04) ─────────────────────────────────────────────────
+# V5 예시 6장을 판정해 보니 제대로 일하는 게 1장(예시2 시간대)뿐이었고, 나머지는 셋 중
+# 하나였다.
+#
+#   ① judge 가 obvious 예시로 직접 적어둔 문장을 쓰고 있었다
+#      — "오늘은 재료를 평소보다 넉넉하게 준비하세요" (judge.py SYSTEM 의 obvious 예시다)
+#   ② 배정된 축과 내용이 어긋났다 — 시간대 칸에 매출총액 얘기, 매출총액 칸에 시간대 얘기.
+#      프롬프트가 "각 카드는 자기 근거 지표만 쓰라" 고 금지하는 바로 그것을 시연했다.
+#   ③ **실제 입력에 없는 필드로 추론했다** — 카테고리 예시가 previousShare(이전 비중)로
+#      "비중은 올랐지만 매출은 줄었다" 를 짚는데, bench 케이스의 categoryBreakdown 은
+#      name·share·vsPrevPeriod 뿐이다. 모델이 그 추론을 재현할 수가 없다.
+#      카테고리 축 judge specific 이 0% 로 고정이던 이유다. tests/test_fewshot_shots.py
+#      가 이제 "예시 지표의 필드 ⊆ bench 케이스의 필드" 를 지킨다.
+#
+# 매출총액 축은 예시로 살리지 않는다. 가진 게 netSales(기간 합계)와 vsPrevPeriod 뿐이라
+# 나올 수 있는 말이 "줄었으면 발주 줄여라" 하나다. predictedSalesToday 와 비교해 뒤집는
+# 카드를 쓰려 했는데 **단위가 다르다** — netSales 는 기간 합계고 예측은 하루다
+# (app/schemas/common.py:26). 그 비교를 예시로 넣으면 단위 틀린 비교를 가르친다.
+# 그래서 짧고 정직한 한 문장으로 두고, 계약 문제로 따로 올린다.
+#
+# 메뉴 예시는 단일 품목·한 방향에서 **품목 차등**으로 바꾼다. V4 arm 은 메뉴 예시가
+# 아예 없는데 메뉴 축 60% 였고, V5 가 "딸기 라떼 재료를 먼저 확보해 두세요"(단일 품목)를
+# 넣자 10% 로 떨어졌다. 모델이 예시의 모양을 베껴 차등 판단을 잃었다.
+
+SHOT1_METRICS_V6 = {
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 10, "amount": 48000},
+        {"dayType": "WEEKDAY", "hour": 13, "amount": 286000},
+        {"dayType": "WEEKDAY", "hour": 16, "amount": 74000},
+        {"dayType": "WEEKDAY", "hour": 19, "amount": 192000},
+    ],
+    "salesSummary": {
+        "netSales": 1312000,
+        "vsPrevPeriod": -0.07,
+        "period": "2026-10-14~2026-10-20",
+    },
+    "categoryBreakdown": [
+        {"name": "커피", "share": 0.62, "vsPrevPeriod": -0.12},
+        {"name": "디저트", "share": 0.21, "vsPrevPeriod": 0.08},
+        {"name": "논커피", "share": 0.17, "vsPrevPeriod": -0.03},
+    ],
+}
+
+SHOT1_OUTPUT_V6 = {
+    "solutionCards": [
+        {
+            "rankNo": 1,
+            "title": "오전에 미리 만들어 두는 양을 줄이세요",
+            "summaryText": "평일 13시 286,000원이 하루 정점인데, 10시는 48,000원에 그칩니다.",
+            "detailText": (
+                "10시에 만들어 둔 음료가 남으니, 오전 준비량을 줄이고 13시 직전에 맞춰 뽑으세요."
+            ),
+            "evidence": "평일 13시 286,000원, 10시 48,000원",
+        },
+        {
+            # 지표가 두 개뿐이면 한 문장으로 끝낸다는 것도 가르칠 값이 있다.
+            "rankNo": 2,
+            "title": "발주 정량을 줄어든 매출에 맞춰 다시 잡으세요",
+            "summaryText": "집계 기간 순매출이 1,312,000원으로 이전 기간보다 7% 줄었습니다.",
+            "detailText": (
+                "지금 발주 수량은 매출이 더 높던 이전 기간에 맞춰져 있으니, "
+                "품목별 정량을 다시 잡으세요."
+            ),
+            "evidence": "순매출 1,312,000원, 이전 기간 대비 7% 감소",
+        },
+        {
+            # share x vsPrevPeriod 로 우선순위를 뒤집는다 — 비중 큰 쪽이 빠진 손실은
+            # 비중 작은 쪽이 늘어난 것으로 메울 수 없다. 두 필드만 쓴다.
+            "rankNo": 3,
+            "title": "디저트보다 커피 회복이 먼저입니다",
+            "summaryText": "커피가 전체 매출의 62%, 디저트가 21%를 차지합니다.",
+            "detailText": (
+                "커피는 12% 줄고 디저트는 8% 늘었는데, 비중이 큰 커피에서 빠진 손실은 "
+                "디저트 증가로 메울 수 없습니다.\n"
+                "디저트 추천에 손을 쓰기 전에, 커피 주문이 왜 줄었는지 영수증에서 먼저 보세요."
+            ),
+            "evidence": "커피 비중 62% 전기 대비 -0.12, 디저트 비중 21% 전기 대비 0.08",
+        },
+    ]
+}
+
+# 축이 2 개면 카드도 2 장이다. V5 는 두 쌍 다 3 장이라 "항상 3 장" 으로 읽힐 수 있었다.
+SHOT2_METRICS_V6 = {
+    "hourlyProfile": SHOT2_METRICS_V5["hourlyProfile"],
+    "menuRankings": [
+        {
+            "rank": 6,
+            "menuName": "딸기 라떼",
+            "menuSales": 164000,
+            "quantity": 41,
+            "ratio": 0.13,
+            "vsPrevPeriod": 0.64,
+        },
+        {
+            "rank": 1,
+            "menuName": "아이스 아메리카노",
+            "menuSales": 388000,
+            "quantity": 97,
+            "ratio": 0.31,
+            "vsPrevPeriod": -0.08,
+        },
+    ],
+}
+
+SHOT2_OUTPUT_V6 = {
+    "solutionCards": [
+        SHOT2_OUTPUT_V5["solutionCards"][0],
+        {
+            "rankNo": 2,
+            "title": "아이스 아메리카노는 그대로 두고 딸기 라떼만 늘리세요",
+            "summaryText": "딸기 라떼가 41잔으로 이전 기간보다 64% 늘었습니다.",
+            "detailText": (
+                "딸기 라떼 재료만 늘리고, 1위인 아이스 아메리카노 원두 발주는 건드리지 마세요.\n"
+                "아이스 아메리카노는 8% 줄었지만 여전히 순위 1위라, 발주를 줄이면 "
+                "품절 쪽이 더 위험합니다."
+            ),
+            "evidence": "딸기 라떼 41잔 전기 대비 +64%, 아이스 아메리카노 1위 전기 대비 -8%",
+        },
+    ]
+}
+
+SHOTS_V6 = [(SHOT1_METRICS_V6, SHOT1_OUTPUT_V6), (SHOT2_METRICS_V6, SHOT2_OUTPUT_V6)]
+
+
+# ── V7 (2026-11-04) ─────────────────────────────────────────────────
+# V6 에 날씨 쌍을 하나 더한다. 날씨 축은 judge specific 0/10 인데, 지금 나오는 카드가
+# 전부 "비 오면 핫 음료 준비하세요" 류다 — 같은 동네 모든 카페가 같은 예보를 받으니
+# 어느 매장에나 통하는 말이다. 가르는 입력은 `conditionPatterns`(이 매장의 12 주 강수일
+# 실측)인데, bench 케이스에 없어서 모델이 본 적이 없었다(2026-11-04 에 넣었다).
+#
+# 프롬프트는 이미 이 모양을 **글로** 지시하고 있다 — "과거 강수가 있었던 날에는 아이스
+# 아메리카노가 하루 평균 12 잔, 무강수 날에는 20 잔 팔렸습니다" 처럼 쓰라고. 글로 적는
+# 방식이 안 통한다는 건 10/29 에 쟀다(B·C arm 6.6%·1.3%). 대화 턴으로 보여준다.
+#
+# `avgQuantity`·`baselineAvgQuantity` 는 둘 다 일평균이라 단위가 맞는다 — 매출총액 축의
+# netSales(기간 합계) vs predictedSalesToday(하루) 문제가 여기엔 없다.
+#
+# 한계: 맑은데 기온이 18℃를 가로지르는 날은 `conditionPatterns` 가 실리지 않는다
+# (`_condition_score` 가 오늘 비 예보를 요구한다). 그 경우엔 "오전엔 핫, 오후엔 아이스"
+# 같은 기온 분할이 할 말인데 그 예시는 아직 없다.
+
+SHOT3_METRICS_V7 = {
+    "salesSummary": {
+        "netSales": 1830000,
+        "vsPrevPeriod": 0.05,
+        "period": "2026-10-14~2026-10-20",
+    },
+    "hourlyProfile": [
+        {"dayType": "WEEKDAY", "hour": 9, "amount": 22000},
+        {"dayType": "WEEKDAY", "hour": 12, "amount": 178000},
+        {"dayType": "WEEKDAY", "hour": 18, "amount": 203000},
+    ],
+    "weatherContext": {
+        "basisDateTime": "2026-10-21 08:00",
+        "skyText": "흐림",
+        "minTempC": 13,
+        "maxTempC": 21,
+        "maxPop": 0.7,
+        "rainHours": [15, 16],
+        "isNotable": True,
+    },
+    "conditionPatterns": [
+        {
+            "condition": "RAIN",
+            "basisWeeks": 12,
+            "thresholdMm": 1.0,
+            "sampleDays": 14,
+            "baselineDays": 46,
+            "sampleWeekdayRatio": 0.71,
+            "baselineWeekdayRatio": 0.70,
+            "avgNetSales": 231000,
+            "baselineAvgNetSales": 266000,
+            "menus": [
+                {
+                    "menuName": "아이스 아메리카노",
+                    "avgQuantity": 12,
+                    "baselineAvgQuantity": 20,
+                    "vsBaseline": -0.40,
+                    "avgSales": 50400,
+                    "baselineAvgSales": 84000,
+                },
+                {
+                    "menuName": "핫 아메리카노",
+                    "avgQuantity": 9,
+                    "baselineAvgQuantity": 6,
+                    "vsBaseline": 0.50,
+                    "avgSales": 37800,
+                    "baselineAvgSales": 25200,
+                },
+            ],
+        }
+    ],
+}
+
+SHOT3_OUTPUT_V7 = {
+    "solutionCards": [
+        {
+            "rankNo": 1,
+            "title": "점심 준비는 9시에 끝내 두세요",
+            "summaryText": "평일 18시 203,000원이 하루 정점이고, 9시는 22,000원에 그칩니다.",
+            "detailText": ("9시는 주문이 거의 없으니, 재료 손질과 진열을 이 시간에 몰아 두세요."),
+            "evidence": "평일 18시 203,000원, 9시 22,000원",
+        },
+        {
+            # 오늘 예보만으로는 어느 카페에나 통하는 말이 된다. 이 매장의 강수일 실측을
+            # 인용해야 가른다. 인과("비 때문에 줄었다")는 쓰지 않고 관측 차이만 적는다.
+            "rankNo": 2,
+            "title": "아이스 아메리카노 재료는 덜 잡고 핫 쪽을 늘려 두세요",
+            "summaryText": (
+                "오늘 15시와 16시에 비가 예보됐고, "
+                "과거 강수일에는 아이스 아메리카노가 하루 평균 12잔 팔렸습니다."
+            ),
+            "detailText": (
+                "무강수일에는 20잔이었으니, 오늘은 아이스 아메리카노 재료를 덜 잡으세요.\n"
+                "핫 아메리카노는 강수일 하루 9잔으로 무강수일 6잔보다 많으니, "
+                "그쪽 준비를 늘려 두세요."
+            ),
+            "evidence": "오늘 15시·16시 비 예보, 강수일 아이스 아메리카노 12잔 / 무강수일 20잔",
+        },
+        {
+            "rankNo": 3,
+            "title": "발주는 지금 수준을 유지하세요",
+            "summaryText": "집계 기간 순매출이 1,830,000원으로 이전 기간보다 5% 늘었습니다.",
+            "detailText": "늘어난 폭이 크지 않으니, 품목별 발주 정량은 그대로 두세요.",
+            "evidence": "순매출 1,830,000원, 이전 기간 대비 5% 증가",
+        },
+    ]
+}
+
+SHOTS_V7 = [*SHOTS_V6, (SHOT3_METRICS_V7, SHOT3_OUTPUT_V7)]
