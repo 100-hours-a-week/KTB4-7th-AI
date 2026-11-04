@@ -204,7 +204,18 @@ ARMS: dict[str, tuple[str, list]] = {
     # 모양을 다 다르게 둬서 "비는 시각에 준비 작업" 같은 한 규칙으로 뭉개지지 않게 한다.
     # 예시 2 쌍이라 V4(1 쌍)보다 입력이 길다. 근거: devtools/fewshot_shots.py V5 절.
     "H_길이자유_예시V5": (_relaxed_template(_FREE_LENGTH), SHOTS_V5),
+    # 예시 user 턴에서 규칙 블록을 뺀 짝. 2026-11-04 측정: 예시 user 턴 1,909 토큰 중
+    # 1,529 가 규칙이라 V5(예시 2쌍)는 규칙을 세 번 싣는다. 입력 7,539 → 출력 여유 653 인데
+    # 실측 출력이 500~1,000 이라 대부분 잘린다(파싱 실패). 창을 16,384 로 올리면 설계를
+    # 안 건드리고 풀리지만 팟이 제나 계정이라 재시작을 안 했다.
+    # 예시가 실제 호출과 모양이 달라지는 값을 치르므로 V4 쪽도 같이 바꿔 짝을 맞춘다 —
+    # I 와 J 끼리만 비교하고, F·H 나 11/3 n=15 숫자와 섞어 읽지 않는다.
+    "I_예시V4_근거만": (_relaxed_template(_FREE_LENGTH), SHOTS_V4[:1]),
+    "J_예시V5_근거만": (_relaxed_template(_FREE_LENGTH), SHOTS_V5),
 }
+
+# 예시 user 턴을 근거 블록만으로 줄이는 arm.
+_BLOCKS_ONLY = frozenset({"I_예시V4_근거만", "J_예시V5_근거만"})
 
 KEYS = [
     "공허한_조언_없음",
@@ -225,6 +236,13 @@ def _check_templates() -> None:
             raise SystemExit(f"{name} 템플릿에 focus_blocks 자리가 하나가 아니다")
         if name.startswith(("B_", "C_")) and text == prompt._USER:
             raise SystemExit(f"{name} 치환 실패 — _BAN 문구가 프롬프트와 안 맞는다")
+    for name in _BLOCKS_ONLY:
+        if name not in ARMS:
+            raise SystemExit(f"_BLOCKS_ONLY 의 {name} 이 ARMS 에 없다")
+        turns = shot_messages(ARMS[name][1], blocks_only=True)
+        leaked = [m for m in turns if m["role"] == "user" and "[카드 1 근거]" not in m["content"]]
+        if leaked or any(m["role"] == "user" and "쓰지 마세요" in m["content"] for m in turns):
+            raise SystemExit(f"{name} 예시 user 턴에 규칙이 남아 있다 — 창 절약이 안 된다")
 
 
 def validate(shots: list) -> None:
@@ -242,19 +260,36 @@ def validate(shots: list) -> None:
             raise SystemExit(f"예시 {index} 가 채점기를 못 넘었다: {failed}")
 
 
-def shot_messages(shots: list) -> list[dict]:
+def _blocks(focus: list) -> str:
+    """근거 블록 텍스트. 실제 호출과 예시가 같은 글자를 쓰도록 한 군데서 만든다."""
+    return "\n\n".join(
+        f"[카드 {index} 근거]\n{json.dumps(item, ensure_ascii=False)}"
+        for index, item in enumerate(focus, start=1)
+    )
+
+
+def shot_messages(shots: list, blocks_only: bool = False) -> list[dict]:
     """예시를 user/assistant 대화 쌍으로 만든다.
 
     프롬프트 문장에 끼우지 않는다 — 실제 호출과 같은 모양(근거 블록이 들어오고 카드 JSON 이
     나간다)을 그대로 시연해야 JSON 봉투·필드 관계·카드 간 구조까지 전달된다.
 
     근거 블록은 `prompt.build` 로 만든다. 사람이 쓴 블록을 쓰면 실제 호출과 모양이 어긋난다.
+
+    `blocks_only` 는 예시 user 턴에서 규칙 블록을 빼고 근거 블록만 남긴다 — 8,192 창에
+    안 들어갈 때 쓴다(`_BLOCKS_ONLY` 참고). 위 "같은 모양" 원칙을 깨는 것이므로 기본값이
+    아니고, 쓰는 arm 은 이름에 드러낸다.
     """
     messages: list[dict] = []
     for metrics, output in shots:
         focus = assign(derive(metrics))
         messages.append(
-            {"role": "user", "content": prompt.build(focus, "2026-10-21", "수요일", False)}
+            {
+                "role": "user",
+                "content": _blocks(focus)
+                if blocks_only
+                else prompt.build(focus, "2026-10-21", "수요일", False),
+            }
         )
         messages.append({"role": "assistant", "content": json.dumps(output, ensure_ascii=False)})
     return messages
@@ -310,10 +345,7 @@ async def _one(
 def _user_text(template: str, metrics: dict) -> tuple[str, int]:
     focus = assign(metrics)
     expected = len(focus) or grade.MAX_CARDS
-    blocks = "\n\n".join(
-        f"[카드 {index} 근거]\n{json.dumps(item, ensure_ascii=False)}"
-        for index, item in enumerate(focus, start=1)
-    )
+    blocks = _blocks(focus)
     return (
         template.format(
             focus_blocks=blocks,
@@ -411,7 +443,7 @@ async def main() -> int:
         results: dict[str, list[dict]] = {}
         for arm in arms:
             template, shots = ARMS[arm]
-            messages = shot_messages(shots)
+            messages = shot_messages(shots, blocks_only=arm in _BLOCKS_ONLY)
             rows: list[dict] = []
             for _, raw_metrics in SOLUTION_CASES:
                 metrics = derive(raw_metrics)
