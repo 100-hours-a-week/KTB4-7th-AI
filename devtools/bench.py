@@ -59,7 +59,11 @@ SOLUTION_CASES = [
     (
         "기본",
         {
-            "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
+            "salesSummary": {
+                "netSales": 1183600,
+                "vsPrevPeriod": -0.12,
+                "period": "2026-10-14~2026-10-20",
+            },
             "predictedSalesToday": 1250000,
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
@@ -75,7 +79,11 @@ SOLUTION_CASES = [
     (
         "시간대격차큼",
         {
-            "salesSummary": {"netSales": 2470300, "vsPrevPeriod": 0.034},
+            "salesSummary": {
+                "netSales": 2470300,
+                "vsPrevPeriod": 0.034,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 9, "amount": 8200},
                 {"dayType": "WEEKDAY", "hour": 12, "amount": 412000},
@@ -94,7 +102,11 @@ SOLUTION_CASES = [
         # 집계를 못 보내는 경우가 계약상 가능한데(2026-09-16) 아직 측정된 적이 없다.
         "시간대없음",
         {
-            "salesSummary": {"netSales": 842000, "vsPrevPeriod": -0.287},
+            "salesSummary": {
+                "netSales": 842000,
+                "vsPrevPeriod": -0.287,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [],
             "categoryBreakdown": [
                 {"name": "커피", "share": 0.71, "vsPrevPeriod": -0.31},
@@ -111,7 +123,11 @@ SOLUTION_CASES = [
         # 1.0 까지 가므로, 다른 축이 조금만 뚜렷해도 밀린다. 그 동작을 숫자로 남긴다.
         "날씨있음",
         {
-            "salesSummary": {"netSales": 1102000, "vsPrevPeriod": -0.04},
+            "salesSummary": {
+                "netSales": 1102000,
+                "vsPrevPeriod": -0.04,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 11, "amount": 88000},
                 {"dayType": "WEEKDAY", "hour": 14, "amount": 72000},
@@ -132,6 +148,42 @@ SOLUTION_CASES = [
                 "precipitationMm": 7.5,
                 "isNotable": True,
             },
+            # 2026-11-04: conditionPatterns 가 케이스 어디에도 없어서 날씨 카드가 항상
+            # "오늘 예보"만 보고 쓰였다 — 같은 동네 모든 카페가 같은 예보를 받으니
+            # 어느 매장에나 통하는 말밖에 못 나온다(judge specific 0/10). 이 매장의 과거
+            # 강수일 실측이 바로 그걸 가르는 입력인데 입력에 없었다.
+            # _condition_score 가 salesSummary.period 를 요구해서 period 도 같이 넣었다.
+            "conditionPatterns": [
+                {
+                    "condition": "RAIN",
+                    "basisWeeks": 12,
+                    "thresholdMm": 1.0,
+                    "sampleDays": 14,
+                    "baselineDays": 46,
+                    "sampleWeekdayRatio": 0.71,
+                    "baselineWeekdayRatio": 0.70,
+                    "avgNetSales": 138200,
+                    "baselineAvgNetSales": 159600,
+                    "menus": [
+                        {
+                            "menuName": "아이스 아메리카노",
+                            "avgQuantity": 12,
+                            "baselineAvgQuantity": 20,
+                            "vsBaseline": -0.40,
+                            "avgSales": 50400,
+                            "baselineAvgSales": 84000,
+                        },
+                        {
+                            "menuName": "핫 아메리카노",
+                            "avgQuantity": 9,
+                            "baselineAvgQuantity": 6,
+                            "vsBaseline": 0.50,
+                            "avgSales": 37800,
+                            "baselineAvgSales": 25200,
+                        },
+                    ],
+                }
+            ],
         },
     ),
     (
@@ -139,7 +191,11 @@ SOLUTION_CASES = [
         # 적혀 있다(app/services/solution_focus.py). 실제로 어떤 카드가 나오는지 본다.
         "메뉴변화큼",
         {
-            "salesSummary": {"netSales": 1980000, "vsPrevPeriod": 0.02},
+            "salesSummary": {
+                "netSales": 1980000,
+                "vsPrevPeriod": 0.02,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 10, "amount": 120000},
                 {"dayType": "WEEKDAY", "hour": 13, "amount": 180000},
@@ -176,7 +232,11 @@ SOLUTION_CASES = [
         # 배수 계산에서 빠져야 한다(#183). 안 빠지면 "18 시가 23 시의 N 배" 가 나온다.
         "전부있음",
         {
-            "salesSummary": {"netSales": 1540000, "vsPrevPeriod": -0.11},
+            "salesSummary": {
+                "netSales": 1540000,
+                "vsPrevPeriod": -0.11,
+                "period": "2026-10-14~2026-10-20",
+            },
             "predictedSalesToday": 1610000,
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},
