@@ -86,7 +86,7 @@ async def test_토큰이_있으면_Authorization_헤더를_붙인다(monkeypatch
     @echo_app.get(backend.TOOL_PATHS["get_weather"])
     async def _echo(request: Request) -> dict:
         captured["authorization"] = request.headers.get("authorization")
-        return {"status": "READY", "data": {"skyText": "맑음"}}
+        return {"status": "EMPTY", "data": None}
 
     _use(monkeypatch, echo_app)
     await backend.call_tool("get_weather", {"storeId": 1})
@@ -103,7 +103,7 @@ async def test_토큰이_비어_있으면_헤더를_보내지_않는다(monkeypa
     @echo_app.get(backend.TOOL_PATHS["get_weather"])
     async def _echo(request: Request) -> dict:
         captured["authorization"] = request.headers.get("authorization")
-        return {"status": "READY", "data": {"skyText": "맑음"}}
+        return {"status": "EMPTY", "data": None}
 
     _use(monkeypatch, echo_app)
     await backend.call_tool("get_weather", {"storeId": 1})
@@ -122,7 +122,7 @@ async def test_모든_경로에_헤더를_붙인다(monkeypatch):
         @echo_app.get(path)
         async def _echo(request: Request, tool: str = tool) -> dict:
             seen[tool] = request.headers.get("authorization")
-            return {"status": "READY", "data": {"ok": 1}}
+            return {"status": "EMPTY", "data": None}
 
     _use(monkeypatch, echo_app)
     for tool in backend.TOOL_PATHS:
@@ -148,14 +148,80 @@ async def test_EMPTY_응답은_빈_결과로_처리한다(monkeypatch):
     assert await backend.call_tool("get_district_benchmark", {"storeId": 1}) == {}
 
 
-async def test_READY_응답은_data_를_반환한다(monkeypatch):
+async def test_READY_응답은_스키마_검증을_통과하면_data_를_반환한다(monkeypatch):
     ready_app = FastAPI()
+    valid_data = {
+        "basisQuarter": "2026Q2",
+        "districtAvgMonthlySalesPerCafe": 18500000,
+        "cafeStoreCount": 7,
+        "peakSalesHourBand": "11-14",
+        "peakFootTrafficHourBand": "14-17",
+    }
 
     @ready_app.get(backend.TOOL_PATHS["get_district_benchmark"])
     async def _ready() -> dict:
-        return {"status": "READY", "data": {"basisQuarter": "2026Q2", "cafeStoreCount": 7}}
+        return {"status": "READY", "data": valid_data}
 
     _use(monkeypatch, ready_app)
     data = await backend.call_tool("get_district_benchmark", {"storeId": 1})
 
-    assert data == {"basisQuarter": "2026Q2", "cafeStoreCount": 7}
+    assert data == valid_data
+
+
+async def test_READY_응답에_필수_필드가_없으면_계약_위반으로_처리한다(monkeypatch):
+    """EMPTY 로 뭉개면 "상권 데이터가 원래 없다" 와 구분되지 않는다 — 에러로 올려야 한다."""
+    broken_app = FastAPI()
+
+    @broken_app.get(backend.TOOL_PATHS["get_district_benchmark"])
+    async def _broken() -> dict:
+        return {"status": "READY", "data": {"basisQuarter": "2026Q2", "cafeStoreCount": 7}}
+
+    _use(monkeypatch, broken_app)
+    with pytest.raises(ApiError) as exc:
+        await backend.call_tool("get_district_benchmark", {"storeId": 1})
+
+    assert exc.value.status == 502
+    assert exc.value.code == "BACKEND_CONTRACT_ERROR"
+
+
+async def test_status_가_없으면_계약_위반으로_처리한다(monkeypatch):
+    weird_app = FastAPI()
+
+    @weird_app.get(backend.TOOL_PATHS["get_weather"])
+    async def _weird() -> dict:
+        return {"data": {"skyText": "맑음"}}
+
+    _use(monkeypatch, weird_app)
+    with pytest.raises(ApiError) as exc:
+        await backend.call_tool("get_weather", {"storeId": 1})
+
+    assert exc.value.code == "BACKEND_CONTRACT_ERROR"
+
+
+async def test_status_가_READY_EMPTY_가_아니면_계약_위반으로_처리한다(monkeypatch):
+    weird_app = FastAPI()
+
+    @weird_app.get(backend.TOOL_PATHS["get_weather"])
+    async def _weird() -> dict:
+        return {"status": "PROCESSING", "data": None}
+
+    _use(monkeypatch, weird_app)
+    with pytest.raises(ApiError) as exc:
+        await backend.call_tool("get_weather", {"storeId": 1})
+
+    assert exc.value.code == "BACKEND_CONTRACT_ERROR"
+
+
+async def test_상태_필드가_없는_나머지_5종은_검증하지_않는다(monkeypatch):
+    """summary 등 5종은 status 래퍼가 없는 기존 {message,data} 계약이다 — 검증 대상이
+    아니므로 data 모양이 비어 있어도 그대로 통과한다."""
+    plain_app = FastAPI()
+
+    @plain_app.get(backend.TOOL_PATHS["get_sales_summary"])
+    async def _plain() -> dict:
+        return {"message": "조회에 성공했습니다.", "data": {"anything": 1}}
+
+    _use(monkeypatch, plain_app)
+    data = await backend.call_tool("get_sales_summary", {"storeId": 1, "period": "TODAY"})
+
+    assert data == {"anything": 1}

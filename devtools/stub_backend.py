@@ -10,7 +10,7 @@
 import uvicorn
 from fastapi import FastAPI
 
-from app.clients.backend import TOOL_PATHS
+from app.clients.backend import CHAT_LOOKUP_SCHEMAS, TOOL_PATHS
 
 RESPONSES = {
     "get_sales_summary": {
@@ -76,9 +76,18 @@ app = FastAPI(title="스텁 BE 분석 모듈")
 
 
 def _register(tool: str, path: str) -> None:
-    @app.get(path, name=tool)
-    async def _handler() -> dict:
-        return {"message": "조회에 성공했습니다.", "data": RESPONSES[tool]}
+    # 날씨·상권 2종만 BE 가 실제로 쓰는 ChatLookupResponse<T> 모양
+    # ({"status":"READY","data":...})으로 감싼다 — 나머지는 기존 {message,data} 그대로다.
+    if tool in CHAT_LOOKUP_SCHEMAS:
+
+        @app.get(path, name=tool)
+        async def _handler() -> dict:
+            return {"status": "READY", "data": RESPONSES[tool]}
+    else:
+
+        @app.get(path, name=tool)
+        async def _handler() -> dict:
+            return {"message": "조회에 성공했습니다.", "data": RESPONSES[tool]}
 
 
 _missing = set(TOOL_PATHS) - set(RESPONSES)

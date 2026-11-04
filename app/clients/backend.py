@@ -1,8 +1,14 @@
+import logging
+
 import httpx
+from pydantic import ValidationError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from app.core.config import settings
 from app.core.errors import ApiError
+from app.schemas.common import DistrictBenchmark, WeatherContext
+
+logger = logging.getLogger(__name__)
 
 # docs/api정의서.md 확정 반영 (2026-09-16), 순이익 추가(2026-10-16, Issue #170).
 #
@@ -21,6 +27,14 @@ TOOL_PATHS = {
     "get_profit": "/internal/v2/sales/profit-analyses",
     "get_weather": "/internal/v2/sales/weather",
     "get_district_benchmark": "/internal/v2/sales/district-benchmark",
+}
+
+# 날씨·상권 2종만 BE가 ChatLookupResponse<T>(status: READY|EMPTY, data) 로 감싸 응답한다
+# (KTB4-7th-BE com.memme.dto.chat). 나머지 5종은 status 래퍼가 없는 기존 {message,data}
+# 계약이라 이 표에 없는 툴은 검증하지 않는다(2026-11-04, Issue #269).
+CHAT_LOOKUP_SCHEMAS = {
+    "get_weather": WeatherContext,
+    "get_district_benchmark": DistrictBenchmark,
 }
 
 
@@ -75,9 +89,30 @@ async def call_tool(tool: str, params: dict) -> dict:
     if res.status_code >= 400:
         raise ApiError(502, "BACKEND_ERROR", f"{tool} 요청이 거부되었습니다({res.status_code}).")
 
-    # status=EMPTY 는 오류가 아니라 "조회할 데이터가 없음" 이다(2026-10-19 BE 계약, PR #506).
-    # BE 가 `{"status":"EMPTY","data":null}` 로 보내는데, data 키가 있고 값만 null 이라
-    # .get("data", {}) 의 기본값이 쓰이지 않고 None 이 그대로 나간다 — chat/graph.py 의
-    # result.get(...) 에서 AttributeError 로 터진다. 상권은 서울 외 매장·행정동 코드 누락·
-    # 카페 3곳 미만이 전부 EMPTY 라 예외 경로가 아니다. 404 와 같은 자리에서 빈 값으로 둔다.
-    return res.json().get("data") or {}
+    body = res.json()
+
+    schema = CHAT_LOOKUP_SCHEMAS.get(tool)
+    if schema is not None:
+        # status=EMPTY 는 오류가 아니라 "조회할 데이터가 없음" 이다(2026-10-19 BE 계약,
+        # PR #506). READY인데 data가 스키마를 통과하지 못하거나 status 자체가 없거나
+        # READY/EMPTY 가 아니면, EMPTY 로 뭉개지 않고 계약 위반으로 구분한다 — 그래야
+        # "데이터가 원래 없음"과 "응답이 깨짐"이 섞이지 않는다(2026-11-04, Issue #269).
+        status = body.get("status")
+        if status == "EMPTY":
+            return {}
+        if status != "READY":
+            logger.warning("%s 응답 status 가 올바르지 않습니다: %r", tool, status)
+            raise ApiError(502, "BACKEND_CONTRACT_ERROR", f"{tool} 응답 형식이 올바르지 않습니다.")
+        try:
+            return schema.model_validate(body.get("data")).model_dump()
+        except ValidationError as exc:
+            logger.warning("%s READY 응답이 계약과 다릅니다: %s", tool, exc)
+            raise ApiError(
+                502, "BACKEND_CONTRACT_ERROR", f"{tool} 응답이 계약과 다릅니다."
+            ) from exc
+
+    # 나머지 5종은 status 래퍼가 없는 {message,data} 계약이다. data 키가 있고 값만
+    # null 인 응답(EMPTY)에서 .get("data", {}) 기본값이 안 쓰여 None 이 그대로 나가면
+    # chat/graph.py 의 result.get(...) 에서 AttributeError 로 터진다 — 404 와 같은 자리에서
+    # 빈 값으로 둔다.
+    return body.get("data") or {}
