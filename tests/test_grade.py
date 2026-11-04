@@ -433,11 +433,22 @@ def test_채점기의_밴드_포맷_게이트가_서비스와_같다():
         {},
         {"peakSalesHourBand": "14-17", "peakFootTrafficHourBand": "11-14"},
         {"peakSalesHourBand": "14시-17시", "peakFootTrafficHourBand": "11-14"},
+        # peakFootTrafficHourBand 가 깨지거나 없어도(2026-11-03: 검증 대상에서
+        # 뺐다) 매출 밴드만 멀쩩하면 게이트는 통과해야 한다.
         {"peakSalesHourBand": "14-17", "peakFootTrafficHourBand": ""},
-        {"peakSalesHourBand": "14-17"},  # peakFootTrafficHourBand 자체가 없음
+        {"peakSalesHourBand": "14-17"},
     ]
     for district in cases:
         assert grade._band_gate(district) == insight_focus._band_gate(district)
+
+
+def test_유동인구_밴드가_깨져도_밴드_게이트는_매출_밴드만으로_통과한다():
+    """2026-11-03: peakFootTrafficHourBand 는 문장에서 안 쓰므로 포맷이 깨져도
+    매출 밴드 게이트는 영향받지 않아야 한다."""
+    district = {"peakSalesHourBand": "14-17", "peakFootTrafficHourBand": "11시-14시"}
+
+    assert grade._band_gate(district) is True
+    assert insight_focus._band_gate(district) is True
 
 
 def test_채점기의_비교_방향이_서비스와_같다():
@@ -446,65 +457,6 @@ def test_채점기의_비교_방향이_서비스와_같다():
         assert grade._comparison(total_sales, district_avg) == insight_focus.district_comparison(
             total_sales, district_avg
         )
-
-
-def test_채점기의_매장_피크_시간이_서비스와_같다():
-    """app 을 import 하지 않으려고 복사해 둔 함수다(devtools/grade.py::_store_peak_hour
-    참고) — parity 테스트가 없으면 어긋나도 아무도 못 잡는다(#209 리뷰 Important #3).
-
-    2026-10-22(#209 최종 리뷰 Important #5): dayType 별로 따로 계산하도록 바뀌어
-    day_type 인자가 추가됐다 — 평일·주말이 섞인 케이스를 넣어 섞이지 않는지도 본다.
-    """
-    cases: list[tuple[list[dict], str]] = [
-        ([], "WEEKDAY"),
-        ([{"dayType": "WEEKDAY", "hour": 9, "menuSales": 0, "orderCount": 0}], "WEEKDAY"),
-        (
-            [
-                {"dayType": "WEEKDAY", "hour": 9, "menuSales": 100, "orderCount": 10},
-                {"dayType": "WEEKDAY", "hour": 14, "menuSales": 100, "orderCount": 20},
-            ],
-            "WEEKDAY",
-        ),
-        (
-            [
-                {"dayType": "WEEKDAY", "hour": 9, "menuSales": 50, "orderCount": 5},
-                {"dayType": "WEEKEND", "hour": 14, "menuSales": 200, "orderCount": 30},
-                {"dayType": "WEEKEND", "hour": 20, "menuSales": 10, "orderCount": 2},
-            ],
-            "WEEKEND",
-        ),
-    ]
-    for points, day_type in cases:
-        assert grade._store_peak_hour(points, day_type) == insight_focus._store_peak_hour(
-            points, day_type
-        )
-
-
-def test_채점기의_밴드_경계가_서비스와_같다():
-    """`_in_band`(`start <= hour < end`) 의 `<` vs `<=` 경계 하나가 SAME/DIFFERENT 를
-    바로 뒤집는다 — 경계값(start·end)을 꼭 넣어 대조한다(#209 리뷰 Important #3)."""
-    cases = [(14, "14-17"), (17, "14-17"), (13, "14-17"), (16, "14-17")]
-    for hour, band in cases:
-        assert grade._in_band(hour, band) == insight_focus._in_band(hour, band)
-
-
-def test_채점기의_밴드_포함_여부가_서비스와_같다():
-    """app::_band_included 와 같은 로직이어야 한다 — 어긋나면 한쪽은 밴드를
-    줬는데 다른 쪽은 "안 언급했다"고 결함으로 오판한다."""
-    cases: list[tuple[list[dict], str]] = [
-        ([{"dayType": "WEEKDAY", "hour": 14, "menuSales": 500000, "orderCount": 60}], "14-17"),
-        ([{"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60}], "14-17"),
-        (
-            [
-                {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
-                {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
-            ],
-            "14-17",
-        ),
-        ([{"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0}], "14-17"),
-    ]
-    for points, band in cases:
-        assert grade._band_expected(points, band) == insight_focus._band_included(points, band)
 
 
 def test_매출요약이_선정되면_선정률이_참이다():
@@ -603,202 +555,33 @@ def test_매출요약이_선정_안_되면_상권_평균매출_반영은_측정_
     assert result["상권_평균매출_반영"] is None
 
 
-def test_두_밴드_모두_정확히_인용하면_반영으로_통과한다():
-    """우리 매장 피크(14시)는 peakSalesHourBand(14-17) 안(SAME), peakFootTrafficHourBand
-    (11-14) 밖(DIFFERENT)이다. 한 문장에 두 비교를 같이 담는다 — hourlySales candidate가
-    둘을 같은 문장에 묶어 넘기기 때문이다(재검토로 "둘 다 요구"로 되돌림, 2026-10-21(6))."""
-    result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지만, "
-        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 다른 시간대입니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is True
-
-
-def test_한쪽_밴드만_설명하면_걸린다():
-    """매출 피크만 설명하고 유동인구 피크를 빠뜨렸다 — 번들로 받은 정보 중 일부를
-    누락한 진짜 결함이다. "문장마다 근거 하나" 원칙은 축 사이의 얘기라 여기엔
-    안 걸린다(같은 hourlySales 축 안의 번들)."""
+def test_매출_밴드를_정확히_인용하면_반영으로_통과한다():
+    """비교 없이 사실로만 전달하므로(2026-10-27), 매출 밴드 숫자가 본문에
+    있으면 통과한다 — 겹침/다름 판정은 없다. 유동인구 밴드는 2026-11-03 부터
+    문장에서 아예 빠지므로 언급을 요구하지 않는다."""
     result = _district_insight("오후 2시(14시)부터 17시까지 매출이 가장 높습니다.")
 
-    assert result["상권_피크밴드_반영"] is False
+    assert result["상권_피크밴드_반영"] is True
 
 
-def test_둘_다_설명해도_한쪽_방향이_틀리면_걸린다():
-    """실제로는 매출 피크(SAME)·유동인구 피크(DIFFERENT)인데 문장은 반대로 말했다."""
+def test_주문_수량_숫자가_밴드_숫자와_substring으로_오매칭되지_않는다():
+    """주문 "114건"의 "14"가 매출 밴드("14-17")의 숫자 "14"와 생문자열
+    substring으로 오매칭되면 안 된다(#209 최종 리뷰 deferred #4 연장). 토큰
+    단위 대조(_numbers_in)로 "114"는 "14"와 다른 숫자로 구분된다."""
     result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지 않고, "
-        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와 일치합니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is False
-
-
-def test_평일_주말_피크가_같은_방향이면_방향_반전을_여전히_잡는다():
-    """평일(14시)·주말(16시) 둘 다 매출 밴드(14-17) 안(SAME)이라 방향이 하나로
-    모인다(#209 최종 리뷰 Important #5) — 이때는 기존처럼 반전을 잡아야 한다."""
-    metrics = {
-        **_DISTRICT_METRICS,
-        "hourlySales": [
-            {"dayType": "WEEKDAY", "hour": 14, "menuSales": 500000, "orderCount": 60},
-            {"dayType": "WEEKEND", "hour": 16, "menuSales": 700000, "orderCount": 70},
-        ],
-    }
-    result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지 않고, "
-        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와 일치합니다.",
-        metrics=metrics,
-    )
-
-    assert result["상권_피크밴드_반영"] is False
-
-
-def test_평일_주말_피크_방향이_다르면_본문만으로_못_갈라_판정을_보류한다():
-    """평일 피크(11시)는 매출 밴드(14-17) 밖(DIFFERENT), 주말 피크(15시)는 안(SAME)
-    이다 — 문장이 어느 dayType 을 말하는지 본문 텍스트만으로 구분할 근거가 없으니,
-    어느 쪽 어휘를 써도 결함으로 몰지 않는다(#209 최종 리뷰 Important #5). 밴드
-    인용 자체는 둘 다 돼 있으니 전체 판정은 True 로 통과한다."""
-    metrics = {
-        **_DISTRICT_METRICS,
-        "hourlySales": [
-            {"dayType": "WEEKDAY", "hour": 11, "menuSales": 500000, "orderCount": 60},
-            {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
-        ],
-    }
-    result = _district_insight(
-        "매출이 가장 높은 시간대는 상권 매출 피크 14-17시와 겹치고, "
-        "상권 유동인구 피크 11-14시와는 겹치지 않습니다.",
-        metrics=metrics,
+        "오후 2시(14시)부터 17시까지 매출이 가장 높습니다. 아메리카노가 114건 팔렸습니다."
     )
 
     assert result["상권_피크밴드_반영"] is True
 
 
-def test_밴드를_리터럴_형식으로_인용해도_공유_숫자에_오염되지_않는다():
-    """peakSalesHourBand("14-17")의 시작과 peakFootTrafficHourBand("11-14")의
-    끝이 같은 "14"다 — anchor로 밴드 시작 시각 하나만 쓰면 서로의 반대 어휘에
-    오염된다(#209 최종 리뷰 Important #1). 매출 피크(SAME)·유동인구 피크
-    (DIFFERENT) 둘 다 올바른 방향인데, "14-17" 리터럴 안의 "14"가 유동인구
-    쪽 "겹치지 않습니다"(DIFFERENT 어휘)와 같은 절에 있어 옛 코드는 매출
-    SAME 판정을 거짓으로 뒤집었다."""
-    result = _district_insight(
-        "매출 피크 14-17시와 겹칩니다. 유동인구 피크 11-14시와는 겹치지 않습니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is True
-
-
-def test_주문_수량_숫자가_밴드_anchor와_substring으로_오매칭되지_않는다():
-    """주문 "114건"의 "11"이 유동인구 밴드("11-14") anchor "11"과 생문자열
-    substring으로 오매칭되면, 메뉴 얘기만 하는 무관한 절이 반영 판정을 거짓으로
-    뒤집는다(#209 최종 리뷰 deferred #4). 토큰 단위 대조(_numbers_in)로 고치면
-    "114"는 "11"과 다른 숫자로 구분돼 오염되지 않는다."""
-    result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지만, "
-        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 다른 시간대입니다. "
-        "아메리카노가 114건 팔려 다른 음료와 매출이 같은 시간대에 겹칩니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is True
-
-
-def test_겹치는_시간대입니다_같은_어간형_반전도_잡는다():
-    """프롬프트는 "겹침"/"안 겹침" 어간형으로 가르치는데(app/prompts/insight.py),
-    옛 어휘 목록("겹칩니다"·"일치합니다")은 완전 활용형만 봐서 "겹치는
-    시간대입니다" 같은 변형은 실제 방향과 반대로 써도 못 잡았다(#209 최종
-    리뷰 deferred #6). 매출(SAME)은 올바르게, 유동인구(실제 DIFFERENT)는
-    반전해서 "겹치는 시간대"라고 틀리게 썼다."""
-    result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치는 "
-        "시간대이고, 오전 11시부터 오후 2시까지인 상권 유동인구 피크와도 겹치는 "
-        "시간대입니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is False
-
-
-def test_겹치지_않습니다_가_SAME_어간과_혼동되지_않는다():
-    """ "겹치지 않습니다"(DIFFERENT 정답 문구)는 SAME 어간 "겹치"를 그대로
-    포함한다 — 단순 substring 대조면 SAME 으로도 오매칭된다. "지 않"이
-    뒤따르면 SAME 이 아니라고 정규식 음성 lookahead 로 미리 걸러낸다(#209
-    최종 리뷰 deferred #6, 단순 어간화의 역효과). 매출은 실제 SAME 인데
-    "겹치지 않습니다"로 반전해서 틀리게 썼으니 결함(False)이어야 한다."""
-    result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지 "
-        "않습니다. 오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 겹치지 "
-        "않습니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is False
-
-
-def test_동일한_시간대라고_올바르게_쓰면_통과한다():
-    """프롬프트가 SAME을 "겹침" 대신 "동일함"으로 가르치게 바뀌었다(2026-10-24,
-    사용자 요청). 매출(SAME)을 "동일한 시간대"로, 유동인구(DIFFERENT)를
-    "다른 시간대"로 올바르게 쓰면 반영으로 통과해야 한다."""
-    result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 동일한 "
-        "시간대이고, 오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 다른 "
-        "시간대입니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is True
-
-
-def test_동일한_시간대라고_방향을_반전해서_쓰면_걸린다():
-    """유동인구는 실제 DIFFERENT 인데 "동일한 시간대"로 반전해서 썼으니
-    결함(False)이어야 한다 — "동일"을 SAME 어휘로 인식 못 하면 이 반전을
-    못 잡는다."""
-    result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 동일한 "
-        "시간대이고, 오전 11시부터 오후 2시까지인 상권 유동인구 피크와도 동일한 "
-        "시간대입니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is False
-
-
-def test_두_밴드_모두_SAME이라_서비스가_안_줬으면_안_언급해도_결함이_아니다():
-    """두 밴드 다 우리 매장 피크(14시)와 겹쳐(SAME) 서비스가 애초에 안 줬을
-    상권이다 — 모델이 안 언급해도 결함(False)이 아니라 측정 대상 제외(None)다."""
-    metrics = {
-        **_DISTRICT_METRICS,
-        "districtBenchmark": {
-            **_DISTRICT_METRICS["districtBenchmark"],
-            "peakFootTrafficHourBand": "13-16",  # 14시가 이 밴드에도 들어 SAME
-        },
-    }
-    result = _district_insight("총 매출은 전기 대비 4.2% 증가했습니다.", metrics=metrics)
-
-    assert result["상권_피크밴드_반영"] is None
-
-
-def test_한쪽_밴드만_DIFFERENT로_주어지면_그것만_언급해도_통과한다():
-    """peakSalesHourBand(14-17)는 우리 매장 피크(14시)와 겹쳐(SAME) 서비스가 안
-    줄 밴드고, peakFootTrafficHourBand(11-14)는 안 겹쳐(DIFFERENT) 줄 밴드다 —
-    안 준 쪽은 언급 안 해도 되고, 준 쪽만 올바르게 언급하면 반영으로 통과해야 한다."""
-    result = _district_insight(
-        "오전 11시부터 오후 2시(14시)까지인 상권 유동인구 피크와는 "
-        "다른 시간대에 매출이 가장 높습니다."
-    )
-
-    assert result["상권_피크밴드_반영"] is True
-
-
-def test_선정된_hourlySales가_두_밴드를_모두_누락하면_결함으로_잡는다():
-    """매장 피크(15시)가 두 밴드(11-14, 17-21) 모두와 달라(DIFFERENT) 서비스가
-    둘 다 줬을 텐데, 모델이 둘 다 언급 안 하면 결함(False)이어야 한다 —
-    hourlySales 자체는 선정됐으니(_axis_selected) "선정 안 됨"(None)으로
-    봐주면 안 된다(최종 리뷰 Important #1 — 기존엔 밴드 두 개 다 언급 안 되면
-    축 선정 여부와 무관하게 무조건 None을 돌렸다)."""
+def test_선정된_hourlySales가_매출_밴드를_누락하면_결함으로_잡는다():
+    """hourlySales 자체는 선정됐는데(_axis_selected) 매출 밴드 숫자를
+    언급하지 않으면 결함(False)이어야 한다 — "선정 안 됨"(None)으로
+    봐주면 안 된다(최종 리뷰 Important #1)."""
     metrics = {
         **_DISTRICT_METRICS,
         "hourlySales": [{"dayType": "WEEKDAY", "hour": 15, "menuSales": 500000, "orderCount": 60}],
-        "districtBenchmark": {
-            **_DISTRICT_METRICS["districtBenchmark"],
-            "peakSalesHourBand": "11-14",
-            "peakFootTrafficHourBand": "17-21",
-        },
     }
     result = _district_insight("오후 3시(15시)에 매출이 가장 많습니다.", metrics=metrics)
 
@@ -823,31 +606,11 @@ def test_밴드_포맷이_깨지면_상권_피크밴드_반영은_측정_대상�
         "districtBenchmark": {**_DISTRICT_METRICS["districtBenchmark"], "peakSalesHourBand": "14"},
     }
     result = _district_insight(
-        "오후 2시(14시)부터 17시까지 매출이 가장 높아 상권 매출 피크와 겹치지만, "
-        "오전 11시부터 오후 2시까지인 상권 유동인구 피크와는 다른 시간대입니다.",
+        "오후 2시(14시)부터 17시까지 매출이 가장 높습니다.",
         metrics=metrics,
     )
 
     assert result["상권_피크밴드_반영"] is None
-
-
-def test_우리_매장_피크를_계산할_수_없으면_밴드_인용만으로도_통과한다():
-    """비교 필드(vsDistrictSalesPeakWeekday 등)가 없을 상황이다 — 평일·주말 둘 다
-    영업 중인 행이 없으면(_store_peak_hour 가 둘 다 None) 방향을 요구하지 않고
-    둘 다 인용됐는지만 본다(별도 검토, 2026-10-21(5))."""
-    metrics = {
-        **_DISTRICT_METRICS,
-        "hourlySales": [{"dayType": "WEEKDAY", "hour": 3, "menuSales": 0, "orderCount": 0}],
-    }
-
-    assert grade._store_peak_hour(metrics["hourlySales"], "WEEKDAY") is None
-    assert grade._store_peak_hour(metrics["hourlySales"], "WEEKEND") is None
-    result = _district_insight(
-        "상권의 매출은 14시부터 17시까지, 유동인구는 11시부터 14시까지가 피크입니다.",
-        metrics=metrics,
-    )
-
-    assert result["상권_피크밴드_반영"] is True
 
 
 def test_시간대축이_선정되면_hourlySales_선정률이_참이다():
