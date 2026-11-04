@@ -70,13 +70,6 @@ RESPONSES = {
         "peakSalesHourBand": "11-14",
         "peakFootTrafficHourBand": "14-17",
     },
-    # 아래 1종은 TOOL_PATHS 에서 주석 처리돼 있어 지금은 라우트로 등록되지 않는다.
-    # v1 MVP 포함으로 결정되면 TOOL_PATHS 주석만 풀면 바로 살아난다.
-    "get_review_summary": {
-        "summary": "커피 맛과 친절한 응대에 대한 긍정 반응이 많습니다.",
-        "sentiment": {"positive": 0.82, "neutral": 0.14, "negative": 0.04},
-        "keywords": ["커피", "친절", "대기시간"],
-    },
 }
 
 app = FastAPI(title="스텁 BE 분석 모듈")
