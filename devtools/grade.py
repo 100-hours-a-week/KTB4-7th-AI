@@ -695,6 +695,34 @@ def _quantity_numbers(metrics) -> set[str]:
     return out
 
 
+# hourlyProfile[].amount 는 분석 기간 동안 그 요일 유형·시간대에 발생한 **합계**다
+# (2026-11-05 BE 확인). 하루치가 아니라서 그대로 인용하면 점주가 읽는 크기가 기간 일수
+# 만큼 커진다 — 운영 데이터(83 일)면 84 배다. 지금은 프롬프트가 이걸 말해주지 않으므로
+# (app/prompts/solution.py 는 제나 영역) 규칙 위반이 아니라 **측정값**으로 둔다. 쓰지
+# 말라고 들은 적 없는 걸 결함으로 세면 전항목(출하 판정)이 틀린 이유로 떨어진다.
+# 프롬프트에 규칙이 들어오면 `_없음` 쪽으로 뒤집고 MEASURE_ONLY 에서 뺀다.
+_PERIOD_MARK = re.compile(
+    r"분석\s*기간|집계\s*기간|기간\s*(?:동안|합계|전체|누적)|누적|\d+\s*일\s*(?:간|동안|치)"
+)
+
+
+def _hourly_amounts(metrics) -> set[str]:
+    """hourlyProfile[].amount 에만 있는 금액.
+
+    다른 축에도 같은 값이 있으면 뺀다 — 그 축을 근거로 쓴 카드를 오탐한다.
+    """
+    if not isinstance(metrics, dict):
+        return set()
+    points = metrics.get("hourlyProfile") or []
+    mine = {
+        str(point["amount"])
+        for point in points
+        if isinstance(point, dict) and isinstance(point.get("amount"), int)
+    }
+    others = {key: value for key, value in metrics.items() if key != "hourlyProfile"}
+    return mine - _metric_numbers(others)
+
+
 # 지표 비율을 백분율로 적을 때 한 자리까지 반올림하는 건 환각이 아니다 — 프롬프트가
 # 0.0885 → 8.85% 로 바꿔 쓰라고 하고, _metric_numbers 가 정수 반올림("9")까지는 이미
 # 허용 집합에 넣는다. 한 자리("8.9")가 비면 반올림을 날조로 오판한다.
@@ -939,6 +967,12 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 
     result["기간_날짜_명시"] = not any(_VAGUE_PERIOD.search(t) for t in visible + evidences)
 
+    # 측정값(MEASURE_ONLY). True = 기간 합계인 시간대 금액을 기간 표시 없이 썼다.
+    hourly_amounts = _hourly_amounts(metrics)
+    result["시간대_금액_기간없이_인용됨"] = any(
+        (_numbers_in(text) & hourly_amounts) and not _PERIOD_MARK.search(text) for text in visible
+    )
+
     result["cards"] = cards
     return result
 
@@ -949,9 +983,15 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 # 그대로 넣으면 상시 0% 가 나온다(#209 리뷰 Important #2, #178 카드_개수_일치 사고와
 # 같은 모양). per_key 표에는 그대로 찍고 전항목에서만 뺀다.
 # 상권_분기_날조_없음은 넣지 않는다 — 인용했는데 값이 틀린 건 진짜 결함이다.
+# 시간대_금액_기간없이_인용됨도 측정값이다 — 이유는 _hourly_amounts 위 주석에 있다.
 # 키가 태어나는 곳에 둔다(원래 devtools/bench.py 에 있었다) — 등록을 잊었는지는
 # tests/test_bench.py 가 grade_insight 결과와 대조해 잡는다.
-MEASURE_ONLY = {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}
+MEASURE_ONLY = {
+    "salesSummary_선정률",
+    "hourlySales_선정률",
+    "상권_분기_인용됨",
+    "시간대_금액_기간없이_인용됨",
+}
 
 
 def grade_insight(raw: str, metrics: dict) -> dict:

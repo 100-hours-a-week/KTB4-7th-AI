@@ -1229,3 +1229,42 @@ def test_발주_재고_조언은_통과한다():
     """점주가 혼자 할 수 있는 일이다 — 막으려는 건 사람을 쓰라는 말뿐이다."""
     result = _three_cards(detail="16시에 원두와 우유 발주를 받아 두세요.\n재고를 먼저 확인하세요.")
     assert result["인력_조언_없음"] is True
+
+
+# ── 시간대 금액은 기간 합계다(2026-11-05 BE 확인) ─────────────────
+
+
+def test_시간대_금액을_기간_표시_없이_쓰면_측정에_잡힌다():
+    """hourlyProfile.amount 는 분석 기간 합계다 — 점주는 이 숫자를 하루치로 읽는다.
+
+    `_card` 의 기본 summaryText("평일 14시 매출이 30,000원으로...")가 바로 그 모양이다.
+    """
+    assert _three_cards()["시간대_금액_기간없이_인용됨"] is True
+
+
+def test_기간을_밝히면_측정에서_빠진다():
+    """합계라고 말하면 틀린 문장이 아니다 — 막으려는 건 하루치처럼 읽히는 쪽이다."""
+    result = _three_cards(summary="분석 기간 동안 평일 14시 매출은 합계 30,000원입니다.")
+
+    assert result["시간대_금액_기간없이_인용됨"] is False
+
+
+def test_금액을_안_쓰고_배수로_말하면_측정에서_빠진다():
+    """프롬프트가 허용하는 대안이다 — hourlyPeakRatio 는 비율이라 기간에 영향받지 않는다."""
+    result = _three_cards(
+        summary="평일 14시가 하루 중 가장 비어 있습니다.",
+        detail="14시까지 재고 점검을 끝내 두세요.\n진열도 이때 바꾸세요.",
+        evidence="평일 lowHour 14시",
+    )
+
+    assert result["시간대_금액_기간없이_인용됨"] is False
+
+
+def test_다른_축에도_있는_금액은_시간대_탓으로_세지_않는다():
+    """같은 값이 salesSummary 에도 있으면 어느 축을 인용한 건지 알 수 없다 — 오탐이 된다."""
+    metrics = {
+        "hourlyProfile": [{"dayType": "WEEKDAY", "hour": 14, "amount": 30000}],
+        "salesSummary": {"netSales": 30000, "vsPrevPeriod": -0.07},
+    }
+
+    assert grade._hourly_amounts(metrics) == set()

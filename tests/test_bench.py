@@ -176,4 +176,9 @@ def test_선정률_측정값이_전부_MEASURE_ONLY에_등록돼_있다():
 
     assert rates, "선정률 키가 하나도 없다 — 대조가 무의미하다"
     assert rates <= MEASURE_ONLY
-    assert MEASURE_ONLY == {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}
+    assert MEASURE_ONLY == {
+        "salesSummary_선정률",
+        "hourlySales_선정률",
+        "상권_분기_인용됨",
+        "시간대_금액_기간없이_인용됨",
+    }
