@@ -1268,3 +1268,16 @@ def test_다른_축에도_있는_금액은_시간대_탓으로_세지_않는다(
     }
 
     assert grade._hourly_amounts(metrics) == set()
+
+
+def test_과거_변화를_약속으로_세지_않는다():
+    """ "디저트는 8% 증가했으나" 는 지표에 있는 사실이다 — 비교 기준 단어가 없어도 약속이 아니다.
+
+    2026-11-06 측정에서 효과_수치_약속_없음 위반 11 건이 전부 이 오탐이었다.
+    """
+    key = "효과_수치_약속_없음"
+    assert _three_cards(summary="디저트는 8% 증가했으나 비중이 낮습니다.")[key]
+    assert _three_cards(summary="커피 비중이 1% 증가한 만큼 원두를 점검하세요.")[key]
+    # 현재·미래형은 그대로 걸린다(위 test_효과를_수치로_약속하면_걸린다 와 같은 규칙).
+    assert _three_cards(detail="할인하세요.\n매출이 15% 증가합니다.")[key] is False
+    assert _three_cards(detail="할인하세요.\n매출을 10% 개선할 수 있습니다.")[key] is False

@@ -226,10 +226,22 @@ ARMS: dict[str, tuple[str, list]] = {
     "K_예시V6": (_relaxed_template(_FREE_LENGTH), SHOTS_V6),
     # V6 + 날씨 쌍. conditionPatterns(이 매장 강수일 실측)를 쓰는 카드를 보여준다.
     "L_예시V7_날씨": (_relaxed_template(_FREE_LENGTH), SHOTS_V7),
+    # V6 를 근거만 모양으로. 2026-11-06 에 팟이 재구축되면서 창이 기본값 8,192 로
+    # 돌아왔고, 그 창에서 입력을 실측했다.
+    #
+    #   H(V5 2쌍) 7,565 → 출력 여유   627   실측 출력 500~1,000 이라 반 이상 잘린다
+    #   K(V6 2쌍) 7,105 → 출력 여유 1,087
+    #   L(V7 3쌍) 8,193+               입력만으로 창을 넘는다
+    #   J(V5 근거만) 4,507 → 3,685
+    #
+    # 팟을 다시 만들면 창이 8,192 로 돌아온다 — 규칙을 예시마다 다시 싣는 모양(H·K·L)은
+    # 그 창에서 배포할 수 없다. 근거만 모양이 배포 가능한 쪽이다. J 와 짝으로 비교한다
+    # (양쪽 다 규칙을 뺐으니 변수는 예시 내용 V5→V6 하나다).
+    "M_예시V6_근거만": (_relaxed_template(_FREE_LENGTH), SHOTS_V6),
 }
 
 # 예시 user 턴을 근거 블록만으로 줄이는 arm.
-_BLOCKS_ONLY = frozenset({"I_예시V4_근거만", "J_예시V5_근거만"})
+_BLOCKS_ONLY = frozenset({"I_예시V4_근거만", "J_예시V5_근거만", "M_예시V6_근거만"})
 
 KEYS = [
     "공허한_조언_없음",
@@ -389,8 +401,13 @@ def report(results: dict[str, list[dict]], arms: list[str]) -> None:
         passed = [
             all(
                 value
+                # `_` 로 시작하는 건 채점 항목이 아니라 서비스 동작 기록이다. `_retry` 는
+                # False 가 정상(재시도 안 했다)인데 여기서 실패로 세여서 전항목통과가
+                # 항상 0.0% 로 나왔다(2026-11-06 발견 — 11/3·11/4 보고에도 0.0% 였다).
                 for key, value in row.items()
-                if isinstance(value, bool) and key not in grade.MEASURE_ONLY
+                if isinstance(value, bool)
+                and not key.startswith("_")
+                and key not in grade.MEASURE_ONLY
             )
             for row in parsed
         ]
