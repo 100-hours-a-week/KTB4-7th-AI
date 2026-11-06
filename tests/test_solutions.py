@@ -60,7 +60,7 @@ async def _post(body: dict) -> httpx.Response:
 
 
 async def test_정상_요청이_솔루션카드를_반환한다(monkeypatch):
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         return LLM_SUCCESS
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -80,7 +80,7 @@ async def test_정상_요청이_솔루션카드를_반환한다(monkeypatch):
 
 
 async def test_evidence_없는_응답도_200이고_evidence는_null이다(monkeypatch):
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         return LLM_SUCCESS_NO_EVIDENCE
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -101,7 +101,7 @@ async def test_필수_필드가_없으면_422():
 async def test_LLM_파싱이_계속_실패하면_500_이고_1회만_재시도한다(monkeypatch):
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         return "이건 JSON이 아닙니다"
 
@@ -120,7 +120,7 @@ async def test_모델이_JSON을_코드펜스로_감싸도_파싱된다(monkeypa
     500 이 났다. 단위 테스트는 전부 순수 JSON 만 흘려서 못 잡던 구멍이다.
     """
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         return f"```json\n{LLM_SUCCESS}\n```"
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -153,7 +153,7 @@ async def test_rankNo가_겹치면_재시도한다(monkeypatch):
     """BE 의 UNIQUE (solution_bundle_id, rank_no) 를 위반해 묶음 전체가 저장되지 않는다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards((1, "A"), (1, "B"), (2, "C"))
@@ -172,7 +172,7 @@ async def test_title이_200자를_넘으면_재시도한다(monkeypatch):
     """ERD solutions.title 이 VARCHAR(200) 이라 BE INSERT 에서 터진다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards((1, "가" * 201))
@@ -194,7 +194,7 @@ async def test_카드가_3장보다_적어도_그대로_내보낸다(monkeypatch
     """
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         return _cards((1, "A"), (2, "B"))
 
@@ -208,7 +208,7 @@ async def test_카드가_3장보다_적어도_그대로_내보낸다(monkeypatch
 
 
 async def test_카드가_0장이면_500이다(monkeypatch):
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         return json.dumps({"solutionCards": []})
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -224,7 +224,9 @@ async def test_vsPrevPeriod_가_null_이어도_422가_아니다(monkeypatch):
     출시 첫날 바로 드러나는 경로다(2026-09-23 재현).
     """
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return LLM_SUCCESS
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -246,7 +248,7 @@ async def test_동형이의_문자가_섞이면_그_카드를_버린다(monkeypa
     """
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards((1, "POП 홍보물 설치"), (2, "B"), (3, "C"))
@@ -301,7 +303,7 @@ async def test_전부_배율_위반이면_2회차_프롬프트에_위반_이유�
             ensure_ascii=False,
         )
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         prompts.append(user)
         if len(prompts) == 1:
             return _raw_with_ratio()

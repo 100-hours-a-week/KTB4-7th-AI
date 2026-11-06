@@ -62,7 +62,9 @@ async def _post(body: dict) -> httpx.Response:
 
 
 async def test_정상_요청이_인사이트를_반환한다(monkeypatch):
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return LLM_SUCCESS
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -87,7 +89,9 @@ async def test_필수_필드가_없으면_422():
 async def test_LLM_파싱이_계속_실패하면_500_이고_1회만_재시도한다(monkeypatch):
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         return "이건 JSON이 아닙니다"
 
@@ -102,7 +106,9 @@ async def test_LLM_파싱이_계속_실패하면_500_이고_1회만_재시도한
 async def test_모델이_JSON을_코드펜스로_감싸도_파싱된다(monkeypatch):
     """솔루션과 같은 이유 — tests/test_solutions.py 의 같은 이름 테스트 참고."""
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return f"```json\n{LLM_SUCCESS}\n```"
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -121,7 +127,9 @@ async def test_빈_배열이면_재시도하고_그래도_비면_500이다(monke
     """`insights is not None` 으로 끊던 탓에 빈 배열이 재시도 없이 200 으로 나갔다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         return _insights()
 
@@ -137,7 +145,9 @@ async def test_maxInsightCount_를_넘으면_재시도한다(monkeypatch):
     """BE 가 3개를 요청했는데 5개가 나가면 AN-01 화면이 넘친다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _insights("1", "2", "3", "4", "5")
@@ -156,7 +166,9 @@ async def test_빈_문장이_섞이면_재시도한다(monkeypatch):
     """화면에 빈 불릿이 생긴다 — 에러가 아니라 화면이 이상해지는 방식으로 드러난다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _insights("정상 문장", "   ", "또 정상")
@@ -180,7 +192,9 @@ async def test_100자를_넘는_문장이_있으면_재시도한다(monkeypatch)
     calls = []
     긴문장 = "가" * 101
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _insights("정상 문장입니다.", 긴문장)
@@ -199,7 +213,9 @@ async def test_100자를_넘는_문장이_있으면_재시도한다(monkeypatch)
 async def test_정확히_100자는_통과한다(monkeypatch):
     """경계값. 초과만 막고 같은 건 통과해야 한다."""
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return _insights("나" * 100)
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -234,7 +250,9 @@ async def test_실패_응답에_status_FAILED_가_붙는다(monkeypatch):
     "503/504만"이라 실패를 200 으로 내리면 그 정책이 발동하지 않는다.
     """
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return "JSON 아님"
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -254,7 +272,9 @@ async def test_모델_타임아웃은_504라_BE가_재시도한다(monkeypatch):
     """
     from app.core.errors import ApiError
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         raise ApiError(504, "PROVIDER_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다.")
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -276,7 +296,9 @@ async def test_BE_응답제한_30초_안에_들어오는_타임아웃을_쓴다(
 
     seen = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         seen.append(timeout)
         return LLM_SUCCESS
 
@@ -295,7 +317,9 @@ async def test_인사이트_타임아웃은_환경변수로_조절된다(monkeyp
     monkeypatch.setattr(settings, "insight_llm_timeout_seconds", 0.5)
     seen = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         seen.append(timeout)
         return LLM_SUCCESS
 
@@ -315,7 +339,9 @@ async def test_주문이_0건이면_LLM을_부르지_않고_INSUFFICIENT_DATA(mo
     """BE 가 영업일 14일 미만은 거르지만, 그 검사를 통과하고도 지표가 빌 수 있다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         return LLM_SUCCESS
 
@@ -335,7 +361,9 @@ async def test_주문이_0건이면_LLM을_부르지_않고_INSUFFICIENT_DATA(mo
 async def test_총매출이_0원이면_INSUFFICIENT_DATA(monkeypatch):
     """ "총매출은 0원입니다" 같은 문장이 200 으로 화면까지 나가던 경로다."""
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         raise AssertionError("호출되면 안 된다")
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -352,7 +380,9 @@ async def test_상세_지표가_전부_비면_INSUFFICIENT_DATA(monkeypatch):
     그 상태로 생성하면 요약 한 줄을 돌려 쓰는데 AN-01 은 3불릿 화면이다.
     """
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         raise AssertionError("호출되면 안 된다")
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -375,7 +405,9 @@ async def test_상세_지표가_하나라도_있으면_생성한다(monkeypatch)
     2개짜리 응답을 쓴다.
     """
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return json.dumps(
             {
                 "insights": [
@@ -416,7 +448,9 @@ async def test_vsPrevPeriod_가_null_이어도_422가_아니다(monkeypatch):
     실제 오류: float_type / metrics.salesSummary.vsPrevPeriod
     """
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return LLM_SUCCESS
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -434,7 +468,9 @@ async def test_null_증감률은_프롬프트에_들어가지_않는다(monkeypa
     """
     seen = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         seen.append(user)
         return LLM_SUCCESS
 
@@ -451,7 +487,9 @@ async def test_값이_있는_증감률은_프롬프트에_남는다(monkeypatch)
     """exclude_none 이 멀쩡한 값까지 지우면 인사이트가 빈약해진다."""
     seen = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         seen.append(user)
         return LLM_SUCCESS
 
@@ -474,7 +512,9 @@ async def test_출력_상한을_전역_기본값보다_낮춘다(monkeypatch):
 
     seen = {}
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         seen["max_tokens"] = max_tokens
         return LLM_SUCCESS
 
@@ -500,7 +540,9 @@ async def test_위반으로_개수가_모자라면_재시도해서_채운다(mon
     """
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         if len(calls) == 1:
             return json.dumps(
@@ -530,7 +572,9 @@ async def test_재시도해도_여전히_모자라면_그때까지_받은_걸_�
     같이 지킨다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         if len(calls) == 1:
             return json.dumps(
@@ -564,7 +608,9 @@ async def test_재시도가_더_나쁘면_1회차를_쓴다(monkeypatch):
     ]
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         if len(calls) == 1:
             return json.dumps({"insights": first}, ensure_ascii=False)
@@ -581,7 +627,9 @@ async def test_재시도가_더_나쁘면_1회차를_쓴다(monkeypatch):
 
 
 async def test_지표에_없는_수치를_쓴_문장도_버린다(monkeypatch):
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return json.dumps(
             {
                 "insights": [
@@ -605,7 +653,9 @@ async def test_지표에_없는_백분율을_쓴_문장도_버린다(monkeypatch
     PR #249 와 동기화, app/services/solution.py::_ungrounded 참고) — 인사이트가 그
     함수를 그대로 가져다 쓰므로 같은 구멍이 있었다. 실제 vsPrevPeriod 는 0.042(4.2%)다."""
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return json.dumps(
             {
                 "insights": [
@@ -627,7 +677,9 @@ async def test_지표에_없는_백분율을_쓴_문장도_버린다(monkeypatch
 async def test_전부_위반이면_재시도하고_그래도_안_되면_500이다(monkeypatch):
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(1)
         return json.dumps({"insights": ["총 매출은 약 790만원입니다."]}, ensure_ascii=False)
 
@@ -641,7 +693,9 @@ async def test_전부_위반이면_재시도하고_그래도_안_되면_500이�
 async def test_정상_문장은_그대로_통과한다(monkeypatch):
     """넓게 막다가 멀쩡한 문장을 버리면 인사이트가 비어 보인다."""
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return LLM_SUCCESS
 
     monkeypatch.setattr(llm, "complete", fake_complete)

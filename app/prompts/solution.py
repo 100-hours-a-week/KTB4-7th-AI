@@ -233,6 +233,15 @@ evidence 는 화면에는 보이지 않고 챗봇 컨텍스트·저장용으로�
 {{"solutionCards":[{{"rankNo":1,"title":"...","summaryText":"...","detailText":"...","evidence":"..."}}]}}"""
 
 
+def focus_blocks(focus: list[dict]) -> str:
+    """카드별 근거 지표 블록. 실제 호출과 few-shot 예시가 같은 글자를 쓰도록 한 군데서 만든다
+    (2026-11-06 — app/prompts/solution_shots.py 가 같이 쓴다)."""
+    return "\n\n".join(
+        f"[카드 {index} 근거]\n{json.dumps(item, ensure_ascii=False)}"
+        for index, item in enumerate(focus, start=1)
+    )
+
+
 def build(
     focus: list[dict],
     target_date: str,
@@ -246,13 +255,9 @@ def build(
     2026-10-15 추가 — BE 와 필드명 확정 전까지 AI 쪽에서 임시로 쓰는 이름). None 이면
     BE 가 아직 안 보내는 것이므로 기간을 언급하지 말라고 SYSTEM 이 따로 지시한다.
     """
-    blocks = "\n\n".join(
-        f"[카드 {index} 근거]\n{json.dumps(item, ensure_ascii=False)}"
-        for index, item in enumerate(focus, start=1)
-    )
     period_line = f"집계 기간은 {period}입니다.\n" if period else ""
     return _USER.format(
-        focus_blocks=blocks,
+        focus_blocks=focus_blocks(focus),
         card_count=len(focus),
         target_date=target_date,
         day_of_week=day_of_week,

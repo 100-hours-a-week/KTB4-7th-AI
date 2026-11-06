@@ -47,6 +47,8 @@ V3 은 그래서 **categoryBreakdown 카드 한 장만** 바꾼다. 나머지 �
 "비중이 올랐으니 더 밀어라"(obvious) 밖에 없었다.
 """
 
+from app.prompts.solution_shots import SHOTS as APP_SHOTS
+
 SHOT1_METRICS = {
     "salesSummary": {"netSales": 2104000, "vsPrevPeriod": 0.18},
     "predictedSalesToday": 2480000,
@@ -425,153 +427,11 @@ SHOT2_OUTPUT_V5 = {
 SHOTS_V5 = [(SHOT1_METRICS_V3, SHOT1_OUTPUT_V4), (SHOT2_METRICS_V5, SHOT2_OUTPUT_V5)]
 
 # ── V6 (2026-11-04) ─────────────────────────────────────────────────
-# V5 예시 6장을 판정해 보니 제대로 일하는 게 1장(예시2 시간대)뿐이었고, 나머지는 셋 중
-# 하나였다.
-#
-#   ① judge 가 obvious 예시로 직접 적어둔 문장을 쓰고 있었다
-#      — "오늘은 재료를 평소보다 넉넉하게 준비하세요" (judge.py SYSTEM 의 obvious 예시다)
-#   ② 배정된 축과 내용이 어긋났다 — 시간대 칸에 매출총액 얘기, 매출총액 칸에 시간대 얘기.
-#      프롬프트가 "각 카드는 자기 근거 지표만 쓰라" 고 금지하는 바로 그것을 시연했다.
-#   ③ **실제 입력에 없는 필드로 추론했다** — 카테고리 예시가 previousShare(이전 비중)로
-#      "비중은 올랐지만 매출은 줄었다" 를 짚는데, bench 케이스의 categoryBreakdown 은
-#      name·share·vsPrevPeriod 뿐이다. 모델이 그 추론을 재현할 수가 없다.
-#      카테고리 축 judge specific 이 0% 로 고정이던 이유다. tests/test_fewshot_shots.py
-#      가 이제 "예시 지표의 필드 ⊆ bench 케이스의 필드" 를 지킨다.
-#   ④ **시간대 금액을 하루치처럼 말했다** — hourlyProfile.amount 는 분석 기간 동안 그
-#      요일 유형·시간대에 발생한 **합계**다(2026-11-05 BE 확인). 83 일 기간이면 점주가
-#      읽는 크기가 83 배 커진다. 그래서 금액은 입에 올리지 않고, 어느 시각이 비는지와
-#      hourlyPeakRatio 의 배수만 쓴다 — 실행에 필요한 정보는 줄지 않는다("14시가 가장
-#      비니 재고 점검을 넣으세요" 에서 금액은 장식이었다). 11/4 n=15 덤프에서 시간대
-#      카드 150 장 중 117 장(78%)이 금액을 인용했고 기간을 밝힌 건 0 장이었다.
-#
-# 매출총액 축은 예시로 살리지 않는다. 가진 게 netSales(기간 합계)와 vsPrevPeriod 뿐이라
-# 나올 수 있는 말이 "줄었으면 발주 줄여라" 하나다. predictedSalesToday 와 비교해 뒤집는
-# 카드를 쓰려 했는데 **단위가 다르다** — netSales 는 기간 합계고 예측은 하루다
-# (app/schemas/common.py:26). 그 비교를 예시로 넣으면 단위 틀린 비교를 가르친다.
-# 그래서 짧고 정직한 한 문장으로 두고, 계약 문제로 따로 올린다.
-#
-# 메뉴 예시는 단일 품목·한 방향에서 **품목 차등**으로 바꾼다. V4 arm 은 메뉴 예시가
-# 아예 없는데 메뉴 축 60% 였고, V5 가 "딸기 라떼 재료를 먼저 확보해 두세요"(단일 품목)를
-# 넣자 10% 로 떨어졌다. 모델이 예시의 모양을 베껴 차등 판단을 잃었다.
-
-SHOT1_METRICS_V6 = {
-    "hourlyProfile": [
-        {"dayType": "WEEKDAY", "hour": 10, "amount": 48000},
-        {"dayType": "WEEKDAY", "hour": 13, "amount": 286000},
-        {"dayType": "WEEKDAY", "hour": 16, "amount": 74000},
-        {"dayType": "WEEKDAY", "hour": 19, "amount": 192000},
-    ],
-    "salesSummary": {
-        "netSales": 1312000,
-        "vsPrevPeriod": -0.07,
-        "period": "2026-10-14~2026-10-20",
-    },
-    # 비중·증감을 bench `기본` 케이스(커피 0.62/-0.12, 디저트 0.21/+0.08)와 일부러
-    # 다르게 둔다. 2026-11-06 측정에서 같은 값이어서 그 케이스는 예시가 답을 흘렸다 —
-    # 좋아져도 일반화인지 암기인지 구분할 수 없었다.
-    "categoryBreakdown": [
-        {"name": "커피", "share": 0.55, "vsPrevPeriod": -0.15},
-        {"name": "디저트", "share": 0.24, "vsPrevPeriod": 0.11},
-        {"name": "논커피", "share": 0.21, "vsPrevPeriod": -0.04},
-    ],
-}
-
-SHOT1_OUTPUT_V6 = {
-    "solutionCards": [
-        {
-            "rankNo": 1,
-            "title": "오전에 미리 만들어 두는 양을 줄이세요",
-            # 금액 대신 배수와 시각만 쓴다 — amount 는 기간 합계다(머리 주석 ④).
-            "summaryText": "평일 13시 매출이 10시의 6배로, 오전이 하루 중 가장 비어 있습니다.",
-            "detailText": (
-                "10시에 만들어 둔 음료가 남으니, 오전 준비량을 줄이고 13시 직전에 맞춰 뽑으세요."
-            ),
-            "evidence": "평일 peakHour 13시 / lowHour 10시, 배율 6.0배",
-        },
-        {
-            # 지표가 두 개뿐이면 한 문장으로 끝낸다는 것도 가르칠 값이 있다.
-            "rankNo": 2,
-            "title": "발주 정량을 줄어든 매출에 맞춰 다시 잡으세요",
-            "summaryText": "집계 기간 순매출이 1,312,000원으로 이전 기간보다 7% 줄었습니다.",
-            "detailText": (
-                "지금 발주 수량은 매출이 더 높던 이전 기간에 맞춰져 있으니, "
-                "품목별 정량을 다시 잡으세요."
-            ),
-            "evidence": "순매출 1,312,000원, 이전 기간 대비 7% 감소",
-        },
-        {
-            # share x vsPrevPeriod 로 우선순위를 뒤집는다 — 비중 큰 쪽이 빠진 손실은
-            # 비중 작은 쪽이 늘어난 것으로 메울 수 없다. 두 필드만 쓴다.
-            "rankNo": 3,
-            "title": "디저트보다 커피 회복이 먼저입니다",
-            "summaryText": "커피가 전체 매출의 55%, 디저트가 24%를 차지합니다.",
-            # "이전 기간보다" 를 빼면 모델이 "디저트는 11% 증가했습니다" 로 바꿔 쓰고,
-            # 점주는 뭐에 비해서인지 알 수 없다(2026-11-06 측정: 효과_수치_약속_없음
-            # 98.9% → 81.1%). 비교 대상을 문장에 박아 둔다.
-            "detailText": (
-                "이전 기간보다 커피는 15% 줄고 디저트는 11% 늘었는데, 비중이 큰 커피에서 "
-                "빠진 손실은 디저트 증가로 메울 수 없습니다.\n"
-                "디저트 추천에 손을 쓰기 전에, 커피 주문이 왜 줄었는지 영수증에서 먼저 보세요."
-            ),
-            "evidence": "커피 비중 55% 전기 대비 -0.15, 디저트 비중 24% 전기 대비 0.11",
-        },
-    ]
-}
-
-# 축이 2 개면 카드도 2 장이다. V5 는 두 쌍 다 3 장이라 "항상 3 장" 으로 읽힐 수 있었다.
-SHOT2_METRICS_V6 = {
-    "hourlyProfile": SHOT2_METRICS_V5["hourlyProfile"],
-    "menuRankings": [
-        {
-            "rank": 6,
-            "menuName": "딸기 라떼",
-            "menuSales": 164000,
-            "quantity": 41,
-            "ratio": 0.13,
-            "vsPrevPeriod": 0.64,
-        },
-        {
-            "rank": 1,
-            "menuName": "아이스 아메리카노",
-            "menuSales": 388000,
-            "quantity": 97,
-            "ratio": 0.31,
-            "vsPrevPeriod": -0.08,
-        },
-    ],
-}
-
-# V5 의 그 카드(시간대 축을 52% 로 올린 장)를 그대로 쓸 수 없다 — 금액을 하루치처럼
-# 말한다("11시는 31,000원뿐이니"). 조언은 그대로 두고 금액만 뺀다. V5 쪽은 측정이
-# 끝난 arm 이라 건드리지 않는다.
-_SHOT2_V6_HOURLY = {
-    "rankNo": 1,
-    "title": "재고 실사와 진열 교체는 11시에 끝내 두세요",
-    "summaryText": "평일 매출이 20시에 몰리고, 11시가 하루 중 가장 비어 있습니다.",
-    "detailText": (
-        "20시 매출이 11시의 6.9배이니, 재고 실사와 진열 교체처럼 손이 묶이는 일은 "
-        "11시에 몰아 두세요."
-    ),
-    "evidence": "평일 peakHour 20시 / lowHour 11시, 배율 6.9배",
-}
-
-SHOT2_OUTPUT_V6 = {
-    "solutionCards": [
-        _SHOT2_V6_HOURLY,
-        {
-            "rankNo": 2,
-            "title": "아이스 아메리카노는 그대로 두고 딸기 라떼만 늘리세요",
-            "summaryText": "딸기 라떼가 41잔으로 이전 기간보다 64% 늘었습니다.",
-            "detailText": (
-                "딸기 라떼 재료만 늘리고, 1위인 아이스 아메리카노 원두 발주는 건드리지 마세요.\n"
-                "아이스 아메리카노는 8% 줄었지만 여전히 순위 1위라, 발주를 줄이면 "
-                "품절 쪽이 더 위험합니다."
-            ),
-            "evidence": "딸기 라떼 41잔 전기 대비 +64%, 아이스 아메리카노 1위 전기 대비 -8%",
-        },
-    ]
-}
-
+# 2026-11-06: 배포가 결정돼 app/prompts/solution_shots.py 로 옮겼다. 여기서 가져다 쓴다 —
+# 복사본을 두면 측정한 예시와 배포된 예시가 갈린다. 왜 이 내용인지(V5 결함 네 개, 품목
+# 차등, 금액 대신 배수)는 그 모듈 주석과 git 히스토리에 있다.
+SHOT1_METRICS_V6, SHOT1_OUTPUT_V6 = APP_SHOTS[0]
+SHOT2_METRICS_V6, SHOT2_OUTPUT_V6 = APP_SHOTS[1]
 SHOTS_V6 = [(SHOT1_METRICS_V6, SHOT1_OUTPUT_V6), (SHOT2_METRICS_V6, SHOT2_OUTPUT_V6)]
 
 

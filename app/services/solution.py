@@ -10,6 +10,7 @@ from datetime import date
 from app.clients import llm
 from app.core.errors import ApiError
 from app.prompts import solution as solution_prompt
+from app.prompts import solution_shots
 from app.schemas.solution import SolutionCard, SolutionData, SolutionRequest, SolutionResponse
 from app.services.solution_focus import assign as assign_focus
 from app.services.solution_focus import derive as derive_metrics
@@ -527,7 +528,12 @@ async def generate(req: SolutionRequest) -> SolutionResponse:
         # 2026-10-11: 2회차부터는 1회차가 어긴 규칙을 프롬프트에 덧붙인다. 전에는
         # 1·2회차가 완전히 같은 프롬프트라 같은 종류의 위반이 반복될 수 있었다.
         prompt = base_prompt + (solution_prompt.retry_feedback(reasons) if attempt else "")
-        parsed, reasons = _parse(await llm.complete(solution_prompt.SYSTEM, prompt), metrics)
+        # few-shot 예시를 대화 턴으로 싣는다(2026-11-06). 프롬프트 문장으로 적는 방식은
+        # 10/29 에 안 움직였다 — 근거는 app/prompts/solution_shots.py 모듈 주석.
+        parsed, reasons = _parse(
+            await llm.complete(solution_prompt.SYSTEM, prompt, shots=solution_shots.messages()),
+            metrics,
+        )
         # 더 많이 남은 쪽을 쥔다. `parsed or cards` 로 두면 2 장을 받아둔 뒤 재시도가
         # 1 장을 주면 더 나쁜 쪽으로 덮어쓴다.
         if parsed and (cards is None or len(parsed) > len(cards)):

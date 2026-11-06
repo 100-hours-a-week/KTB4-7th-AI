@@ -80,7 +80,9 @@ async def test_생성_실패는_500이고_재시도하지_않는다(monkeypatch)
     """AI 가 내부에서 이미 1회 재시도했다. BE 가 또 부르면 LLM 호출이 4번이 된다."""
     from app.clients import llm
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return "JSON 아님"
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -101,7 +103,9 @@ async def test_공급자_오류는_502이고_재시도한다(monkeypatch):
     from app.clients import llm
     from app.core.errors import ApiError
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         raise ApiError(502, "PROVIDER_ERROR", "모델 공급자 호출에 실패했습니다.")
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -118,7 +122,9 @@ async def test_타임아웃은_504이고_재시도한다(monkeypatch):
     from app.clients import llm
     from app.core.errors import ApiError
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         raise ApiError(504, "PROVIDER_TIMEOUT", "모델 응답이 시간 내에 완료되지 않았습니다.")
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -136,7 +142,9 @@ async def test_성공_응답에는_error_가_없다(monkeypatch):
     from app.clients import llm
     from tests.test_insights import LLM_SUCCESS, REQUEST_BODY
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         return LLM_SUCCESS
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -155,7 +163,9 @@ async def test_공급자_영구_거절은_500이고_재시도하지_않는다(mo
     from app.clients import llm
     from app.core.errors import ApiError
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         raise ApiError(500, "PROVIDER_ERROR", "모델 공급자가 요청을 거절했습니다.")
 
     monkeypatch.setattr(llm, "complete", fake_complete)
