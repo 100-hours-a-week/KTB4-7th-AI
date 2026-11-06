@@ -118,6 +118,10 @@ def strip_fence(raw: str) -> str:
 # 밖에 둔다). `_band_gate`도 안 쓰는 peakFootTrafficHourBand 포맷 검증을 빼고
 # peakSalesHourBand 하나만 보도록 좁혔다 — 안 쓰는 값의 포맷이 깨졌다고
 # 멀쩩한 매출 밴드까지 같이 거를 결합을 없앴다.
+# 2026-11-06(#272)은 바로 위에서 "범위 밖"이라던 그 반영 여부를 잰다 —
+# `_store_peak_hour`를 다시 들여오고 매장피크_언급됨·매장피크_정확함·
+# 매장피크_불명확 세 측정값을 추가했다. 프롬프트·focus 배정은 안 바꿔서
+# TARGET_INSIGHT_VERSION 은 그대로다.
 TARGET_SOLUTION_VERSION = "2026-10-31"
 TARGET_INSIGHT_VERSION = "2026-11-03"
 
@@ -431,6 +435,145 @@ def _district_band_reflected(body: str, metrics: dict) -> bool | None:
     if not (sales_mentioned or _axis_selected(body, metrics, "hourlySales")):
         return None  # 이번엔 hourlySales 가 선정 안 된 것으로 본다
     return sales_mentioned
+
+
+# app/services/insight_focus.py::_store_peak_hour 와 같은 로직이어야 한다.
+# PR #271 에서 비교 판정(SAME/DIFFERENT)이 없어지며 이 채점기에서 지웠는데
+# (그때는 "추출값의 문장 반영까지는 재지 않는다"고 범위 밖에 뒤), 이번
+# "매장 피크 시각 정확도"(#272) 가 바로 그 반영 여부를 재는 항목이라 다시
+# 들여온다.
+_DAY_TYPES = ("WEEKDAY", "WEEKEND")
+
+
+def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
+    selling = [p for p in points if p.get("dayType") == day_type and (p.get("menuSales") or 0) > 0]
+    if not selling:
+        return None
+    return max(selling, key=lambda p: ((p.get("menuSales") or 0), -p["hour"]))["hour"]
+
+
+# 매장 피크는 항상 단일 시각("storePeakHourWeekday": 13)이라 밴드("N-N시")
+# 자체가 상권 전용 포맷이다 — "행정동" 단어 근접 여부를 안 봐도 무조건 지워도
+# 안전하다. 모델이 밴드를 깨고 단일 시각으로 잘못 말하는 경우("행정동 매출
+# 피크 시간대는 14시")에 대비해 "행정동/유동인구" 근접 단일 시각도 따로
+# 지운다(유동인구는 2026-11-03 부터 프롬프트에서 뺐지만 모델이 환각으로
+# 말할 수 있어 방어적으로 유지한다). 절 전체를 "행정동"이라는 단어 하나로
+# 버리면 같은 절에 매장 피크가 함께 있는 문장(실측 기본형: "행정동 매출 피크
+# 시간대는 N-N시입니다")에서 매장 피크까지 같이 날아간다 — 숫자만 국소적으로
+# 지운다.
+_DISTRICT_BAND = re.compile(r"\d{1,2}\s*-\s*\d{1,2}\s*시?")
+_DISTRICT_SINGLE = re.compile(r"(?:행정동|유동인구).{0,20}?\d{1,2}\s*시")
+
+
+def _mask_district_peaks(body: str) -> str:
+    """상권(행정동·유동인구) 피크 표현의 숫자를 지운다 — 매장 피크 추출·측정대상
+    판정 둘 다 이 결과를 써야 한다(안 그러면 행정동 밴드 숫자가 우연히
+    hourlySales 지표값과 겹쳐 _axis_selected 가 잘못 True가 될 수 있다)."""
+    return _DISTRICT_SINGLE.sub("", _DISTRICT_BAND.sub("", body))
+
+
+_PEAK_KEYWORD = re.compile(r"최고|피크|가장\s*많|가장\s*높")
+_PEAK_HOUR = re.compile(r"(\d{1,2})\s*시")
+# "평일 9시, 주말은 15시에 매출이 가장 높았습니다" 처럼 서술어를 뒤 절과
+# 공유하는 "맨" 절 — cue(평일/주말) 와 시각만 있고 다른 내용이 없다. 매출액·
+# 건수 같은 다른 내용이 있으면("평일 9시 매출은 400,000원이며") 피크 얘기가
+# 아니므로 이 패턴에 안 걸린다.
+_BARE_CUE_CLAUSE = re.compile(r"^(?:평일|주말)[은는이가에]{0,2}\s*\d{1,2}\s*시$")
+
+
+def _peak_claims(masked_body: str) -> tuple[list[tuple[str | None, int]], bool]:
+    """매장 피크 주장 (cue, hour) 목록과, 요일 cue 없이 서술어를 공유해 파싱이
+    안 되는 불명확한 주장이 있었는지를 돌려준다. 호출부가 _mask_district_peaks
+    로 상권 숫자를 먼저 지운 본문을 넘겨야 한다.
+    """
+    clauses = _split_clauses(masked_body)
+    claims: list[tuple[str | None, int]] = []
+    had_unclear_claim = False
+
+    for index, clause in enumerate(clauses):
+        hour_match = _PEAK_HOUR.search(clause)
+        cue = "WEEKDAY" if "평일" in clause else "WEEKEND" if "주말" in clause else None
+
+        if _PEAK_KEYWORD.search(clause) and hour_match:
+            claims.append((cue, int(hour_match.group(1))))
+            continue
+
+        if cue and _BARE_CUE_CLAUSE.match(clause.strip()):
+            if any(j != index and _PEAK_KEYWORD.search(c) for j, c in enumerate(clauses)):
+                had_unclear_claim = True
+
+    return claims, had_unclear_claim
+
+
+def _claim_verdict(
+    cue: str | None, hour: int, weekday_peak: int | None, weekend_peak: int | None
+) -> str:
+    """주장 하나를 "정확"·"오류"·"불명확" 으로 판정한다.
+
+    cue 가 없으면(요일을 특정할 수 없음) 실제 두 피크 중 하나와 맞는다고 바로
+    "정확"으로 보지 않는다(2026-11-06 사용자 리뷰) — 두 피크가 다르면 어느
+    쪽을 말하는지 확인할 수 없어 "불명확", 둘 다와 다르면 어느 쪽으로
+    해석해도 틀리므로 "오류", 두 피크가 같은 값이면 모호성이 실제로 없어
+    "정확"이다.
+    """
+    if cue == "WEEKDAY":
+        if weekday_peak is None:
+            return "불명확"
+        return "정확" if hour == weekday_peak else "오류"
+    if cue == "WEEKEND":
+        if weekend_peak is None:
+            return "불명확"
+        return "정확" if hour == weekend_peak else "오류"
+    candidates = {p for p in (weekday_peak, weekend_peak) if p is not None}
+    if not candidates:
+        return "불명확"
+    if hour not in candidates:
+        return "오류"
+    return "정확" if len(candidates) == 1 else "불명확"
+
+
+def _store_peak_accuracy(body: str, metrics: dict) -> dict[str, bool | None]:
+    """매장 피크 시각 주장을 "언급됨"·"정확함"·"불명확" 세 bool|None 키로 잰다
+    (#272). 문자열 enum("정확"/"오류"/"불명확")을 값으로 그대로 쓰지 않는
+    이유는 devtools/bench.py::_checks 가 `bool(value)` 로 강제 변환해서,
+    비어있지 않은 문자열이면 뭐든 True 로 뭉개지기 때문이다(실측 확인).
+
+    `매장피크_정확함=True`와 `매장피크_불명확=True`는 상호 배타적이지 않다 —
+    검증 가능한 주장 중 명확한 오류가 없으면 정확함=True이고, 그와 별개로
+    요일을 특정할 수 없는 주장이 같은 응답에 함께 있으면 불명확=True도 같이
+    나올 수 있다(둘 다 각자 다른 주장을 보고 판단한다).
+
+    측정대상 판정은 _axis_selected(hourlySales 지표 숫자가 우연히 본문과
+    겹치는지) 하나에만 기대지 않는다 — 완전히 틀린(지표에 없는) 시각을
+    주장할수록 그 숫자가 지표에 없어 오히려 측정대상에서 빠지는 역설이
+    있다(이 항목이 가장 잡아야 할 사례를 스스로 가린다). "피크 주장 패턴
+    자체가 있음"도 OR 로 더한다 — _district_band_reflected 가 이미 쓰는
+    "밴드 언급 OR axis_selected" 와 같은 이유다. 이 OR 판정과 주장 추출
+    둘 다 상권 피크 숫자를 먼저 지운 본문을 써야 한다 — 안 그러면 행정동
+    밴드 숫자("11", "14")가 우연히 hourlySales 지표값과 겹쳐 매장 피크
+    언급으로 잘못 집계될 수 있다.
+    """
+    masked = _mask_district_peaks(body)
+    claims, had_unclear_claim = _peak_claims(masked)
+
+    if not (claims or had_unclear_claim or _axis_selected(masked, metrics, "hourlySales")):
+        return {"매장피크_언급됨": None, "매장피크_정확함": None, "매장피크_불명확": None}
+
+    if not claims and not had_unclear_claim:
+        return {"매장피크_언급됨": False, "매장피크_정확함": None, "매장피크_불명확": None}
+
+    hourly = metrics.get("hourlySales") or []
+    weekday_peak = _store_peak_hour(hourly, "WEEKDAY")
+    weekend_peak = _store_peak_hour(hourly, "WEEKEND")
+
+    verdicts = [_claim_verdict(cue, hour, weekday_peak, weekend_peak) for cue, hour in claims]
+    verifiable = [v for v in verdicts if v != "불명확"]
+
+    return {
+        "매장피크_언급됨": True,
+        "매장피크_정확함": None if not verifiable else "오류" not in verifiable,
+        "매장피크_불명확": had_unclear_claim or "불명확" in verdicts,
+    }
 
 
 # weekdaySales[].dayOfWeek 표기가 영문 전체 이름("SATURDAY")인지 세글자 약어
@@ -861,12 +1004,28 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 # 선정되지 않아 vsPrevPeriod 자체가 안 언급됐다). 이번 재집계에선 숫자가
 # 안 바뀌지만, 다른 케이스에서는 바뀔 수 있다 — 역시 품질 개선이 아니라
 # 채점 기준 변경이다.
+#
+# 2026-11-06(#272): 매장피크_언급됨·매장피크_정확함·매장피크_불명확을
+# 추가했다 — 위 2026-11-04 메모가 지적한 맹점("매장 피크 시각이 실제로
+# 맞았는지"를 재는 항목이 없었다)을 메운다. 셋 다 `_store_peak_accuracy`가
+# 같이 낸다(자세한 판정 기준은 그 함수 독스트링 참고). 신규 항목이라 전항목
+# (출하 판정) 집계에 바로 넣지 않고 발생 빈도부터 관찰한다 — 기존
+# 상권_피크밴드_반영을 들일 때와 같은 판단이다.
+# 2026-11-03 실측 20건(같은 덤프)을 이 기준으로 재집계하면 분리 후 10건은
+# 전부 매장피크_정확함=True, 분리 전 10건은 2건이 매장피크_불명확=True(요일
+# cue 없이 "15시"만 주장해 평일·주말 중 어느 쪽인지 확인 불가), 나머지 8건은
+# 매장피크_언급됨=False(피크 서술어 없는 단순 시간대 매출 언급) 다 — 기존
+# devtools/judge.py 류 LLM 판정 없이 순수 코드 재채점이고, 두 구간 모두
+# 원문은 한 글자도 안 바뀌었다(역시 채점 기준 추가일 뿐 품질 개선이 아니다).
 MEASURE_ONLY = {
     "salesSummary_선정률",
     "hourlySales_선정률",
     "상권_분기_인용됨",
     "상권_피크밴드_반영",
     "비율_반올림_없음",
+    "매장피크_언급됨",
+    "매장피크_정확함",
+    "매장피크_불명확",
 }
 
 
@@ -916,6 +1075,7 @@ def grade_insight(raw: str, metrics: dict) -> dict:
     grounded = _quarter_leak(body, metrics)
     result["상권_분기_인용됨"] = grounded is not None
     result["상권_분기_날조_없음"] = grounded
+    result.update(_store_peak_accuracy(body, metrics))
 
     result["insights"] = insights
     return result
