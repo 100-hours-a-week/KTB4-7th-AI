@@ -449,6 +449,11 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arms", default="A_현행,D_fewshot2,D_fewshot3")
     parser.add_argument("--n", type=int, default=5, help="arm·케이스당 반복")
+    parser.add_argument(
+        "--cases",
+        help="쉼표로 구분한 케이스 이름. 생략하면 전부. 축을 하나 보강했을 때 이미 돌린 "
+        "케이스를 다시 돌리지 않으려고 쓴다 — 두 arm 에 같은 케이스를 돌려야 비교가 선다.",
+    )
     parser.add_argument("--dump", help="judge.py 가 읽을 덤프 경로")
     args = parser.parse_args()
 
@@ -460,6 +465,14 @@ async def main() -> int:
     base = (settings.llm_base_url or "").rstrip("/")
     if not base:
         raise SystemExit("LLM_BASE_URL 이 비어 있다 — Pod 주소를 .env 에 넣어라")
+    cases = SOLUTION_CASES
+    if args.cases:
+        wanted = [c.strip() for c in args.cases.split(",") if c.strip()]
+        known = {name for name, _ in SOLUTION_CASES}
+        if unknown_cases := [c for c in wanted if c not in known]:
+            raise SystemExit(f"모르는 케이스: {unknown_cases} — 가능한 값 {sorted(known)}")
+        cases = [(name, m) for name, m in SOLUTION_CASES if name in wanted]
+
     _check_templates()
     for arm in arms:
         validate(ARMS[arm][1])
@@ -467,27 +480,39 @@ async def main() -> int:
     async with httpx.AsyncClient(timeout=180.0) as client:
         key = settings.openai_api_key
         model = await _model_id(client, base, key)
-        total = len(SOLUTION_CASES) * len(arms) * args.n
+        total = len(cases) * len(arms) * args.n
         print(f"모델: {model}")
-        print(f"케이스 {len(SOLUTION_CASES)}종 x arm {len(arms)}개 x {args.n}회 = 호출 {total}건\n")
+        print(f"케이스 {len(cases)}종 x arm {len(arms)}개 x {args.n}회 = 호출 {total}건")
+        print(f"케이스: {', '.join(name for name, _ in cases)}\n")
 
         results: dict[str, list[dict]] = {}
         for arm in arms:
             template, shots = ARMS[arm]
             messages = shot_messages(shots, blocks_only=arm in _BLOCKS_ONLY)
             rows: list[dict] = []
-            for _, raw_metrics in SOLUTION_CASES:
+            for case_name, raw_metrics in cases:
                 metrics = derive(raw_metrics)
                 user_text, expected = _user_text(template, metrics)
                 for _ in range(args.n):
                     try:
+                        # 케이스 이름을 행에 남긴다. --cases 로 일부만 돌리기 시작하면서
+                        # "행 순서로 케이스를 복원" 이 더 이상 안전하지 않다.
                         rows.append(
-                            await _one(
-                                client, base, key, model, user_text, metrics, expected, messages
-                            )
+                            {
+                                "_case": case_name,
+                                **await _one(
+                                    client, base, key, model, user_text, metrics, expected, messages
+                                ),
+                            }
                         )
                     except Exception as exc:  # noqa: BLE001 — 한 건 실패로 측정을 멈추지 않는다
-                        rows.append({"parsed": False, "error": f"{type(exc).__name__}: {exc}"})
+                        rows.append(
+                            {
+                                "_case": case_name,
+                                "parsed": False,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
             results[arm] = rows
             parsed = [r for r in rows if r.get("parsed")]
             if parsed:

@@ -226,6 +226,93 @@ SOLUTION_CASES = [
             ],
         },
     ),
+    # 2026-11-06: menuRankings 를 배정하는 케이스가 `메뉴변화큼` 하나뿐이어서 메뉴 축
+    # 판정 표본이 n=15 에서 arm 당 15 장이 최대였다. 11/4 에 V5 예시가 그 축을 60% → 10%
+    # 로 깎은 걸 못 닫고 있던 이유다. 두 개를 더해 45 장으로 만든다.
+    # 값은 예시(devtools/fewshot_shots.py)와 겹치지 않게 둔다 — 겹치면 예시가 답을 흘린다
+    # (같은 날 카테고리 예시에서 실제로 그랬다).
+    (
+        # 1 위가 조금 빠지고 중위권 하나가 크게 뛴다. "둘 중 어느 쪽에 손을 대야 하는가" 를
+        # 가르는 모양 — 11/4 에 V4(메뉴 예시 없음)가 60% 로 잘했고 V5(단일 품목 예시)가
+        # 10% 로 떨어진 그 판단이다.
+        "메뉴신상승",
+        {
+            "salesSummary": {
+                "netSales": 2140000,
+                "vsPrevPeriod": 0.06,
+                "period": "2026-10-14~2026-10-20",
+            },
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 11, "amount": 96000},
+                {"dayType": "WEEKDAY", "hour": 14, "amount": 61000},
+                {"dayType": "WEEKDAY", "hour": 19, "amount": 174000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.47, "vsPrevPeriod": 0.03},
+                {"name": "논커피", "share": 0.31, "vsPrevPeriod": 0.09},
+                {"name": "디저트", "share": 0.22, "vsPrevPeriod": -0.02},
+            ],
+            "menuRankings": [
+                {
+                    "rank": 1,
+                    "menuName": "아이스 라떼",
+                    "menuSales": 3160000,
+                    "quantity": 632,
+                    "ratio": 0.23,
+                    "vsPrevPeriod": -0.05,
+                },
+                {
+                    "rank": 4,
+                    "menuName": "흑임자 라떼",
+                    "menuSales": 1480000,
+                    "quantity": 296,
+                    "ratio": 0.11,
+                    "vsPrevPeriod": 0.78,
+                },
+            ],
+        },
+    ),
+    (
+        # 둘 다 빠지는데 비중이 큰 쪽과 변화율이 큰 쪽이 다르다. 예시가 보여주지 않는
+        # 모양이라 일반화를 본다 — 변화율이 큰 자몽에이드(-61%)에 손대는 게 아니라
+        # 전체에서 더 많이 빠진 카페라떼(비중 19%)가 먼저다.
+        "메뉴동반하락",
+        {
+            "salesSummary": {
+                "netSales": 1620000,
+                "vsPrevPeriod": -0.09,
+                "period": "2026-10-14~2026-10-20",
+            },
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 10, "amount": 52000},
+                {"dayType": "WEEKDAY", "hour": 13, "amount": 148000},
+                {"dayType": "WEEKDAY", "hour": 16, "amount": 71000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.58, "vsPrevPeriod": -0.06},
+                {"name": "디저트", "share": 0.24, "vsPrevPeriod": -0.11},
+                {"name": "논커피", "share": 0.18, "vsPrevPeriod": -0.03},
+            ],
+            "menuRankings": [
+                {
+                    "rank": 2,
+                    "menuName": "카페라떼",
+                    "menuSales": 2240000,
+                    "quantity": 448,
+                    "ratio": 0.19,
+                    "vsPrevPeriod": -0.34,
+                },
+                {
+                    "rank": 9,
+                    "menuName": "자몽에이드",
+                    "menuSales": 336000,
+                    "quantity": 56,
+                    "ratio": 0.03,
+                    "vsPrevPeriod": -0.61,
+                },
+            ],
+        },
+    ),
     (
         # 축 다섯이 한꺼번에 경쟁하는, 지금 운영 입력에 가장 가까운 모양이다.
         # businessHours 는 축이 아니라 필터다 — 22 시 마감이라 23 시 행이 시간대 점수·
