@@ -165,7 +165,17 @@ def test_선정률_측정값이_전부_MEASURE_ONLY에_등록돼_있다():
     """grade_insight 가 실제로 내는 선정률 키와 대조한다 — 리터럴끼리 비교하면
     새 선정률 키를 등록하지 않아도 통과해서 Important #2 가 조용히 무력화된다
     (#209 최종 리뷰 Important #2). 뒤쪽 단언은 반대 방향 — 진짜 결함 항목을
-    MEASURE_ONLY 에 넣으면 전항목(출하 판정)이 조용히 느슨해진다."""
+    MEASURE_ONLY 에 넣으면 전항목(출하 판정)이 조용히 느슨해진다.
+
+    2026-11-04(사용자 결정): 상권_피크밴드_반영을 추가했다 — districtBenchmark
+    가 선택 정보로 정책이 바뀌어 생략이 결함이 아니게 됐다. "진짜 결함 항목을
+    조용히 추가하면 안 된다"는 이 테스트의 취지상, 리터럴을 고치는 건 매번
+    의도적인 리뷰를 거쳐야 한다 — 이번엔 실제로 그 리뷰를 거친 변경이다.
+
+    2026-11-04(사용자 결정, 추가): 비율_반올림_없음도 추가했다 — 실제 서비스
+    (`_ungrounded`/`_metric_numbers`, 솔루션과 공유)는 비율의 정수 반올림을
+    이미 허용하는데 이 항목만 0% 허용오차로 더 엄격했다. 지우지 않고 측정
+    전용으로만 내려 발생 빈도는 계속 본다."""
     from devtools.contract_check import EXAMPLES
 
     metrics = EXAMPLES["sales-insights"]["metrics"]
@@ -176,4 +186,10 @@ def test_선정률_측정값이_전부_MEASURE_ONLY에_등록돼_있다():
 
     assert rates, "선정률 키가 하나도 없다 — 대조가 무의미하다"
     assert rates <= MEASURE_ONLY
-    assert MEASURE_ONLY == {"salesSummary_선정률", "hourlySales_선정률", "상권_분기_인용됨"}
+    assert MEASURE_ONLY == {
+        "salesSummary_선정률",
+        "hourlySales_선정률",
+        "상권_분기_인용됨",
+        "상권_피크밴드_반영",
+        "비율_반올림_없음",
+    }
