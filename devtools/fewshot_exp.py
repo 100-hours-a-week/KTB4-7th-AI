@@ -328,6 +328,13 @@ async def _model_id(client: httpx.AsyncClient, base: str, key: str) -> str:
     return response.json()["data"][0]["id"]
 
 
+# 호출 하나의 절대 상한. httpx 의 read 타임아웃은 바이트가 올 때마다 다시 시작해서,
+# 프록시가 뭔가 흘려보내면 끊긴 소켓이 영원히 안 끊긴다 — 2026-11-06 메뉴 런에서 두 건이
+# 각각 32 분씩 붙잡아 GPU 시간 84 분 중 64 분이 거기 나갔다(호출에 실제로 쓴 건 19.7 분).
+# 정상 호출은 p50 20 초·최대 25 초이고, 출력이 창 상한(약 4,000 토큰)까지 가도 90 초쯤이다.
+_CALL_CEILING = 120.0
+
+
 async def _one(
     client: httpx.AsyncClient,
     base: str,
@@ -494,22 +501,36 @@ async def main() -> int:
                 metrics = derive(raw_metrics)
                 user_text, expected = _user_text(template, metrics)
                 for _ in range(args.n):
+                    started = time.monotonic()
                     try:
                         # 케이스 이름을 행에 남긴다. --cases 로 일부만 돌리기 시작하면서
                         # "행 순서로 케이스를 복원" 이 더 이상 안전하지 않다.
                         rows.append(
                             {
                                 "_case": case_name,
-                                **await _one(
-                                    client, base, key, model, user_text, metrics, expected, messages
+                                **await asyncio.wait_for(
+                                    _one(
+                                        client,
+                                        base,
+                                        key,
+                                        model,
+                                        user_text,
+                                        metrics,
+                                        expected,
+                                        messages,
+                                    ),
+                                    timeout=_CALL_CEILING,
                                 ),
                             }
                         )
                     except Exception as exc:  # noqa: BLE001 — 한 건 실패로 측정을 멈추지 않는다
+                        # 걸린 시간을 반드시 남긴다. 2026-11-06 에 예외 행에만 `_took` 이
+                        # 없어서 64 분을 붙잡은 소켓 두 개가 집계에서 0 초로 보였다.
                         rows.append(
                             {
                                 "_case": case_name,
                                 "parsed": False,
+                                "_took": time.monotonic() - started,
                                 "error": f"{type(exc).__name__}: {exc}",
                             }
                         )
