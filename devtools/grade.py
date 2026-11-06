@@ -118,7 +118,7 @@ def strip_fence(raw: str) -> str:
 # 밖에 둔다). `_band_gate`도 안 쓰는 peakFootTrafficHourBand 포맷 검증을 빼고
 # peakSalesHourBand 하나만 보도록 좁혔다 — 안 쓰는 값의 포맷이 깨졌다고
 # 멀쩩한 매출 밴드까지 같이 거를 결합을 없앴다.
-TARGET_SOLUTION_VERSION = "2026-10-31"
+TARGET_SOLUTION_VERSION = "2026-11-06"
 TARGET_INSIGHT_VERSION = "2026-11-03"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
