@@ -1,4 +1,4 @@
-from app.prompts import insight, solution
+from app.prompts import chat, insight, solution
 from app.services.insight_focus import assign as assign_insight_focus
 from app.services.solution_focus import assign
 
@@ -303,6 +303,27 @@ def test_프롬프트는_고정_규칙을_지표보다_앞에_둔다():
 
     ins = insight._USER
     assert ins.index("{focus_blocks}") > ins.index("같은 내용을 다른 표현으로 반복하지 마세요.")
+
+
+def test_챗봇_프롬프트는_고정_규칙을_context_보다_앞에_둔다():
+    """챗봇도 같은 함정이 있다 — 솔루션 쪽 테스트의 챗봇판이다.
+
+    챗봇은 멀티턴이라 접두 캐싱이 가장 잘 듣는다(턴마다 앞부분이 통째로 히트하고,
+    agent↔tools 루프도 마찬가지다). 그 이익이 `{context}` 앞의 고정 부분 전체에 걸리는데,
+    규칙을 `{context}` 뒤에 추가하면 system 532 + 툴 스키마 1,569 토큰이 매 턴 다시
+    계산된다. 출력은 그대로라 실호출로도 안 잡힌다.
+
+    `{today}` 는 예외로 둔다 — 날짜마다만 바뀌어서 캐시가 하루 한 번 식을 뿐이고, 옮기면
+    기간 계산(2026-09-22)을 건드릴 위험이 있다.
+    """
+    system = chat.SYSTEM
+    assert system.rstrip().endswith("{context}"), (
+        "{context} 뒤에 뭔가 붙었다. 새 규칙은 '지금 보고 있는 솔루션' 앞에 넣어라."
+    )
+    assert system.index("{context}") > system.index("데이터가 부족하면"), (
+        "답변 규칙이 {context} 뒤로 갔다 — 접두 캐싱이 거기서 끊긴다."
+    )
+    assert system.index("{today}") < system.index("답변 규칙")
 
 
 def test_강수_패턴_프롬프트는_관측_차이만_허용한다():

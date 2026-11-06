@@ -13,6 +13,7 @@ Backend가 전달한 데이터만 사용하며 **서비스 DB에 직접 접근�
 | 스텁 BE | `uv run python -m devtools.stub_backend` |
 | 예측 연동 점검 | `uv run python -m devtools.forecast_check --pos <POS 엑셀>` |
 | 예측구간 커버리지 | `uv run python -m devtools.interval_backtest --pos <POS 엑셀> ...` |
+| 축 점수 측정 | `uv run python -m devtools.axis_scores --store <이름> <POS 엑셀...>` (무료 · GPU 불필요 — 카드 3장의 근거 지표가 어떻게 뽑히는지) |
 | 실호출 검증 | `uv run python -m devtools.llm_smoke --with-chat` (요금 발생 · 스텁 BE 필요) |
 | 프롬프트 측정 | `uv run python -m devtools.bench --n 50` (요금·GPU 시간 발생 · 순차 호출) |
 | 동시성 측정 | `uv run python -m devtools.concurrency_bench --concurrency 1 3 5 10 --n 20` (요금·GPU 시간 발생 · 채점 없음, 지연/실패율/처리량만) |
