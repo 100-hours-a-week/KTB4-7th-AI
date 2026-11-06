@@ -82,6 +82,13 @@ _band_gate 도 매출 밴드 포맷만 검증하도록 좁혔다 — 안 쓰는 
 `_store_peak_hour` 는 동률이면 BE 가 보낸 배열 순서가 아니라 더 이른 시각을
 고른다(2026-11-03 리뷰) — 그래야 같은 지표를 다른 순서로 받아도 같은 문장이
 나온다.
+
+2026-11-06(PR #271 리뷰): storePeakHourWeekday/Weekend 계산이
+_district_gate·_band_gate 안에 있어서, 행정동 데이터가 없거나 표본이
+적거나 밴드 포맷이 깨지면 **우리 매장 자신의 데이터만으로 계산 가능한**
+매장 피크까지 같이 빠졌다 — "행정동은 보완 정보, 매장 데이터가 우선"이라는
+정책과 맞지 않는 결합이었다. 매장 피크 계산을 게이트 밖으로 꺼내 항상
+시도하고, peakSalesHourBand 만 게이트 안에 남긴다.
 """
 
 import re
@@ -247,12 +254,13 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     for key, order_key in series_axes:
         points = metrics.get(key) or []
         focus = {key: _spread_rows(points, order_key)}
-        if key == "hourlySales" and _district_gate(district) and _band_gate(district):
-            focus["peakSalesHourBand"] = district["peakSalesHourBand"]
+        if key == "hourlySales":
             for day_type in _DAY_TYPES:
                 peak_hour = _store_peak_hour(points, day_type)
                 if peak_hour is not None:
                     focus[f"storePeakHour{day_type.capitalize()}"] = peak_hour
+            if _district_gate(district) and _band_gate(district):
+                focus["peakSalesHourBand"] = district["peakSalesHourBand"]
         candidates.append((focus, _spread(points) if points else -1.0))
     for key in ("categorySales", "menuRankings"):
         points = metrics.get(key) or []

@@ -272,34 +272,40 @@ def test_평일_주말_피크가_같은_시각이어도_둘_다_그대로_묻는
     assert hourly_focus["storePeakHourWeekend"] == 15
 
 
-def test_상권_필드가_없으면_시간대_축에_안_묻는다():
+def test_상권_필드가_없어도_매장_피크는_그대로_묻는다():
+    """2026-11-06(PR #271 리뷰): 매장 피크는 매장 자신의 hourlySales 만으로
+    계산 가능한 독립 정보다 — 행정동 데이터가 없다고 같이 빠지면 안 된다.
+    행정동 매출 밴드만 빠진다."""
     focus = assign(HOURLY_METRICS, max_count=4)
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert "peakSalesHourBand" not in hourly_focus
-    assert "storePeakHourWeekday" not in hourly_focus
-    assert "storePeakHourWeekend" not in hourly_focus
+    assert hourly_focus["storePeakHourWeekday"] == 11
+    assert hourly_focus["storePeakHourWeekend"] == 15
 
 
-def test_표본이_너무_적은_상권은_시간대_축에_안_묻는다():
+def test_표본이_너무_적은_상권이어도_매장_피크는_그대로_묻는다():
+    """행정동 표본(cafeStoreCount)이 부족해 밴드만 빠지는 상황에서도 매장
+    피크는 영향받지 않아야 한다(2026-11-06, PR #271 리뷰)."""
     district = {**DISTRICT, "cafeStoreCount": 2}
     focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert "peakSalesHourBand" not in hourly_focus
-    assert "storePeakHourWeekday" not in hourly_focus
+    assert hourly_focus["storePeakHourWeekday"] == 11
 
 
-def test_밴드_포맷이_깨지면_시간대_축에_안_묻고_500으로_안_죽는다():
+def test_밴드_포맷이_깨지면_밴드만_빠지고_매장_피크는_유지되며_500으로_안_죽는다():
     """BE 가 peakSalesHourBand 포맷을 바꾸면(과거 전례 있음, 통보 없이 계약
     변경) 이상한 문자열이 그대로 모델에 들어간다 — 게이트에서 조용히
-    탈락시킨다(#209 최종 리뷰 Important #4)."""
+    탈락시킨다(#209 최종 리뷰 Important #4). 매장 피크는 이 포맷과 무관하게
+    계산되므로 영향받지 않는다(2026-11-06, PR #271 리뷰)."""
     district = {**DISTRICT, "peakSalesHourBand": "14시-17시"}
     focus = assign({**HOURLY_METRICS, "districtBenchmark": district}, max_count=4)
 
     hourly_focus = next(item for item in focus if "hourlySales" in item)
     assert "peakSalesHourBand" not in hourly_focus
-    assert "storePeakHourWeekday" not in hourly_focus
+    assert hourly_focus["storePeakHourWeekday"] == 11
 
 
 def test_유동인구_밴드_포맷이_깨져도_매출_밴드는_그대로_포함된다():
