@@ -655,6 +655,255 @@ def test_년_분기_표기도_잡는다():
     assert result["상권_분기_날조_없음"] is True
 
 
+# ── 매장 피크 시각 정확도 (#272) ───────────────────────────────────────
+
+_PEAK_METRICS = {
+    "salesSummary": {"totalSales": 7920000, "menuSales": 7480000, "orderCount": 923},
+    "hourlySales": [
+        {"dayType": "WEEKDAY", "hour": 13, "menuSales": 500000, "orderCount": 60},
+        {"dayType": "WEEKDAY", "hour": 9, "menuSales": 100000, "orderCount": 20},
+        {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000, "orderCount": 90},
+        {"dayType": "WEEKEND", "hour": 11, "menuSales": 200000, "orderCount": 30},
+    ],
+    "districtBenchmark": {
+        "basisQuarter": "2026Q3",
+        "districtAvgMonthlySalesPerCafe": 9413000,
+        "cafeStoreCount": 133,
+        "peakSalesHourBand": "11-14",
+        "peakFootTrafficHourBand": "11-14",
+    },
+}
+
+
+def _peak_insight(*sentences: str, metrics: dict = _PEAK_METRICS) -> dict:
+    return grade.grade_insight(json.dumps({"insights": list(sentences)}), metrics)
+
+
+def test_채점기의_매장_피크_시각_추출이_서비스와_같다():
+    """app::_store_peak_hour 와 같은 로직이어야 한다 — PR #271에서 지웠던 걸
+    #272가 다시 들여온다. 동률(tie-break) 케이스도 같이 본다."""
+    cases = [
+        [{"dayType": "WEEKDAY", "hour": 13, "menuSales": 500000}],
+        [{"dayType": "WEEKDAY", "hour": 9, "menuSales": 0}],
+        # 동률이면 배열 순서가 아니라 더 이른 시각을 고른다(2026-11-03).
+        [
+            {"dayType": "WEEKDAY", "hour": 15, "menuSales": 500000},
+            {"dayType": "WEEKDAY", "hour": 13, "menuSales": 500000},
+        ],
+    ]
+    for points in cases:
+        assert grade._store_peak_hour(points, "WEEKDAY") == insight_focus._store_peak_hour(
+            points, "WEEKDAY"
+        )
+
+
+def test_시간대축이_선정_안_되면_매장피크는_측정대상이_아니다():
+    result = _peak_insight("아메리카노가 메뉴 매출의 28.2%를 차지합니다.")
+
+    assert result["매장피크_언급됨"] is None
+    assert result["매장피크_정확함"] is None
+    assert result["매장피크_불명확"] is None
+
+
+def test_피크_서술어_없는_단순_언급은_오류가_아니다():
+    """요구사항 #4 — 다른 시간대의 실제 매출을 언급했다고 결함으로 보지 않는다."""
+    result = _peak_insight("평일 9시 매출은 412,000원이며 61건의 주문이 발생했습니다.")
+
+    assert result["매장피크_언급됨"] is False
+    assert result["매장피크_정확함"] is None
+    assert result["매장피크_불명확"] is None
+
+
+def test_평일_피크를_정확히_언급하면_정확함이_참이다():
+    result = _peak_insight("평일 매출 최고 시간은 13시입니다.")
+
+    assert result["매장피크_언급됨"] is True
+    assert result["매장피크_정확함"] is True
+    assert result["매장피크_불명확"] is False
+
+
+def test_평일_주말_모두_정확히_언급하면_정확함이_참이다():
+    result = _peak_insight("평일 매출 최고 시간은 13시, 주말 매출 최고 시간은 15시입니다.")
+
+    assert result["매장피크_정확함"] is True
+    assert result["매장피크_불명확"] is False
+
+
+def test_평일_피크를_틀리게_언급하면_정확함이_거짓이다():
+    result = _peak_insight("평일 매출 최고 시간은 9시입니다.")
+
+    assert result["매장피크_정확함"] is False
+    assert result["매장피크_불명확"] is False
+
+
+def test_하나만_틀려도_정확함은_거짓이다():
+    """검증 가능한 주장 중 하나라도 명확히 틀리면 정확함=False — 나머지가
+    맞다고 봐주지 않는다."""
+    result = _peak_insight("평일 매출 최고 시간은 13시, 주말 매출 최고 시간은 11시입니다.")
+
+    assert result["매장피크_정확함"] is False
+
+
+def test_쉼표_없이_이어진_평일_주말_주장을_각각_검증한다():
+    """2026-11-06 리뷰 #1 — 한 절에 평일·주말 주장이 쉼표 없이 이어지면
+    (`"평일 13시이고 주말 11시에 매출이 가장 높았습니다."`) 첫 시각만 보고
+    cue를 평일로 우선 선택하던 옛 구현은 주말 11시(실제 피크는 15시)라는
+    명확한 오류를 놓쳐 정확함=True로 오판했다. 각 cue가 자기 바로 다음
+    시각과만 묶여야 한다."""
+    result = _peak_insight("평일 13시이고 주말 11시에 매출이 가장 높았습니다.")
+
+    assert result["매장피크_정확함"] is False, "주말 11시는 실제 피크(15시)와 다른 명확한 오류다"
+
+
+def test_쉼표_없이_이어진_평일_주말_주장이_둘_다_맞으면_정확하다():
+    """위 테스트의 반대 방향 — cue별로 올바르게 묶이면 둘 다 정확해야 한다."""
+    result = _peak_insight("평일 13시이고 주말 15시에 매출이 가장 높았습니다.")
+
+    assert result["매장피크_정확함"] is True
+
+
+def test_요일_cue_없이_두_피크가_같으면_모호함_없이_정확하다():
+    """두 피크가 같은 값이면 요일을 특정하지 않아도 모호성이 실제로 없다."""
+    metrics = {
+        **_PEAK_METRICS,
+        "hourlySales": [
+            {"dayType": "WEEKDAY", "hour": 13, "menuSales": 500000},
+            {"dayType": "WEEKEND", "hour": 13, "menuSales": 900000},
+        ],
+    }
+    result = _peak_insight("매출이 가장 높은 시간은 13시였습니다.", metrics=metrics)
+
+    assert result["매장피크_정확함"] is True
+    assert result["매장피크_불명확"] is False
+
+
+def test_요일_cue_없이_두_피크_중_하나와만_맞으면_불명확이다():
+    """요구사항 #1 — 평일·주말 피크가 다른데 cue 없는 주장이 그중 하나와
+    일치한다는 이유만으로 정확=True 로 보지 않는다. 어느 요일 얘기인지
+    확인할 수 없으므로 불명확으로 분류한다."""
+    result = _peak_insight("매출이 가장 높은 시간은 13시였습니다.")
+
+    assert result["매장피크_언급됨"] is True
+    assert result["매장피크_정확함"] is None
+    assert result["매장피크_불명확"] is True
+
+
+def test_요일_cue_없이_두_피크_모두와_다르면_명확한_오류다():
+    """어느 요일로 해석해도 틀리므로 불명확이 아니라 오류다."""
+    result = _peak_insight("매출이 가장 높은 시간은 10시였습니다.")
+
+    assert result["매장피크_정확함"] is False
+    assert result["매장피크_불명확"] is False
+
+
+def test_정확함과_불명확은_상호배타적이지_않다():
+    """요구사항 1 — 검증 가능한 주장 중 명확한 오류가 없으면 정확함=True이고,
+    그와 별개로 요일을 특정할 수 없는 주장이 같은 응답에 함께 있으면
+    불명확=True도 동시에 나올 수 있다. 두 값은 서로 다른 주장을 본다."""
+    result = _peak_insight(
+        "평일 매출 최고 시간은 13시입니다.",
+        "매출이 가장 높은 시간은 15시였습니다.",
+    )
+
+    assert result["매장피크_정확함"] is True, "평일 13시 주장은 검증 가능하고 맞다"
+    assert result["매장피크_불명확"] is True, "cue 없는 15시 주장은 둘 중 하나와만 맞아 불명확이다"
+
+
+def test_행정동_밴드가_쉼표로_분리돼도_매장_피크만_검증한다():
+    """요구사항 #2, #5 — 실제 더미 데이터의 기본 문형이다. 쉼표로 절이
+    나뉘므로 행정동 숫자(11, 14)가 매장 피크 추출에 안 섞여야 한다."""
+    result = _peak_insight("평일 매출 최고 시간은 13시, 행정동 매출 피크 시간대는 11-14시입니다.")
+
+    assert result["매장피크_정확함"] is True
+
+
+def test_행정동_밴드가_쉼표_없이_한_절에_있어도_매장_피크를_지키지_않는다():
+    """요구사항 #2 — '행정동'이라는 단어가 있다는 이유로 절 전체를 버리면
+    쉼표 없이 이어 쓴 문장에서 매장 피크까지 같이 날아간다. 밴드("11-14시")
+    자체를 국소적으로만 지워서 매장 피크를 살려야 한다."""
+    result = _peak_insight(
+        "평일 매출 최고 시간은 13시이고 행정동 매출 피크 시간대는 11-14시입니다."
+    )
+
+    assert result["매장피크_언급됨"] is True
+    assert result["매장피크_정확함"] is True
+
+
+def test_행정동_피크가_단일_시각으로_와도_매장_피크에_안_섞인다():
+    """행정동 밴드가 깨져 단일 시각처럼 와도("행정동 매출 피크 시간대는
+    14시") 그 숫자가 매장 피크 주장으로 오인되면 안 된다."""
+    result = _peak_insight("평일 매출 최고 시간은 13시이고 행정동 매출 피크 시간대는 14시입니다.")
+
+    assert result["매장피크_정확함"] is True
+
+
+def test_행정동_주장만_있으면_매장_피크_언급으로_집계되지_않는다():
+    """요구사항 #2 핵심 — 매장 피크 주장이 전혀 없는, 행정동 피크만 말하는
+    문장이 매장피크_언급됨=True 로 잘못 집계되면 안 된다. 측정대상 판정
+    자체가 행정동 숫자를 지운 본문을 써야 한다 — 안 그러면 밴드 숫자(11,
+    14)가 우연히 hourlySales 지표값과 겹쳐 _axis_selected 가 잘못 True가
+    될 수 있다."""
+    result = _peak_insight("행정동 매출 피크 시간대는 11-14시입니다.")
+
+    assert result["매장피크_언급됨"] is None
+    assert result["매장피크_정확함"] is None
+    assert result["매장피크_불명확"] is None
+
+
+def test_행정동_서술어가_같은_절의_무관한_매장_시각과_안_엮인다():
+    """2026-11-06 리뷰 #2 — "평일 9시 매출은 100,000원이며 행정동 매출 피크
+    시간대는 11-14시입니다"에서 밴드 숫자("11-14시")만 지우면 라벨에 붙은
+    "피크"가 같은 절에 남아, 앞의 단순 매출 사실 "9시"와 엮여 "9시가 매장
+    피크"라는 틀린 주장으로 오인됐다(실제 평일 피크는 13시라 오류로 잘못
+    집계됨). 라벨("행정동"/"유동인구") 부터 그 숫자까지 통째로 지워야
+    한다 — "9시"는 애초에 피크 서술어가 없는 단순 언급이라 주장이 아니다."""
+    metrics = {
+        **_PEAK_METRICS,
+        "hourlySales": [
+            {"dayType": "WEEKDAY", "hour": 13, "menuSales": 500000},
+            {"dayType": "WEEKDAY", "hour": 9, "menuSales": 100000},
+            {"dayType": "WEEKEND", "hour": 15, "menuSales": 900000},
+        ],
+    }
+    result = _peak_insight(
+        "평일 9시 매출은 100,000원이며 행정동 매출 피크 시간대는 11-14시입니다.",
+        metrics=metrics,
+    )
+
+    assert result["매장피크_언급됨"] is False
+    assert result["매장피크_정확함"] is None
+    assert result["매장피크_불명확"] is None
+
+
+def test_공유_서술어로_이어진_평일_주말_주장을_각각_가능한_만큼_검증한다():
+    """요구사항 #3 — "평일 9시, 주말은 15시에 매출이 가장 높았습니다"처럼
+    서술어가 뒤 절에만 있는 문장이다. 주말은 자기 절에 서술어가 있어
+    정상 검증하고(피크가 아니라 9시이므로 평일은 틀렸다는 걸 확정할 수
+    없어), 서술어를 공유하는 평일 쪼가리는 정확=True로 단정하지 않고
+    불명확으로 등록한다."""
+    result = _peak_insight("평일 9시, 주말은 15시에 매출이 가장 높았습니다.")
+
+    assert result["매장피크_언급됨"] is True
+    assert result["매장피크_정확함"] is True, "주말 15시 주장은 검증 가능하고 맞다"
+    assert result["매장피크_불명확"] is True, "평일 9시는 서술어를 공유해 파싱이 불확실하다"
+
+
+def test_공유_서술어_패턴이어도_매출액_문장은_주장으로_안_본다():
+    """요구사항 #3, #4 — 앞 절에 cue+시각만 있어도 매출액·건수 같은 다른
+    내용이 있으면("평일 9시 매출은 400,000원이며") 피크 얘기가 아니므로
+    주장도 불명확도 아니다. 뒤 절(주말 15시)만 정상 검증한다."""
+    result = _peak_insight("평일 9시 매출은 400,000원이며, 주말 15시에 매출이 가장 높았습니다.")
+
+    assert result["매장피크_정확함"] is True
+    assert result["매장피크_불명확"] is False, "평일 절은 매출액 문장이라 불명확 대상이 아니다"
+
+
+def test_쉼표_있는_금액이_끼어도_절_분리가_안_깨진다():
+    result = _peak_insight("평일 매출 최고 시간은 13시에 1,830,000원을 기록했습니다.")
+
+    assert result["매장피크_정확함"] is True
+
+
 # ── 날씨 인과 정규식 교체 (2026-10-28) ────────────────────────────────
 
 
