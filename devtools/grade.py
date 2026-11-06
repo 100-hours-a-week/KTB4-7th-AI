@@ -452,33 +452,60 @@ def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
     return max(selling, key=lambda p: ((p.get("menuSales") or 0), -p["hour"]))["hour"]
 
 
-# 매장 피크는 항상 단일 시각("storePeakHourWeekday": 13)이라 밴드("N-N시")
-# 자체가 상권 전용 포맷이다 — "행정동" 단어 근접 여부를 안 봐도 무조건 지워도
-# 안전하다. 모델이 밴드를 깨고 단일 시각으로 잘못 말하는 경우("행정동 매출
-# 피크 시간대는 14시")에 대비해 "행정동/유동인구" 근접 단일 시각도 따로
-# 지운다(유동인구는 2026-11-03 부터 프롬프트에서 뺐지만 모델이 환각으로
-# 말할 수 있어 방어적으로 유지한다). 절 전체를 "행정동"이라는 단어 하나로
-# 버리면 같은 절에 매장 피크가 함께 있는 문장(실측 기본형: "행정동 매출 피크
-# 시간대는 N-N시입니다")에서 매장 피크까지 같이 날아간다 — 숫자만 국소적으로
-# 지운다.
+# 상권(행정동·유동인구) 피크를 가리키는 "라벨 단어 + 숫자" 구간을 통째로
+# 지운다 — 숫자만 지우면 라벨에 붙은 "피크"/"최고" 같은 서술어가 같은 절에
+# 남아, 그 절에 있는 무관한 매장 시각 언급과 잘못 엮인다(2026-11-06 리뷰
+# #2 — "평일 9시 매출은 100,000원이며 행정동 매출 피크 시간대는 11-14시
+# 입니다"에서 밴드 숫자만 지우면 남은 "피크"가 "평일 9시"와 결합해 "9시가
+# 매장 피크"라는 틀린 주장으로 오인된다). 라벨 뒤 20자 안에 숫자(밴드든
+# 단일 시각이든)가 있으면 라벨부터 숫자까지 전부 지운다.
+_DISTRICT_LABELED_PEAK = re.compile(
+    r"(?:행정동|유동인구)[^,.]{0,20}?\d{1,2}\s*(?:-\s*\d{1,2}\s*)?시"
+)
+# 라벨이 20자보다 멀리 있어 위 패턴이 못 잡는 경우에 대한 안전망이다 — 매장
+# 피크는 항상 단일 시각("storePeakHourWeekday": 13)이라 밴드("N-N시") 포맷
+# 자체가 상권 전용이므로, 라벨 근접 여부와 무관하게 지워도 안전하다.
 _DISTRICT_BAND = re.compile(r"\d{1,2}\s*-\s*\d{1,2}\s*시?")
-_DISTRICT_SINGLE = re.compile(r"(?:행정동|유동인구).{0,20}?\d{1,2}\s*시")
 
 
 def _mask_district_peaks(body: str) -> str:
-    """상권(행정동·유동인구) 피크 표현의 숫자를 지운다 — 매장 피크 추출·측정대상
+    """상권(행정동·유동인구) 피크 표현을 지운다 — 매장 피크 추출·측정대상
     판정 둘 다 이 결과를 써야 한다(안 그러면 행정동 밴드 숫자가 우연히
     hourlySales 지표값과 겹쳐 _axis_selected 가 잘못 True가 될 수 있다)."""
-    return _DISTRICT_SINGLE.sub("", _DISTRICT_BAND.sub("", body))
+    return _DISTRICT_BAND.sub("", _DISTRICT_LABELED_PEAK.sub("", body))
 
 
 _PEAK_KEYWORD = re.compile(r"최고|피크|가장\s*많|가장\s*높")
 _PEAK_HOUR = re.compile(r"(\d{1,2})\s*시")
+_CUE_WORD = re.compile(r"평일|주말")
+# 한 절에 평일·주말 주장이 쉼표 없이 이어진 경우("평일 13시이고 주말 11시에
+# 매출이 가장 높았습니다") 각 cue 를 자기 바로 다음 시각과만 묶는다 — 중간에
+# 다른 cue 단어가 끼면(음성 lookahead) 거기서 멈춰서, 뒤 cue 의 시각을 앞
+# cue 가 가로채지 못한다(2026-11-06 리뷰 #1). cue 에 자기 시각이 없으면
+# (다음 cue 영역까지 숫자가 없음) 이 패턴은 매칭되지 않는다 — 없는 시각을
+# 억지로 묶어 틀린 cue 에 배정하느니 그 cue 는 주장 없음으로 둔다.
+_CUE_HOUR_PAIR = re.compile(r"(평일|주말)((?:(?!평일|주말).)*?)(\d{1,2})\s*시")
 # "평일 9시, 주말은 15시에 매출이 가장 높았습니다" 처럼 서술어를 뒤 절과
 # 공유하는 "맨" 절 — cue(평일/주말) 와 시각만 있고 다른 내용이 없다. 매출액·
 # 건수 같은 다른 내용이 있으면("평일 9시 매출은 400,000원이며") 피크 얘기가
 # 아니므로 이 패턴에 안 걸린다.
 _BARE_CUE_CLAUSE = re.compile(r"^(?:평일|주말)[은는이가에]{0,2}\s*\d{1,2}\s*시$")
+
+
+def _clause_claims(clause: str) -> list[tuple[str | None, int]]:
+    """절 하나에서 피크 주장을 전부 뽑는다 — cue 가 여럿이면 각각 뽑는다."""
+    if not _PEAK_KEYWORD.search(clause):
+        return []
+    pairs = [
+        ("WEEKDAY" if m.group(1) == "평일" else "WEEKEND", int(m.group(3)))
+        for m in _CUE_HOUR_PAIR.finditer(clause)
+    ]
+    if pairs:
+        return pairs
+    if _CUE_WORD.search(clause):
+        return []  # cue 단어는 있는데 그 cue 에 묶일 시각이 없다 — 억지로 안 묶는다
+    hour_match = _PEAK_HOUR.search(clause)
+    return [(None, int(hour_match.group(1)))] if hour_match else []
 
 
 def _peak_claims(masked_body: str) -> tuple[list[tuple[str | None, int]], bool]:
@@ -491,13 +518,12 @@ def _peak_claims(masked_body: str) -> tuple[list[tuple[str | None, int]], bool]:
     had_unclear_claim = False
 
     for index, clause in enumerate(clauses):
-        hour_match = _PEAK_HOUR.search(clause)
-        cue = "WEEKDAY" if "평일" in clause else "WEEKEND" if "주말" in clause else None
-
-        if _PEAK_KEYWORD.search(clause) and hour_match:
-            claims.append((cue, int(hour_match.group(1))))
+        clause_claims = _clause_claims(clause)
+        if clause_claims:
+            claims.extend(clause_claims)
             continue
 
+        cue = "WEEKDAY" if "평일" in clause else "WEEKEND" if "주말" in clause else None
         if cue and _BARE_CUE_CLAUSE.match(clause.strip()):
             if any(j != index and _PEAK_KEYWORD.search(c) for j, c in enumerate(clauses)):
                 had_unclear_claim = True
