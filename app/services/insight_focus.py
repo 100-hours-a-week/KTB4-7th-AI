@@ -58,6 +58,37 @@ vsDistrictFootTrafficPeakWeekday/Weekend) — 어느 dayType 피크를 모델이
 하나라도 DIFFERENT면 그 밴드와 해당 라벨을 포함하고, 전부 SAME이면 통째로
 생략한다. 비교를 계산할 dayType이 하나도 없으면(두 dayType 다 영업 데이터
 없음) 밴드 값은 상권 자체의 사실이라 그대로 남긴다(기존과 동일, 2026-10-21(5)).
+
+2026-10-27(사용자 요청): "우리 매장의 매출 피크 시간대가 행정동 매출 피크
+시간대(17-21)·유동인구 피크 시간대(17-21)와 평일·주말 모두 다릅니다" 처럼
+SAME/DIFFERENT 비교로 서술하는 문장이 "안 좋다"는 피드백을 받았다. 비교를
+걷어내고 "우리 매장의 매출 피크 시간대는 OO시, 행정동 매출 피크 시간대는
+OO시, 유동인구 피크 시간대는 OO시" 처럼 세 사실을 나란히 전달하는 쪽으로
+바꾼다 — 비교 방향이 사라지므로 dayType 별 비교값(vsDistrictSalesPeakWeekday
+등)과 그 전제였던 SAME 생략 규칙(2026-10-23)·dayType 별 피크 계산(2026-10-22)이
+전부 필요 없어졌다. 두 밴드는 이제 _district_gate·_band_gate만 통과하면
+조건 없이 둘 다 보낸다 — 상권 평균매출(salesSummary 쪽)과 같은 대우다.
+
+2026-11-03(사용자 요청): 위 세 사실 병렬 문장도 "우리 매장 매출 피크"가
+평일·주말 구분 없이 하나로 뭉뚱그려 있어 부정확하다는 피드백을 받았다.
+peakFootTrafficHourBand(유동인구 피크)는 문장에서 완전히 뺀다 — 쓰지 않을
+값을 모델에게 보여줄 이유가 없다. 대신 2026-10-22 에 지웠던 dayType 별 피크
+계산(_store_peak_hour)을 비교 없이 "우리 매장 평일/주말 매출 최고 시간" 사실
+두 개로만 복원한다 — 밴드와의 비교(_in_band)·SAME 생략(_band_included)은
+복원하지 않는다. 한쪽 dayType 에 영업 데이터가 없으면 그 쪽만 뺀다(기존
+"주어진 필드만 언급" 과 같은 판단). 유동인구 밴드를 더 이상 안 쓰므로
+_band_gate 도 매출 밴드 포맷만 검증하도록 좁혔다 — 안 쓰는 값의 포맷이
+깨졌다는 이유로 멀쩩한 매출 밴드까지 같이 거를 결합을 없앴다.
+`_store_peak_hour` 는 동률이면 BE 가 보낸 배열 순서가 아니라 더 이른 시각을
+고른다(2026-11-03 리뷰) — 그래야 같은 지표를 다른 순서로 받아도 같은 문장이
+나온다.
+
+2026-11-06(PR #271 리뷰): storePeakHourWeekday/Weekend 계산이
+_district_gate·_band_gate 안에 있어서, 행정동 데이터가 없거나 표본이
+적거나 밴드 포맷이 깨지면 **우리 매장 자신의 데이터만으로 계산 가능한**
+매장 피크까지 같이 빠졌다 — "행정동은 보완 정보, 매장 데이터가 우선"이라는
+정책과 맞지 않는 결합이었다. 매장 피크 계산을 게이트 밖으로 꺼내 항상
+시도하고, peakSalesHourBand 만 게이트 안에 남긴다.
 """
 
 import re
@@ -91,6 +122,23 @@ def _selling(points: list[dict]) -> list[dict]:
     전 시각이나 휴무일로 뽑힌다. 솔루션 쪽과 같은 판단이다(solution_focus._selling).
     """
     return [p for p in points if (p.get("menuSales") or 0) > 0]
+
+
+# hourlySales 의 dayType 값 — BE 계약상 고정 2 종.
+_DAY_TYPES = ("WEEKDAY", "WEEKEND")
+
+
+def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
+    """dayType 이 day_type 인, 영업 중(menuSales > 0)인 행 중 매출이 가장 높은 시간.
+    없으면 None(그 dayType 은 영업 데이터가 없다는 뜻).
+
+    2026-11-03(사용자 요청): 매출이 동률이면 BE 가 보낸 배열 순서가 아니라
+    더 이른 시각을 고른다 — 입력 순서가 바뀌어도 같은 결과가 나와야 한다.
+    """
+    selling = [p for p in _selling(points) if p.get("dayType") == day_type]
+    if not selling:
+        return None
+    return max(selling, key=lambda p: ((p.get("menuSales") or 0), -p["hour"]))["hour"]
 
 
 def _spread(points: list[dict]) -> float:
@@ -166,78 +214,20 @@ def _district_gate(district: dict | None) -> bool:
 
 
 def _band_gate(district: dict | None) -> bool:
-    """peakSalesHourBand·peakFootTrafficHourBand 포맷이 "HH-HH" 인지만 본다.
+    """peakSalesHourBand 포맷이 "HH-HH" 인지만 본다.
 
-    hourlySales 번들링만 그 문자열을 _in_band 로 파싱한다 — salesSummary 쪽은
-    평균매출만 쓰고 밴드는 안 건드려 포맷과 무관하다. _district_gate 에 합치지
+    BE 계약이 통보 없이 바뀐 전례가 있어(과거 10-19, 3 건) 포맷이 깨진 밴드를
+    모델에게 그대로 보여주지 않으려는 방어 게이트다. _district_gate 에 합치지
     않고 hourlySales 호출부에서만 추가로 본다(#209 최종 리뷰 Important #4) —
     합치면 밴드 포맷만 깨져도 상권 평균매출(salesSummary 쪽)까지 같이 멈춘다.
+
+    2026-11-03: peakFootTrafficHourBand(유동인구 피크)는 문장에서 더 이상
+    쓰지 않으므로 포맷 검증 대상에서 뺐다 — 안 쓰는 값의 포맷이 깨졌다고
+    멀쩩한 매출 밴드까지 같이 거를 이유가 없다.
     """
     if not district:
         return False
-    return bool(
-        _HOUR_BAND.fullmatch(district.get("peakSalesHourBand") or "")
-        and _HOUR_BAND.fullmatch(district.get("peakFootTrafficHourBand") or "")
-    )
-
-
-# hourlySales 의 dayType 값 — BE 계약상 고정 2 종(2026-10-22).
-_DAY_TYPES = ("WEEKDAY", "WEEKEND")
-
-
-def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
-    """dayType 이 day_type 인, 영업 중(menuSales > 0)인 행 중 매출이 가장 높은 시간.
-    없으면 None.
-    """
-    selling = [p for p in _selling(points) if p.get("dayType") == day_type]
-    if not selling:
-        return None
-    return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
-
-
-def _in_band(hour: int, band: str) -> bool:
-    """우리 매장 피크 시간이 상권 밴드("HH-HH") 안에 드는지. 밴드 형식은 BE
-    DistrictBenchmarkService.VALID_HOUR_BANDS 가 고정 집합으로 보장한다. 호출부가
-    hour is None 인 경우를 먼저 걸러내므로 여기선 int 만 받는다.
-    """
-    start, end = (int(x) for x in band.split("-"))
-    return start <= hour < end
-
-
-def _band_included(points: list[dict], band: str) -> bool:
-    """band(peakSalesHourBand 류)를 focus 에 넣을지.
-
-    존재하는 dayType(피크를 계산할 수 있는 dayType) 비교 중 하나라도 DIFFERENT
-    면 포함한다. 전부 SAME 이면(비교가 하나 이상 있을 때) 생략한다 — "우리
-    매장도 다른 가게처럼 바쁘다"는 당연한 사실만 남아 점주에게 할 말이 거의
-    없다. 두 밴드(매출/유동인구)는 서로 독립적으로 판단한다. 비교가 하나도
-    없으면(두 dayType 다 피크를 못 구함) 밴드 값은 상권 자체의 사실이라 그대로
-    포함한다. devtools/grade.py::_band_expected 가 같은 로직을 복제해 검사한다.
-    """
-    comparisons = [
-        _in_band(hour, band)
-        for hour in (_store_peak_hour(points, day_type) for day_type in _DAY_TYPES)
-        if hour is not None
-    ]
-    return not comparisons or not all(comparisons)
-
-
-def _apply_band(
-    focus: dict, points: list[dict], band_field: str, label_prefix: str, band: str
-) -> None:
-    """band_field(peakSalesHourBand 류)와 그 label_prefix 라벨(Weekday/Weekend)을
-    조건부로 채운다 — 포함 여부는 _band_included 로 정한다.
-    """
-    if not _band_included(points, band):
-        return
-    focus[band_field] = band
-    for day_type in _DAY_TYPES:
-        peak_hour = _store_peak_hour(points, day_type)
-        if peak_hour is None:
-            continue
-        focus[f"{label_prefix}{day_type.capitalize()}"] = (
-            "SAME" if _in_band(peak_hour, band) else "DIFFERENT"
-        )
+    return bool(_HOUR_BAND.fullmatch(district.get("peakSalesHourBand") or ""))
 
 
 def assign(metrics: dict, max_count: int) -> list[dict]:
@@ -264,21 +254,13 @@ def assign(metrics: dict, max_count: int) -> list[dict]:
     for key, order_key in series_axes:
         points = metrics.get(key) or []
         focus = {key: _spread_rows(points, order_key)}
-        if key == "hourlySales" and _district_gate(district) and _band_gate(district):
-            _apply_band(
-                focus,
-                points,
-                "peakSalesHourBand",
-                "vsDistrictSalesPeak",
-                district["peakSalesHourBand"],
-            )
-            _apply_band(
-                focus,
-                points,
-                "peakFootTrafficHourBand",
-                "vsDistrictFootTrafficPeak",
-                district["peakFootTrafficHourBand"],
-            )
+        if key == "hourlySales":
+            for day_type in _DAY_TYPES:
+                peak_hour = _store_peak_hour(points, day_type)
+                if peak_hour is not None:
+                    focus[f"storePeakHour{day_type.capitalize()}"] = peak_hour
+            if _district_gate(district) and _band_gate(district):
+                focus["peakSalesHourBand"] = district["peakSalesHourBand"]
         candidates.append((focus, _spread(points) if points else -1.0))
     for key in ("categorySales", "menuRankings"):
         points = metrics.get(key) or []

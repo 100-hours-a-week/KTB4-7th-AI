@@ -76,6 +76,13 @@ def strip_fence(raw: str) -> str:
 # 모델이 "동일하다"로 답해도 방향 오류를 못 잡는다.
 # 2026-10-24(2) 는 외부 리뷰로 "동일함"이 "포함됨"으로 다시 바뀐 변경이다 —
 # `_DIRECTION_WORDS["SAME"]`에 "포함" 패턴을 추가했다. "동일" 패턴은 그대로 둔다.
+# 2026-10-27(사용자 요청)은 상권 피크밴드 서술을 SAME/DIFFERENT 비교에서
+# 비교 없는 사실 전달로 바꾼 변경이다(app/services/insight_focus.py 가
+# vsDistrictSalesPeak*/vsDistrictFootTrafficPeak* 비교 필드를 더는 안 만든다).
+# `상권_피크밴드_반영`은 이제 방향 판정 없이 "게이트를 통과한 두 밴드 숫자가
+# 둘 다 언급됐는지"만 본다 — `_store_peak_hour`·`_in_band`·`_band_expected`·
+# `_band_direction_correct`와 `_DIRECTION_WORDS`/`_OPPOSITE`의 SAME/DIFFERENT
+# 항목을 지웠다. `_band_mentioned`는 손대지 않았다.
 # 2026-10-28 은 conditionPatterns(과거 강수일·무강수일 판매 차이)를 조건부로
 # 서술하도록 허용한 변경이다(#246, PR #254).
 #
@@ -102,8 +109,21 @@ def strip_fence(raw: str) -> str:
 # 2026-10-31 은 weatherContext.alerts(기상청 특보 발효 현황)를 받은 변경이다(#226,
 # PR #227). 특보명은 BE 가 완성 문자열로 주므로 그대로 인용하게 했다 — 규칙이 "주어진
 # 문자열을 그대로" 라서 접지 검사가 그대로 잰다. 새 검사 항목은 추가하지 않았다.
+# 2026-11-03(사용자 요청)은 peakFootTrafficHourBand(유동인구 피크)를 문장에서
+# 완전히 빼고, 대신 storePeakHourWeekday·storePeakHourWeekend(우리 매장 평일·
+# 주말 매출 최고 시간)를 사실로 추가한 변경이다. `상권_피크밴드_반영`은 이제
+# 매출 밴드 숫자 하나만 언급됐는지를 본다 — 유동인구 밴드 언급 요구를 지웠다.
+# `_store_peak_hour`는 비교 없는 추출용으로만 app 쪽에 되살아났고, 이 채점기는
+# 그 추출값의 "문장 반영"까지는 재지 않는다(측정 의미가 바뀌는 확장이라 범위
+# 밖에 둔다). `_band_gate`도 안 쓰는 peakFootTrafficHourBand 포맷 검증을 빼고
+# peakSalesHourBand 하나만 보도록 좁혔다 — 안 쓰는 값의 포맷이 깨졌다고
+# 멀쩩한 매출 밴드까지 같이 거를 결합을 없앴다.
+# 2026-11-06(#272)은 바로 위에서 "범위 밖"이라던 그 반영 여부를 잰다 —
+# `_store_peak_hour`를 다시 들여오고 매장피크_언급됨·매장피크_정확함·
+# 매장피크_불명확 세 측정값을 추가했다. 프롬프트·focus 배정은 안 바꿔서
+# TARGET_INSIGHT_VERSION 은 그대로다.
 TARGET_SOLUTION_VERSION = "2026-10-31"
-TARGET_INSIGHT_VERSION = "2026-10-24"
+TARGET_INSIGHT_VERSION = "2026-11-03"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
 _ANYNUM = re.compile(r"\d[\d,]*\.?\d*")
@@ -282,20 +302,18 @@ def _district_gate(district: dict | None) -> bool:
 
 
 # app/services/insight_focus.py::_band_gate 와 같은 로직이어야 한다. 포맷이
-# 안 맞으면 _band_mentioned 의 tuple unpacking(band.split("-"))이나 _in_band
-# 의 int() 변환이 터진다 — _district_band_reflected 전용으로, salesSummary
-# 쪽(_district_avg_reflected)은 밴드를 안 써서 이 게이트가 필요 없다(#209
-# 최종 리뷰 Important #4).
+# 안 맞으면 _band_mentioned 의 tuple unpacking(band.split("-"))이 터진다 —
+# _district_band_reflected 전용으로, salesSummary 쪽(_district_avg_reflected)은
+# 밴드를 안 써서 이 게이트가 필요 없다(#209 최종 리뷰 Important #4).
 _HOUR_BAND = re.compile(r"^\d{1,2}-\d{1,2}$")
 
 
 def _band_gate(district: dict | None) -> bool:
+    """2026-11-03: peakFootTrafficHourBand 는 문장에서 안 쓰므로 검증 대상에서
+    뺐다(app/services/insight_focus.py::_band_gate 와 같은 로직이어야 한다)."""
     if not district:
         return False
-    return bool(
-        _HOUR_BAND.fullmatch(district.get("peakSalesHourBand") or "")
-        and _HOUR_BAND.fullmatch(district.get("peakFootTrafficHourBand") or "")
-    )
+    return bool(_HOUR_BAND.fullmatch(district.get("peakSalesHourBand") or ""))
 
 
 # app/services/insight_focus.py::district_comparison 과 같은 로직이어야 한다.
@@ -305,35 +323,6 @@ def _comparison(total_sales: int, district_avg: int) -> str:
     if total_sales < district_avg:
         return "BELOW"
     return "EQUAL"
-
-
-# app/services/insight_focus.py::_DAY_TYPES 와 같은 값이어야 한다.
-_DAY_TYPES = ("WEEKDAY", "WEEKEND")
-
-
-# app/services/insight_focus.py::_store_peak_hour·_in_band 와 같은 로직이어야 한다.
-def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
-    selling = [p for p in points if p.get("dayType") == day_type and (p.get("menuSales") or 0) > 0]
-    if not selling:
-        return None
-    return max(selling, key=lambda p: p.get("menuSales") or 0)["hour"]
-
-
-def _in_band(hour: int, band: str) -> bool:
-    start, end = (int(x) for x in band.split("-"))
-    return start <= hour < end
-
-
-# app/services/insight_focus.py::_band_included 와 같은 로직이어야 한다 —
-# 어긋나면 한쪽은 밴드를 줬는데 다른 쪽은 "안 언급했다"고 결함(False)으로
-# 오판한다.
-def _band_expected(points: list[dict], band: str) -> bool:
-    comparisons = [
-        _in_band(h, band)
-        for h in (_store_peak_hour(points, dt) for dt in _DAY_TYPES)
-        if h is not None
-    ]
-    return not comparisons or not all(comparisons)
 
 
 def _axis_selected(body: str, metrics: dict, key: str) -> bool:
@@ -354,38 +343,19 @@ def _axis_selected(body: str, metrics: dict, key: str) -> bool:
     return key in _evidence_group(body, _metric_paths(metrics))
 
 
-# 완전 활용형이 아니라 정규식으로 둔다(#209 최종 리뷰 deferred #6) — 프롬프트는
-# "겹침"/"안 겹침" 어간형으로 가르치는데 "겹칩니다"만 찾으면 "겹치는 시간대입니다"
-# 같은 변형의 반전을 못 잡는다. 그런데 "겹치"를 그냥 어간으로 쓰면 DIFFERENT의
-# 정답 문구 "겹치지 않습니다"에도 포함돼 있어 SAME으로 오매칭된다 — 부정 접미
-# "지 않"이 뒤따르면 SAME이 아니라고 미리 걸러낸다(음성 lookahead). "일치"도
-# DIFFERENT의 "불일치"에 포함되므로 같은 이유로 "불" 접두를 제외한다.
-# 2026-10-24: 프롬프트가 SAME을 "겹침" 대신 "동일함"으로 가르치도록 바뀌어서
-# "동일" 패턴을 추가했다 — "동일하지 않습니다"(DIFFERENT의 정답 문구일 수
-# 있다)는 겹치/일치와 같은 이유로 부정 접미를 lookahead로 제외한다.
-# 2026-10-24(2): "동일함"도 글자 그대로 같은 값이라는 뜻으로 읽혀 부정확하다는
-# 외부 리뷰를 받아, 프롬프트는 "포함됨"으로 다시 바뀌었다 — "포함" 패턴을
-# 추가한다(같은 이유로 "포함되지 않"/"포함하지 않" 부정형은 lookahead로 제외).
-# "동일" 패턴은 프롬프트가 더는 안 가르쳐도, 모델이 그렇게 말할 가능성에
-# 대비해 지우지 않고 그대로 둔다.
+# SAME/DIFFERENT(피크밴드 비교) 항목은 2026-10-27 에 지웠다 — 상권 피크밴드
+# 서술이 비교에서 사실 전달로 바뀌어 더는 방향을 판정할 대상이 없다(아래
+# `_district_band_reflected` 참고). ABOVE/BELOW/EQUAL(상권 평균매출 비교,
+# vsDistrictAvg)은 그대로 쓴다.
 _DIRECTION_WORDS = {
     "ABOVE": (re.compile("높"), re.compile("웃돌"), re.compile("상회")),
     "BELOW": (re.compile("낮"), re.compile("밑돌"), re.compile("하회")),
     "EQUAL": (re.compile("같습니다"), re.compile("동일")),
-    "SAME": (
-        re.compile(r"겹치(?!지\s*않)"),
-        re.compile(r"(?<!불)일치"),
-        re.compile(r"동일(?!하지\s*않)"),
-        re.compile(r"포함(?!되지\s*않|하지\s*않)"),
-    ),
-    "DIFFERENT": (re.compile(r"겹치지\s*않"), re.compile(r"다른\s*시간대"), re.compile("불일치")),
 }
 _OPPOSITE = {
     "ABOVE": "BELOW",
     "BELOW": "ABOVE",
     "EQUAL": None,
-    "SAME": "DIFFERENT",
-    "DIFFERENT": "SAME",
 }
 
 
@@ -477,85 +447,187 @@ def _band_mentioned(body: str, band: str) -> bool:
     return start in numbers and end in numbers
 
 
-def _band_direction_correct(body: str, comparisons: set[str], band: str, other_band: str) -> bool:
-    """밴드 쪽 호출부 — anchor 로 두 밴드의 배타적 숫자(대칭차)를 쓴다.
-
-    매출·유동인구 두 비교가 한 문장에 같이 있어 서로의 반대 어휘에 오염되지 않게
-    절 단위로 좁히는데(`_direction_correct` 참고), 밴드 시작 시각을 anchor 로 쓰면
-    그 좁히기가 안 된다 — 서울 상권 밴드는 연속 버킷이라 인접 밴드가 경계 숫자를
-    공유하는 게 기본값이다("11-14" 의 끝과 "14-17" 의 시작이 같은 "14"). 실측:
-    "유동인구 피크 11-14시와 겹칩니다. 매출 피크 14-17시와는 겹치지 않습니다" 가
-    완전히 올바른데, 매출 밴드 anchor "14" 가 첫 절에도 걸려 결함으로 셌다
-    (#209 최종 리뷰 Important #1). 공유 숫자를 뺀 숫자로만 절을 고른다 — 두 밴드가
-    완전히 같으면 배타적 숫자가 없고, 그때는 비교 자체가 무의미해 검사를 건너뛴다.
-
-    comparisons 는 dayType(평일/주말) 별로 계산된 비교값의 집합이다(2026-10-22,
-    #209 최종 리뷰 Important #5) — 평일·주말 피크가 다른 방향을 가리키면 두 값이
-    섞여 들어온다. 이때 본문만으로는 모델이 어느 dayType 을 말하는지 구분할 수
-    없어, 어느 방향 어휘든 "그 dayType 기준으로는 맞을 수 있다"고 보고 검사를
-    건너뛴다 — 없는 근거로 결함을 만들지 않는다(`_direction_correct` 와 같은 원칙).
-    """
-    exclusive = set(band.split("-")) - set(other_band.split("-"))
-    if not exclusive or len(comparisons) != 1:
-        return True
-    (comparison,) = comparisons
-    return all(_direction_correct(body, comparison, anchor) for anchor in exclusive)
-
-
 def _district_band_reflected(body: str, metrics: dict) -> bool | None:
-    """게이트를 통과하고, hourlySales 가 선정됐을 때만 유효한 측정이다.
+    """게이트를 통과했을 때만 유효한 측정이다.
 
-    2026-10-23 부터 두 밴드는 독립적으로 포함 여부가 갈린다(app/services/
-    insight_focus.py::_apply_band 참고) — 전부 SAME 이라 서비스가 애초에
-    안 줬을 밴드를 "안 언급했다"고 반영 실패로 오판하면 안 된다. `_band_expected`
-    로 그 판단을 복제해, **포함됐어야 할 밴드만** 언급을 요구한다. 언급된
-    밴드는(포함 예정 여부와 무관하게) 방향까지 `_band_direction_correct` 로
-    확인한다 — DIFFERENT라서 줬는데 모델이 방향을 틀리거나 안 언급하면 여전히
-    결함이다.
-
-    선정 판정(최종 리뷰, 2026-10-24 Important #1): 예전엔 "두 밴드 숫자 중
-    하나도 안 보이면 hourlySales 가 선정 안 된 것"으로 봤는데, 이 전제가
-    깨졌다 — 두 밴드가 둘 다 DIFFERENT라 서비스가 둘 다 줬는데 모델이 둘 다
-    빠뜨린 경우도 똑같이 "밴드가 안 보임"이라 None(측정 대상 아님)으로
-    새면서, 가장 심한 누락이 반영률 분모에서 빠졌다. `_district_avg_reflected`
-    가 이미 쓰는 `_axis_selected`(그 축 자체의 숫자가 문장에 있는지)를 OR로
-    더해 판정한다 — 밴드 숫자가 안 보여도 축 자체가 선정된 걸 알면 그때는
-    "선정 안 됨"이 아니라 진짜 누락(False)이다. 밴드 숫자만으로도 선정이
-    맞다(기존 경로 유지) — 피크를 못 구해 상권 밴드만 언급하는 문장(비교
-    필드가 없는 경우, 2026-10-21(5))은 `_axis_selected`가 False여도 여전히
-    선정으로 잡아야 하기 때문이다.
+    2026-11-03 부터 peakFootTrafficHourBand(유동인구 피크)는 문장에 아예 안
+    실린다(app/services/insight_focus.py::assign 참고) — 언급 여부를 잴
+    대상이 없어졌다. 매출 밴드 숫자 하나가 본문에 언급됐는지만 본다. 방향
+    판정은 2026-10-27 에 이미 없앴다.
     """
     district = metrics.get("districtBenchmark")
     if not _district_gate(district) or not _band_gate(district):
         return None
     sales_band = district["peakSalesHourBand"]
-    traffic_band = district["peakFootTrafficHourBand"]
     sales_mentioned = _band_mentioned(body, sales_band)
-    traffic_mentioned = _band_mentioned(body, traffic_band)
-    if not (sales_mentioned or traffic_mentioned or _axis_selected(body, metrics, "hourlySales")):
+    if not (sales_mentioned or _axis_selected(body, metrics, "hourlySales")):
         return None  # 이번엔 hourlySales 가 선정 안 된 것으로 본다
+    return sales_mentioned
+
+
+# app/services/insight_focus.py::_store_peak_hour 와 같은 로직이어야 한다.
+# PR #271 에서 비교 판정(SAME/DIFFERENT)이 없어지며 이 채점기에서 지웠는데
+# (그때는 "추출값의 문장 반영까지는 재지 않는다"고 범위 밖에 뒤), 이번
+# "매장 피크 시각 정확도"(#272) 가 바로 그 반영 여부를 재는 항목이라 다시
+# 들여온다.
+_DAY_TYPES = ("WEEKDAY", "WEEKEND")
+
+
+def _store_peak_hour(points: list[dict], day_type: str) -> int | None:
+    selling = [p for p in points if p.get("dayType") == day_type and (p.get("menuSales") or 0) > 0]
+    if not selling:
+        return None
+    return max(selling, key=lambda p: ((p.get("menuSales") or 0), -p["hour"]))["hour"]
+
+
+# 상권(행정동·유동인구) 피크를 가리키는 "라벨 단어 + 숫자" 구간을 통째로
+# 지운다 — 숫자만 지우면 라벨에 붙은 "피크"/"최고" 같은 서술어가 같은 절에
+# 남아, 그 절에 있는 무관한 매장 시각 언급과 잘못 엮인다(2026-11-06 리뷰
+# #2 — "평일 9시 매출은 100,000원이며 행정동 매출 피크 시간대는 11-14시
+# 입니다"에서 밴드 숫자만 지우면 남은 "피크"가 "평일 9시"와 결합해 "9시가
+# 매장 피크"라는 틀린 주장으로 오인된다). 라벨 뒤 20자 안에 숫자(밴드든
+# 단일 시각이든)가 있으면 라벨부터 숫자까지 전부 지운다.
+_DISTRICT_LABELED_PEAK = re.compile(
+    r"(?:행정동|유동인구)[^,.]{0,20}?\d{1,2}\s*(?:-\s*\d{1,2}\s*)?시"
+)
+# 라벨이 20자보다 멀리 있어 위 패턴이 못 잡는 경우에 대한 안전망이다 — 매장
+# 피크는 항상 단일 시각("storePeakHourWeekday": 13)이라 밴드("N-N시") 포맷
+# 자체가 상권 전용이므로, 라벨 근접 여부와 무관하게 지워도 안전하다.
+_DISTRICT_BAND = re.compile(r"\d{1,2}\s*-\s*\d{1,2}\s*시?")
+
+
+def _mask_district_peaks(body: str) -> str:
+    """상권(행정동·유동인구) 피크 표현을 지운다 — 매장 피크 추출·측정대상
+    판정 둘 다 이 결과를 써야 한다(안 그러면 행정동 밴드 숫자가 우연히
+    hourlySales 지표값과 겹쳐 _axis_selected 가 잘못 True가 될 수 있다)."""
+    return _DISTRICT_BAND.sub("", _DISTRICT_LABELED_PEAK.sub("", body))
+
+
+_PEAK_KEYWORD = re.compile(r"최고|피크|가장\s*많|가장\s*높")
+_PEAK_HOUR = re.compile(r"(\d{1,2})\s*시")
+_CUE_WORD = re.compile(r"평일|주말")
+# 한 절에 평일·주말 주장이 쉼표 없이 이어진 경우("평일 13시이고 주말 11시에
+# 매출이 가장 높았습니다") 각 cue 를 자기 바로 다음 시각과만 묶는다 — 중간에
+# 다른 cue 단어가 끼면(음성 lookahead) 거기서 멈춰서, 뒤 cue 의 시각을 앞
+# cue 가 가로채지 못한다(2026-11-06 리뷰 #1). cue 에 자기 시각이 없으면
+# (다음 cue 영역까지 숫자가 없음) 이 패턴은 매칭되지 않는다 — 없는 시각을
+# 억지로 묶어 틀린 cue 에 배정하느니 그 cue 는 주장 없음으로 둔다.
+_CUE_HOUR_PAIR = re.compile(r"(평일|주말)((?:(?!평일|주말).)*?)(\d{1,2})\s*시")
+# "평일 9시, 주말은 15시에 매출이 가장 높았습니다" 처럼 서술어를 뒤 절과
+# 공유하는 "맨" 절 — cue(평일/주말) 와 시각만 있고 다른 내용이 없다. 매출액·
+# 건수 같은 다른 내용이 있으면("평일 9시 매출은 400,000원이며") 피크 얘기가
+# 아니므로 이 패턴에 안 걸린다.
+_BARE_CUE_CLAUSE = re.compile(r"^(?:평일|주말)[은는이가에]{0,2}\s*\d{1,2}\s*시$")
+
+
+def _clause_claims(clause: str) -> list[tuple[str | None, int]]:
+    """절 하나에서 피크 주장을 전부 뽑는다 — cue 가 여럿이면 각각 뽑는다."""
+    if not _PEAK_KEYWORD.search(clause):
+        return []
+    pairs = [
+        ("WEEKDAY" if m.group(1) == "평일" else "WEEKEND", int(m.group(3)))
+        for m in _CUE_HOUR_PAIR.finditer(clause)
+    ]
+    if pairs:
+        return pairs
+    if _CUE_WORD.search(clause):
+        return []  # cue 단어는 있는데 그 cue 에 묶일 시각이 없다 — 억지로 안 묶는다
+    hour_match = _PEAK_HOUR.search(clause)
+    return [(None, int(hour_match.group(1)))] if hour_match else []
+
+
+def _peak_claims(masked_body: str) -> tuple[list[tuple[str | None, int]], bool]:
+    """매장 피크 주장 (cue, hour) 목록과, 요일 cue 없이 서술어를 공유해 파싱이
+    안 되는 불명확한 주장이 있었는지를 돌려준다. 호출부가 _mask_district_peaks
+    로 상권 숫자를 먼저 지운 본문을 넘겨야 한다.
+    """
+    clauses = _split_clauses(masked_body)
+    claims: list[tuple[str | None, int]] = []
+    had_unclear_claim = False
+
+    for index, clause in enumerate(clauses):
+        clause_claims = _clause_claims(clause)
+        if clause_claims:
+            claims.extend(clause_claims)
+            continue
+
+        cue = "WEEKDAY" if "평일" in clause else "WEEKEND" if "주말" in clause else None
+        if cue and _BARE_CUE_CLAUSE.match(clause.strip()):
+            if any(j != index and _PEAK_KEYWORD.search(c) for j, c in enumerate(clauses)):
+                had_unclear_claim = True
+
+    return claims, had_unclear_claim
+
+
+def _claim_verdict(
+    cue: str | None, hour: int, weekday_peak: int | None, weekend_peak: int | None
+) -> str:
+    """주장 하나를 "정확"·"오류"·"불명확" 으로 판정한다.
+
+    cue 가 없으면(요일을 특정할 수 없음) 실제 두 피크 중 하나와 맞는다고 바로
+    "정확"으로 보지 않는다(2026-11-06 사용자 리뷰) — 두 피크가 다르면 어느
+    쪽을 말하는지 확인할 수 없어 "불명확", 둘 다와 다르면 어느 쪽으로
+    해석해도 틀리므로 "오류", 두 피크가 같은 값이면 모호성이 실제로 없어
+    "정확"이다.
+    """
+    if cue == "WEEKDAY":
+        if weekday_peak is None:
+            return "불명확"
+        return "정확" if hour == weekday_peak else "오류"
+    if cue == "WEEKEND":
+        if weekend_peak is None:
+            return "불명확"
+        return "정확" if hour == weekend_peak else "오류"
+    candidates = {p for p in (weekday_peak, weekend_peak) if p is not None}
+    if not candidates:
+        return "불명확"
+    if hour not in candidates:
+        return "오류"
+    return "정확" if len(candidates) == 1 else "불명확"
+
+
+def _store_peak_accuracy(body: str, metrics: dict) -> dict[str, bool | None]:
+    """매장 피크 시각 주장을 "언급됨"·"정확함"·"불명확" 세 bool|None 키로 잰다
+    (#272). 문자열 enum("정확"/"오류"/"불명확")을 값으로 그대로 쓰지 않는
+    이유는 devtools/bench.py::_checks 가 `bool(value)` 로 강제 변환해서,
+    비어있지 않은 문자열이면 뭐든 True 로 뭉개지기 때문이다(실측 확인).
+
+    `매장피크_정확함=True`와 `매장피크_불명확=True`는 상호 배타적이지 않다 —
+    검증 가능한 주장 중 명확한 오류가 없으면 정확함=True이고, 그와 별개로
+    요일을 특정할 수 없는 주장이 같은 응답에 함께 있으면 불명확=True도 같이
+    나올 수 있다(둘 다 각자 다른 주장을 보고 판단한다).
+
+    측정대상 판정은 _axis_selected(hourlySales 지표 숫자가 우연히 본문과
+    겹치는지) 하나에만 기대지 않는다 — 완전히 틀린(지표에 없는) 시각을
+    주장할수록 그 숫자가 지표에 없어 오히려 측정대상에서 빠지는 역설이
+    있다(이 항목이 가장 잡아야 할 사례를 스스로 가린다). "피크 주장 패턴
+    자체가 있음"도 OR 로 더한다 — _district_band_reflected 가 이미 쓰는
+    "밴드 언급 OR axis_selected" 와 같은 이유다. 이 OR 판정과 주장 추출
+    둘 다 상권 피크 숫자를 먼저 지운 본문을 써야 한다 — 안 그러면 행정동
+    밴드 숫자("11", "14")가 우연히 hourlySales 지표값과 겹쳐 매장 피크
+    언급으로 잘못 집계될 수 있다.
+    """
+    masked = _mask_district_peaks(body)
+    claims, had_unclear_claim = _peak_claims(masked)
+
+    if not (claims or had_unclear_claim or _axis_selected(masked, metrics, "hourlySales")):
+        return {"매장피크_언급됨": None, "매장피크_정확함": None, "매장피크_불명확": None}
+
+    if not claims and not had_unclear_claim:
+        return {"매장피크_언급됨": False, "매장피크_정확함": None, "매장피크_불명확": None}
 
     hourly = metrics.get("hourlySales") or []
-    if _band_expected(hourly, sales_band) and not sales_mentioned:
-        return False
-    if _band_expected(hourly, traffic_band) and not traffic_mentioned:
-        return False
+    weekday_peak = _store_peak_hour(hourly, "WEEKDAY")
+    weekend_peak = _store_peak_hour(hourly, "WEEKEND")
 
-    peak_hours = [h for h in (_store_peak_hour(hourly, dt) for dt in _DAY_TYPES) if h is not None]
-    if not peak_hours:
-        return True
-    ok = True
-    if sales_mentioned:
-        sales_comparisons = {
-            ("SAME" if _in_band(h, sales_band) else "DIFFERENT") for h in peak_hours
-        }
-        ok = ok and _band_direction_correct(body, sales_comparisons, sales_band, traffic_band)
-    if traffic_mentioned:
-        traffic_comparisons = {
-            ("SAME" if _in_band(h, traffic_band) else "DIFFERENT") for h in peak_hours
-        }
-        ok = ok and _band_direction_correct(body, traffic_comparisons, traffic_band, sales_band)
-    return ok
+    verdicts = [_claim_verdict(cue, hour, weekday_peak, weekend_peak) for cue, hour in claims]
+    verifiable = [v for v in verdicts if v != "불명확"]
+
+    return {
+        "매장피크_언급됨": True,
+        "매장피크_정확함": None if not verifiable else "오류" not in verifiable,
+        "매장피크_불명확": had_unclear_claim or "불명확" in verdicts,
+    }
 
 
 # weekdaySales[].dayOfWeek 표기가 영문 전체 이름("SATURDAY")인지 세글자 약어
@@ -998,10 +1070,62 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 # 시간대_누적금액_직접인용_없음 이고 그건 전항목에 들어간다.
 # 키가 태어나는 곳에 둔다(원래 devtools/bench.py 에 있었다) — 등록을 잊었는지는
 # tests/test_bench.py 가 grade_insight 결과와 대조해 잡는다.
+#
+# 2026-11-04(사용자 결정): 상권_피크밴드_반영을 추가했다. districtBenchmark 는
+# 매장 분석을 보완하는 **선택** 정보로 정책이 바뀌어서(행정동 매출 피크 생략이
+# "결함"이 아니다), 생략했다는 이유만으로 전항목(출하 판정)을 실패로 묶으면
+# 정책과 채점 기준이 어긋난다.
+#
+# **주의 — 이 변경으로 오른 통과율을 품질 개선으로 읽지 않는다.** 2026-11-03
+# 실측(districts_bench_dump.json 10건·district_bench_before_dump.json 10건,
+# 둘 다 n=10, 전부있음 케이스)을 이 기준으로 재집계하면 서비스(최종) 전항목이
+# 분리 후 40%→90%, 분리 전 10%→90% 로 뛴다 — **같은 원문을 다른 잣대로 다시
+# 센 것**이고, 그 사이 모델 출력은 한 글자도 안 바뀌었다. 특히 분리 전·분리
+# 후가 재집계 후 똑같이 90%로 보이는 건 채점기의 진짜 맹점을 드러낸다 —
+# "매장 피크 시각이 실제로 맞았는지"를 재는 항목이 없어서, 분리 전에서 실측된
+# "9시(가장 작은 값)를 피크처럼 말하는" 결함(10건 중 7건)이 수치_정확(그라운딩
+# 체크, 지표에 실재하는 숫자인지만 봄)을 그냥 통과해버린다. 이 맹점은 별도
+# 이슈로 분리해 "피크 시각 정확도" 채점 항목을 새로 설계하기로 했다 — 설계안은
+# 아직 코드에 반영하지 않았다.
+#
+# 2026-11-04(사용자 결정, 추가): 비율_반올림_없음도 추가했다. `app/services/
+# insight.py` 가 솔루션과 같은 `_ungrounded`/`_metric_numbers`(app/services/
+# solution.py)를 그대로 가져다 쓰는데, 그 `_metric_numbers`는 비율의 정수
+# 반올림형(0.042 → "4")을 **이미 허용 집합에 넣는다** — 즉 실제 서비스는
+# "4.2%"를 "4%"로 써도 UNGROUNDED_NUMBER 로 안 걸린다. 솔루션 채점기
+# (`grade_solution`)에는 이런 엄격 체크 자체가 없다. `비율_반올림_없음`만
+# `salesSummary.vsPrevPeriod` 하나에 대해 0% 허용오차로 별도로 더 엄격하게
+# 재서, 서비스 실제 동작·솔루션 채점 기준과 어긋나 있었다. 지우지 않고
+# MEASURE_ONLY로만 내린 이유는 "서비스가 허용하더라도 모델이 얼마나 자주
+# 반올림하는지"는 계속 관찰할 가치가 있어서다 — 발생 빈도 측정용으로 남긴다.
+# 2026-11-03 실측 20건(위 상권_피크밴드_반영 재집계와 같은 덤프)을 이 기준까지
+# 더해 재집계해도 분리 후·분리 전 둘 다 90%에서 **그대로**다 — 20건 중
+# 비율_반올림_없음이 False 였던 건 0건(salesSummary 축이 그 20건에서 한 번도
+# 선정되지 않아 vsPrevPeriod 자체가 안 언급됐다). 이번 재집계에선 숫자가
+# 안 바뀌지만, 다른 케이스에서는 바뀔 수 있다 — 역시 품질 개선이 아니라
+# 채점 기준 변경이다.
+#
+# 2026-11-06(#272): 매장피크_언급됨·매장피크_정확함·매장피크_불명확을
+# 추가했다 — 위 2026-11-04 메모가 지적한 맹점("매장 피크 시각이 실제로
+# 맞았는지"를 재는 항목이 없었다)을 메운다. 셋 다 `_store_peak_accuracy`가
+# 같이 낸다(자세한 판정 기준은 그 함수 독스트링 참고). 신규 항목이라 전항목
+# (출하 판정) 집계에 바로 넣지 않고 발생 빈도부터 관찰한다 — 기존
+# 상권_피크밴드_반영을 들일 때와 같은 판단이다.
+# 2026-11-03 실측 20건(같은 덤프)을 이 기준으로 재집계하면 분리 후 10건은
+# 전부 매장피크_정확함=True, 분리 전 10건은 2건이 매장피크_불명확=True(요일
+# cue 없이 "15시"만 주장해 평일·주말 중 어느 쪽인지 확인 불가), 나머지 8건은
+# 매장피크_언급됨=False(피크 서술어 없는 단순 시간대 매출 언급) 다 — 기존
+# devtools/judge.py 류 LLM 판정 없이 순수 코드 재채점이고, 두 구간 모두
+# 원문은 한 글자도 안 바뀌었다(역시 채점 기준 추가일 뿐 품질 개선이 아니다).
 MEASURE_ONLY = {
     "salesSummary_선정률",
     "hourlySales_선정률",
     "상권_분기_인용됨",
+    "상권_피크밴드_반영",
+    "비율_반올림_없음",
+    "매장피크_언급됨",
+    "매장피크_정확함",
+    "매장피크_불명확",
     "시간대_금액_기간없이_인용됨",
 }
 
@@ -1052,6 +1176,7 @@ def grade_insight(raw: str, metrics: dict) -> dict:
     grounded = _quarter_leak(body, metrics)
     result["상권_분기_인용됨"] = grounded is not None
     result["상권_분기_날조_없음"] = grounded
+    result.update(_store_peak_accuracy(body, metrics))
 
     result["insights"] = insights
     return result
