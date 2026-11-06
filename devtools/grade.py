@@ -970,11 +970,18 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 
     result["기간_날짜_명시"] = not any(_VAGUE_PERIOD.search(t) for t in visible + evidences)
 
-    # 측정값(MEASURE_ONLY). True = 기간 합계인 시간대 금액을 기간 표시 없이 썼다.
+    # 2026-11-06(PR #275): 프롬프트가 "hourlyProfile.amount 를 직접 인용하지 마세요" 를
+    # 명시했다. 그래서 금액 인용 자체가 위반이다 — 기간을 밝혔는지는 보지 않는다.
+    # evidence 는 보지 않는다. 화면에 안 나오므로(2026-10-02 FE 확정) 점주가 하루치로
+    # 오인할 일이 없고, 근거를 적는 칸을 막으면 접지를 확인할 길이 없어진다.
     hourly_amounts = _hourly_amounts(metrics)
-    result["시간대_금액_기간없이_인용됨"] = any(
-        (_numbers_in(text) & hourly_amounts) and not _PERIOD_MARK.search(text) for text in visible
-    )
+    quoted = [text for text in visible if _numbers_in(text) & hourly_amounts]
+    result["시간대_누적금액_직접인용_없음"] = not quoted
+
+    # 측정값(MEASURE_ONLY). 규칙이 들어오기 전에 재던 지표를 그대로 둔다 — 11/4·11/6
+    # 숫자와 이어서 읽으려면 같은 잣대가 필요하다. 위 위반 항목이 이쪽을 포함한다
+    # (기간을 밝혀도 위반이므로 `직접인용_없음` 이 False 인 행의 부분집합이다).
+    result["시간대_금액_기간없이_인용됨"] = any(not _PERIOD_MARK.search(text) for text in quoted)
 
     result["cards"] = cards
     return result
@@ -986,7 +993,9 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 # 그대로 넣으면 상시 0% 가 나온다(#209 리뷰 Important #2, #178 카드_개수_일치 사고와
 # 같은 모양). per_key 표에는 그대로 찍고 전항목에서만 뺀다.
 # 상권_분기_날조_없음은 넣지 않는다 — 인용했는데 값이 틀린 건 진짜 결함이다.
-# 시간대_금액_기간없이_인용됨도 측정값이다 — 이유는 _hourly_amounts 위 주석에 있다.
+# 시간대_금액_기간없이_인용됨도 측정값이다 — 프롬프트가 금액 인용을 금지하기 전(PR #275)
+# 에 재던 잣대라 11/4·11/6 숫자와 이어 읽는 데만 쓴다. 규칙이 생긴 뒤의 위반 항목은
+# 시간대_누적금액_직접인용_없음 이고 그건 전항목에 들어간다.
 # 키가 태어나는 곳에 둔다(원래 devtools/bench.py 에 있었다) — 등록을 잊었는지는
 # tests/test_bench.py 가 grade_insight 결과와 대조해 잡는다.
 MEASURE_ONLY = {
