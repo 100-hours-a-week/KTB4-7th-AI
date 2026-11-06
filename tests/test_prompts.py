@@ -136,7 +136,7 @@ def test_인사이트_프롬프트는_문장마다_근거를_하나씩_붙인다
 def test_프롬프트_버전_상수가_있다():
     """프롬프트 내용을 바꾸면 이 값을 그날 날짜(YYYY-MM-DD)로 올린다. 배포 버전(v1/v2)과
     헷갈리지 않도록 v1/v2 형식은 쓰지 않는다."""
-    assert solution.VERSION == "2026-10-31"
+    assert solution.VERSION == "2026-11-06"
     assert insight.VERSION == "2026-11-03"
 
 
@@ -230,7 +230,32 @@ def test_솔루션_프롬프트는_summaryText_수치_반복을_금지한다():
     prompt = solution.build(METRICS, "2026-09-29", "MON", is_weekend=False)
 
     assert "summaryText 에서 이미 쓴 지표 수치를 title·detailText 에서 또 쓰지 마세요" in prompt
-    assert "근거 수치와 함께 한 문장으로 쓰세요" in prompt
+    assert "근거 지표와 함께 한 문장으로 쓰세요" in prompt
+
+
+def test_솔루션_프롬프트는_시간대_누적_매출_직접_인용을_금지한다():
+    """hourlyProfile.amount 는 분석 기간 누적이라 "오늘 매출" 처럼 읽히면 안 된다(2026-11-06).
+
+    hourlyPeakRatio 가 없을 때도 시각만으로는 설명을 계속할 수 있어야 한다.
+    """
+    prompt = solution.build(assign(METRICS), "2026-08-31", "MON", is_weekend=False)
+
+    assert "하루 매출로 해석하거나 금액을 직접 인용하지 마세요" in prompt
+    assert "hourlyPeakRatio가 없으면 금액 대신" in prompt
+
+
+def test_솔루션_프롬프트는_인력_운영_조언을_금지한다():
+    """직원 수·근무시간·교대 정보가 계약에 없으므로 증원·감축·재배치·교대 변경을
+    제안하면 근거 없는 조언이 된다(2026-11-06, 변경 전 인력_조언_없음 43.2%).
+
+    "인력을 늘리세요" 는 방향성 긍정 예시에서도 빠져야 한다 — 방향만 써도 인력
+    자체를 건드리면 안 된다는 뜻이다.
+    """
+    prompt = solution.build(assign(METRICS), "2026-08-31", "MON", is_weekend=False)
+
+    assert '"인력을 늘리세요"' not in prompt
+    assert "인력·직원의 증원, 감축, 재배치 또는 교대 변경을" in prompt
+    assert "매출이 가장 낮은 시각을 집어" in prompt
 
 
 def test_솔루션_프롬프트는_행동의_얼마나를_금지한다():

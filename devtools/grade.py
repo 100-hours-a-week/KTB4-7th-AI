@@ -122,7 +122,7 @@ def strip_fence(raw: str) -> str:
 # `_store_peak_hour`를 다시 들여오고 매장피크_언급됨·매장피크_정확함·
 # 매장피크_불명확 세 측정값을 추가했다. 프롬프트·focus 배정은 안 바꿔서
 # TARGET_INSIGHT_VERSION 은 그대로다.
-TARGET_SOLUTION_VERSION = "2026-10-31"
+TARGET_SOLUTION_VERSION = "2026-11-06"
 TARGET_INSIGHT_VERSION = "2026-11-03"
 
 # 문장에서 뽑아낼 숫자 (쉼표 제거 후 비교한다)
