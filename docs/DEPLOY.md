@@ -198,9 +198,11 @@ RunPod A40 Pod를 새로 띄울 때(재고 부족으로 다른 Pod를 사는 경
   - Container image `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`, Container disk 50GB,
     HTTP ports `8888`·`8000`, TCP port `22`, Jupyter·SSH 체크 유지
   - 환경변수 `VLLM_API_KEY`(가능하면 RunPod Secret `{{ RUNPOD_SECRET_... }}` 참조 — 환경변수는 암호화되지 않는다)
-  - Start Command — `/start.sh &` 를 빼고 통째로 덮어쓰면 SSH·Jupyter 가 안 뜬다:
+  - Start Command — `/start.sh &` 를 빼고 통째로 덮어쓰면 SSH·Jupyter 가 안 뜬다. 관측
+    수집기(`infra/memme-obs/`, 아래 "관측(Grafana) 설정" 절 참고)도 vLLM과 같은 방식으로
+    같이 curl해서 기동한다 — 수집기 fetch는 실패해도(`|| true`) vLLM 기동을 막지 않는다:
     ```
-    bash -c '/start.sh & sleep 5 && pip install --break-system-packages vllm==0.32.0 && mkdir -p /workspace/infra/vllm && cd /workspace/infra/vllm && for f in serve.sh watchdog.sh; do curl -fsSL https://raw.githubusercontent.com/100-hours-a-week/KTB4-7th-AI/dev/infra/vllm/$f -o "$f" || exit 1; done && chmod +x serve.sh watchdog.sh && exec ./watchdog.sh'
+    bash -c '/start.sh & sleep 5 && pip install --break-system-packages vllm==0.32.0 && mkdir -p /workspace/infra/vllm /workspace/memme-obs && cd /workspace/infra/vllm && for f in serve.sh watchdog.sh; do curl -fsSL https://raw.githubusercontent.com/100-hours-a-week/KTB4-7th-AI/dev/infra/vllm/$f -o "$f" || exit 1; done && chmod +x serve.sh watchdog.sh && cd /workspace/memme-obs && for f in start-observability.sh config.alloy; do curl -fsSL https://raw.githubusercontent.com/100-hours-a-week/KTB4-7th-AI/dev/infra/memme-obs/$f -o "$f" || true; done && chmod +x start-observability.sh && MEMME_OBS_LOG_FILE=/root/vllm_serve.log bash /workspace/memme-obs/start-observability.sh; cd /workspace/infra/vllm && exec ./watchdog.sh'
     ```
     레포가 public 이라 토큰 없이 받는다. `dev` 최신 스크립트를 그대로 받으므로 고정하려면
     URL의 `dev` 를 커밋 SHA 로 바꾼다. Pod 생성 후 약 5분(설치 약 2분 + 모델 로딩 약 3분)에
@@ -217,18 +219,21 @@ RunPod A40 Pod를 새로 띄울 때(재고 부족으로 다른 Pod를 사는 경
   URL, `.../v1` 접미사 필수)·`LLM_MODEL`·`LLM_DISABLE_THINKING`·`LLM_FALLBACK_PROVIDER`·
   `LLM_FALLBACK_MODEL`·`OPENAI_API_KEY`(Pod의 `VLLM_API_KEY`와 동일 값) — 클라우드팀에
   전달 + "이 커밋 SHA 이후 이미지인지" 같이 확인(`docs/STATE.md` 2026-10-20 절 참고)
-- [ ] **관측(Grafana) 설정** (2026-10-22 추가) — RunPod Secrets에 `memme_cf_client_id`·
-  `memme_cf_client_secret` 등록 → Pod Environment Variables에
-  `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`(`{{ RUNPOD_SECRET_... }}` 참조) 추가 →
-  Container Start Command에서 기존 watchdog 실행 앞에
-  `MEMME_OBS_LOG_FILE=/root/vllm_serve.log bash /workspace/memme-obs/start-observability.sh;`
-  한 줄 추가. `RUNPOD_POD_ID`도 같이 넘긴다 — Pod 안에서는 컨테이너 init 환경에 자동으로
-  들어 있지만(`/proc/1/environ`) **SSH 로그인 쉘에는 안 물려받아져서** 수동 실행 시 빠지기
-  쉽다. 빠지면 Grafana에서 `pod_id`가 `unknown`으로 찍혀 Pod를 재생성해도 이전 Pod와
-  구분이 안 된다(클라우드팀 피드백, 2026-10-22). Container Start Command로 자동 기동할
-  때는 컨테이너 환경에서 그대로 읽히므로 문제없다 — SSH 수동 실행에서만 명시적으로
-  `RUNPOD_POD_ID=<pod id>`를 같이 넘기면 된다. 빠뜨리면 새 Pod는 Grafana에 아무것도 안 보인다 — 이번에 처음 그 상태로
-  한동안 운영했었다.
+- [ ] **관측(Grafana) 설정** (2026-10-22 추가, 2026-11-10 Start Command로 자동화) —
+  수집기 파일(`start-observability.sh`·`config.alloy`)은 `infra/memme-obs/`에 커밋돼 있고
+  위 vLLM Start Command가 `infra/vllm/`과 같은 방식으로 같이 curl해서 받는다 — Pod를 새로
+  만들 때마다 수동으로 넣어줄 필요 없다. 남은 수동 단계는 시크릿뿐이다:
+  RunPod Secrets에 CF Access 서비스 토큰 등록(현재 팀 설정은 `CF_ACCESS_CLIENT_ID`·
+  `CF_ACCESS_CLIENT_SECRET`이라는 이름으로 등록돼 있다 — 클라우드팀 원문은
+  `memme_cf_client_id`/`memme_cf_client_secret`을 예시로 들었지만 이름은 자유다) →
+  **Template** Environment Variables에 `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`
+  (등록한 시크릿 이름 그대로 `{{ RUNPOD_SECRET_<이름> }}` 참조) 추가. 둘 중 하나라도 비어 있으면
+  `start-observability.sh`가 수집을 시작하지 않고 조용히 끝난다(vLLM 기동은 안 막음).
+  `RUNPOD_POD_ID`는 Container Start Command로 자동 기동할 때는 컨테이너 환경에 이미
+  들어 있어 따로 안 넘겨도 된다 — **SSH로 수동 실행할 때만** 안 물려받아져서
+  (`/proc/1/environ`에는 있지만 SSH 로그인 쉘엔 없음) `RUNPOD_POD_ID=<pod id>`를 명시로
+  붙여야 한다. 빠뜨리면 Grafana에서 `pod_id`가 `unknown`으로 찍혀 Pod를 재생성해도
+  이전 Pod와 구분이 안 된다(클라우드팀 피드백, 2026-10-22 — 한동안 그 상태로 운영했었다).
 - [ ] 재배포 후 실제 요청으로 확인(`uv run python -m devtools.llm_smoke`) — 설정이 틀려도
   기동은 성공하므로 "떠 있다"와 "제대로 받는다"는 다른 확인이다(위 "주의" 절 참고)
 
