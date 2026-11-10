@@ -154,7 +154,7 @@ def test_날짜가_있거나_이전_기간_비교는_통과한다(text):
 async def test_금액을_어림하면_그_카드를_버린다(monkeypatch):
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards((1, "매출이 3만원인 시간대"), (2, "B"), (3, "C"))
@@ -172,7 +172,7 @@ async def test_금액을_어림하면_그_카드를_버린다(monkeypatch):
 async def test_배율을_쓰면_그_카드를_버린다(monkeypatch):
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards((1, "주말이 평일의 3배인 시간대"), (2, "B"), (3, "C"))
@@ -196,7 +196,7 @@ async def test_뭉뚱그린_조언은_재시도하지_않고_내보낸다(monkey
     """
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         return _cards((1, "마케팅을 강화하세요"), (2, "B"), (3, "C"))
 
@@ -214,7 +214,7 @@ async def test_뭉뚱그린_조언은_재시도하지_않고_내보낸다(monkey
 async def test_날짜_없는_기간표현이면_그_카드를_버린다(monkeypatch):
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards(
@@ -238,7 +238,7 @@ async def test_집계_기간이_요청에_있으면_프롬프트에_전달된다
     """
     prompts = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         prompts.append(user)
         return _cards((1, "A"), (2, "B"), (3, "C"))
 
@@ -289,7 +289,7 @@ async def test_수치가_필드_사이에_중복돼도_재시도하지_않는다
             ensure_ascii=False,
         )
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         return _dup_card()
 
@@ -311,7 +311,7 @@ async def test_두_번_다_위반이면_500_이_아니라_남은_카드가_나�
     """
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         return _cards((1, "매출이 3만원인 시간대"), (2, "B"), (3, "C"))
 
@@ -331,7 +331,7 @@ async def test_남은_카드의_rankNo_는_다시_연속으로_매긴다(monkeyp
     유지한다 — FE 가 번호를 그대로 쓰는지 확인된 바 없다.
     """
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         return _cards((1, "A"), (2, "주말이 평일의 3배"), (3, "C"))
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -345,7 +345,7 @@ async def test_남은_카드의_rankNo_는_다시_연속으로_매긴다(monkeyp
 async def test_세_장_다_위반이면_여전히_500_이다(monkeypatch):
     """한 장도 못 건지면 내보낼 게 없다. 빈 배열을 200 으로 주면 화면이 비는 쪽이 더 나쁘다."""
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         return _cards((1, "3만원"), (2, "5만원"), (3, "7만원"))
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -360,7 +360,7 @@ async def test_재시도가_더_적게_주면_앞의_결과를_유지한다(monk
     """`parsed or cards` 로 두면 2 장을 받아둔 뒤 재시도가 1 장을 주면 더 나쁜 쪽으로 덮어쓴다."""
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards((1, "A"), (2, "B"), (3, "3만원"))
@@ -722,7 +722,7 @@ async def test_틀린_말은_카드를_버려서_막는다(monkeypatch):
     """
     calls = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         calls.append(1)
         if len(calls) == 1:
             return _cards((1, "매출이 3만원인 시간대"), (2, "B"), (3, "C"))
@@ -741,7 +741,7 @@ async def test_전부_차단되면_재시도하고_밋밋한_사유도_피드백
     """
     prompts = []
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000) -> str:
+    async def fake_complete(system: str, user: str, max_tokens: int = 2000, **_) -> str:
         prompts.append(user)
         if len(prompts) == 1:
             return _cards(

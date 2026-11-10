@@ -43,7 +43,9 @@ async def _post(body: dict) -> httpx.Response:
 
 
 def _fake(monkeypatch, raw: str, calls: list | None = None):
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         if calls is not None:
             calls.append(user)
         return raw
@@ -135,7 +137,9 @@ async def test_요청한_개수보다_적게_받으면_재시도해서_채운다
     calls: list = []
     responses = iter([_insights("하나"), _insights("하나", "둘", "셋")])
 
-    async def fake_complete(system: str, user: str, max_tokens: int = 2000, timeout=None) -> str:
+    async def fake_complete(
+        system: str, user: str, max_tokens: int = 2000, timeout=None, **_
+    ) -> str:
         calls.append(user)
         return next(responses)
 

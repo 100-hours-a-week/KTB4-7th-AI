@@ -114,12 +114,18 @@ def load_jobs(dump: dict, limit: int = 0) -> list[tuple[str, dict, list[dict]]]:
     return jobs[:limit] if limit else jobs
 
 
+# Opus 5.5 단가($/MTok). 캐시 쓰기는 입력의 1.25 배다.
+_IN, _OUT, _CACHE_READ = 4.0, 20.0, 0.20
+
+
 async def _judge(client: AsyncAnthropic, model: str, cards: list[dict]):
     response = await client.messages.create(
         model=model,
         max_tokens=2000,
         thinking={"type": "adaptive"},
-        system=SYSTEM,
+        # SYSTEM 712 토큰 > Opus 5.5 최소 단위 512 라 캐시가 걸린다. 90 호출이면 1회
+        # 쓰기 + 89회 읽기로 입력 비용의 대부분이 $0.20/MTok 로 떨어진다.
+        system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
         messages=[
             {
                 "role": "user",
@@ -163,7 +169,7 @@ async def main() -> int:
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     gate = asyncio.Semaphore(_CONCURRENCY)
     verdicts: list[dict] = []
-    tokens = [0, 0]
+    tokens = [0, 0, 0, 0]  # 입력 · 출력 · 캐시 쓰기 · 캐시 읽기
 
     async def run(job):
         name, metrics, cards = job
@@ -175,6 +181,8 @@ async def main() -> int:
                 return
         tokens[0] += usage.input_tokens
         tokens[1] += usage.output_tokens
+        tokens[2] += usage.cache_creation_input_tokens or 0
+        tokens[3] += usage.cache_read_input_tokens or 0
         for item in decided:
             rank = item.get("rankNo") or 0
             verdicts.append(
@@ -193,7 +201,11 @@ async def main() -> int:
         json.dumps(verdicts, ensure_ascii=False, indent=1), encoding="utf-8"
     )
     report(verdicts)
-    print(f"\n입력 {tokens[0]:,} · 출력 {tokens[1]:,} 토큰")
+    plain, out, written, read = tokens
+    cost = (plain * _IN + out * _OUT + written * _IN * 1.25 + read * _CACHE_READ) / 1e6
+    print(f"\n입력 {plain:,} · 출력 {out:,} 토큰")
+    print(f"캐시 쓰기 {written:,} · 읽기 {read:,} 토큰")
+    print(f"비용 ${cost:.2f}")
     print(f"판정 원본: {args.out}")
     return 0
 

@@ -68,6 +68,11 @@ def test_다른_provider면_LLM_BASE_URL_이_있어도_API_키를_요구한다()
 def test_LLM_BASE_URL_이_없으면_API_키를_여전히_요구한다():
     from app.core.config import Settings, missing_required
 
-    s = Settings(llm_provider="openai", openai_api_key="", backend_base_url="http://be:8080")
+    s = Settings(
+        llm_provider="openai",
+        openai_api_key="",
+        llm_base_url=None,  # 이름이 말하는 전제를 테스트가 직접 세운다
+        backend_base_url="http://be:8080",
+    )
 
     assert missing_required(s) == ["OPENAI_API_KEY"]

@@ -51,7 +51,9 @@ def _card(rank=1, title="평일 비피크 프로모션 도입", summary="", deta
     return {
         "rankNo": rank,
         "title": title,
-        "summaryText": summary or "평일 14시 매출이 30,000원으로 하루 중 가장 낮습니다.",
+        # 2026-11-06 PR #275: hourlyProfile.amount 직접 인용이 금지됐다. SOL_METRICS 에는
+        # hourlyPeakRatio 가 없으니 프롬프트가 허용하는 "시각만" 으로 쓴다.
+        "summaryText": summary or "평일 14시가 하루 중 매출이 가장 낮습니다.",
         "detail": None,
         "detailText": detail
         or "14시까지 할인 안내를 띄우세요.\n홀 담당을 늘리세요.\n방문을 늘릴 수 있습니다.",
@@ -82,16 +84,29 @@ def _three_cards(**overrides) -> dict:
         3,
         title="오늘 예상 매출에 맞춘 준비",
         summary="오늘 예상 매출은 1,250,000원입니다.",
-        detail="재료를 그에 맞춰 발주하세요.\n마감 인력을 늘리세요.\n품절을 줄일 수 있습니다.",
+        detail=(
+            "재료를 그에 맞춰 발주하세요.\n"
+            "마감 전에 남은 수량을 확인하세요.\n"
+            "품절을 줄일 수 있습니다."
+        ),
         evidence="오늘 예상 매출은 1,250,000원입니다.",
     )
     return _graded(first, second, third)
 
 
 def test_정상_카드는_모든_항목을_통과한다():
+    """측정값(MEASURE_ONLY)은 뺀다 — 거기선 False 가 정상이다("그 짓을 안 했다").
+
+    2026-11-06: 솔루션에 측정값 키가 처음 생기면서 걸렸다. 그전에는 측정값이
+    인사이트에만 있어서 이 필터가 필요 없었다.
+    """
     result = _three_cards()
 
-    failed = [k for k, v in result.items() if isinstance(v, bool) and not v]
+    failed = [
+        k
+        for k, v in result.items()
+        if isinstance(v, bool) and not v and k not in grade.MEASURE_ONLY
+    ]
     assert failed == [], f"오탐: {failed}"
 
 
@@ -101,7 +116,8 @@ def test_정상_카드는_모든_항목을_통과한다():
 def test_summaryText_수치를_detailText가_다시_쓰면_걸린다():
     """evidence 는 화면에 안 보이니 예외지만, 보이는 세 필드끼리는 겹치면 안 된다."""
     result = _three_cards(
-        detail="14시 매출 30,000원을 올리세요.\n직원을 배치하세요.\n늘릴 수 있습니다."
+        summary="평일 14시 매출이 30,000원으로 하루 중 가장 낮습니다.",
+        detail="14시 매출 30,000원을 올리세요.\n직원을 배치하세요.\n늘릴 수 있습니다.",
     )
 
     assert result["수치_필드간_중복없음"] is False
@@ -109,7 +125,10 @@ def test_summaryText_수치를_detailText가_다시_쓰면_걸린다():
 
 def test_evidence가_summaryText_수치를_반복해도_통과한다():
     """2026-10-02 FE 확정 — evidence 는 솔루션 카드에서 숨긴다."""
-    result = _three_cards(evidence="평일 14시 매출이 30,000원으로 가장 낮습니다.")
+    result = _three_cards(
+        summary="평일 14시 매출이 30,000원으로 하루 중 가장 낮습니다.",
+        evidence="평일 14시 매출이 30,000원으로 가장 낮습니다.",
+    )
 
     assert result["수치_필드간_중복없음"] is True
 
@@ -124,11 +143,23 @@ def test_지표에_없는_수는_실행_지시라_중복으로_보지_않는다(
     assert result["수치_필드간_중복없음"] is True
 
 
-def test_detailText가_세_문장이_아니면_걸린다():
-    """실행 2문장 + 기대효과 1문장 — 2026-10-01 재설계. 이전 판은 두 문장이었다."""
-    result = _three_cards(detail="할인 안내를 띄우세요.\n방문을 늘릴 수 있습니다.")
+def test_detailText가_세_문장을_넘기면_걸린다():
+    """2026-11-03 부터 상한만 본다 — 지표가 한 가지만 말해주는 카드는 짧게 쓴다."""
+    result = _three_cards(
+        detail="할인 안내를 띄우세요.\n직원을 배치하세요.\n재고를 채우세요.\n한 줄 더."
+    )
 
-    assert result["detail_3문장"] is False
+    assert result["detail_최대3문장"] is False
+
+
+@pytest.mark.parametrize(
+    "detail",
+    ["할인 안내를 띄우세요.", "할인 안내를 띄우세요.\n재고를 채우세요."],
+)
+def test_detailText가_세_문장보다_짧아도_통과한다(detail):
+    result = _three_cards(detail=detail)
+
+    assert result["detail_최대3문장"] is True
 
 
 def test_12시간제로_바꿔_쓰면_걸린다():
@@ -145,11 +176,18 @@ def test_배율을_직접_계산하면_걸린다(phrase):
     assert result["배율_없음"] is False
 
 
-def test_기대효과에_수치를_지어내면_걸린다():
-    """마지막 문장은 "~를 늘릴 수 있습니다"처럼 정성적으로만 쓰게 돼 있다."""
+def test_효과를_수치로_약속하면_걸린다():
+    """`기대효과_정성적` 을 지운 자리. 문장 위치를 가리지 않는다 — 실행 문장에 있어도 약속이다."""
     result = _three_cards(detail="할인하세요.\n배치하세요.\n매출이 15% 증가합니다.")
 
-    assert result["기대효과_정성적"] is False
+    assert result["효과_수치_약속_없음"] is False
+
+
+def test_과거_증감을_수치로_쓰는_건_통과한다():
+    """비교 기준이 있으면 사실 진술이다 — 약속과 구분한다."""
+    result = _three_cards(summary="커피 매출이 이전 기간 대비 15% 증가했습니다.")
+
+    assert result["효과_수치_약속_없음"] is True
 
 
 @pytest.mark.parametrize(
@@ -1199,3 +1237,110 @@ def test_judge는_카드가_없는_행을_건너뛴다():
     rows[0] = {"sample": [{"rankNo": 1, "title": "x"}]}
 
     assert len(load_jobs({"solution": rows})) == 1
+
+
+def test_인력을_쓰라는_조언이_걸린다():
+    """지표에 직원 수·근무 시간·교대가 하나도 없다 — 근거 없는 말이고 1인 매장은 못 한다."""
+    result = _three_cards(detail="18시에는 인력을 늘리세요.\n14시에는 직원을 줄여도 됩니다.")
+    assert result["인력_조언_없음"] is False
+
+
+def test_수를_안_말해도_걸린다():
+    """`_FABRICATED_AMOUNT` 는 "직원 2명 추가" 처럼 수를 말할 때만 잡았다."""
+    assert _three_cards(detail="직원 2명을 추가하세요.")["실행수치_날조_없음"] is False
+    assert _three_cards(detail="인력을 집중해 주세요.")["실행수치_날조_없음"] is True
+    assert _three_cards(detail="인력을 집중해 주세요.")["인력_조언_없음"] is False
+
+
+def test_발주_재고_조언은_통과한다():
+    """점주가 혼자 할 수 있는 일이다 — 막으려는 건 사람을 쓰라는 말뿐이다."""
+    result = _three_cards(detail="16시에 원두와 우유 발주를 받아 두세요.\n재고를 먼저 확인하세요.")
+    assert result["인력_조언_없음"] is True
+
+
+# ── 시간대 금액은 기간 합계다(2026-11-05 BE 확인) ─────────────────
+
+
+def test_시간대_금액을_기간_표시_없이_쓰면_측정에_잡힌다():
+    """hourlyProfile.amount 는 분석 기간 합계다 — 점주는 이 숫자를 하루치로 읽는다.
+
+    프롬프트가 금지하기 전(PR #275)에 모델이 실제로 쓰던 모양이다.
+    """
+    쓴_카드 = _three_cards(summary="평일 14시 매출이 30,000원으로 하루 중 가장 낮습니다.")
+    assert 쓴_카드["시간대_금액_기간없이_인용됨"] is True
+
+
+def test_기간을_밝히면_측정에서_빠진다():
+    """합계라고 말하면 틀린 문장이 아니다 — 막으려는 건 하루치처럼 읽히는 쪽이다."""
+    result = _three_cards(summary="분석 기간 동안 평일 14시 매출은 합계 30,000원입니다.")
+
+    assert result["시간대_금액_기간없이_인용됨"] is False
+
+
+def test_금액을_안_쓰고_배수로_말하면_측정에서_빠진다():
+    """프롬프트가 허용하는 대안이다 — hourlyPeakRatio 는 비율이라 기간에 영향받지 않는다."""
+    result = _three_cards(
+        summary="평일 14시가 하루 중 가장 비어 있습니다.",
+        detail="14시까지 재고 점검을 끝내 두세요.\n진열도 이때 바꾸세요.",
+        evidence="평일 lowHour 14시",
+    )
+
+    assert result["시간대_금액_기간없이_인용됨"] is False
+
+
+def test_다른_축에도_있는_금액은_시간대_탓으로_세지_않는다():
+    """같은 값이 salesSummary 에도 있으면 어느 축을 인용한 건지 알 수 없다 — 오탐이 된다."""
+    metrics = {
+        "hourlyProfile": [{"dayType": "WEEKDAY", "hour": 14, "amount": 30000}],
+        "salesSummary": {"netSales": 30000, "vsPrevPeriod": -0.07},
+    }
+
+    assert grade._hourly_amounts(metrics) == set()
+
+
+def test_과거_변화를_약속으로_세지_않는다():
+    """ "디저트는 8% 증가했으나" 는 지표에 있는 사실이다 — 비교 기준 단어가 없어도 약속이 아니다.
+
+    2026-11-06 측정에서 효과_수치_약속_없음 위반 11 건이 전부 이 오탐이었다.
+    """
+    key = "효과_수치_약속_없음"
+    assert _three_cards(summary="디저트는 8% 증가했으나 비중이 낮습니다.")[key]
+    assert _three_cards(summary="커피 비중이 1% 증가한 만큼 원두를 점검하세요.")[key]
+    # 현재·미래형은 그대로 걸린다(위 test_효과를_수치로_약속하면_걸린다 와 같은 규칙).
+    assert _three_cards(detail="할인하세요.\n매출이 15% 증가합니다.")[key] is False
+    assert _three_cards(detail="할인하세요.\n매출을 10% 개선할 수 있습니다.")[key] is False
+
+
+def test_시간대_누적금액을_직접_인용하면_걸린다():
+    """2026-11-06 PR #275 로 프롬프트가 amount 직접 인용을 금지했다 — 기간을 밝혀도 위반이다.
+
+    기간을 밝히든 안 밝히든 위반이다.
+    """
+    쓴_카드 = _three_cards(summary="평일 14시 매출이 30,000원으로 하루 중 가장 낮습니다.")
+    assert 쓴_카드["시간대_누적금액_직접인용_없음"] is False
+    # 기간을 밝혀도 통과하지 않는다. 옛 측정값은 이 경우를 봐주던 잣대다.
+    두기준 = _three_cards(summary="분석 기간 동안 평일 14시 매출은 합계 30,000원입니다.")
+    assert 두기준["시간대_누적금액_직접인용_없음"] is False
+    assert 두기준["시간대_금액_기간없이_인용됨"] is False
+
+
+def test_배수와_시각으로만_말하면_통과한다():
+    """프롬프트가 제시한 대안이다 — hourlyPeakRatio 와 시각은 기간에 영향받지 않는다."""
+    result = _three_cards(
+        summary="평일 14시가 하루 중 가장 비어 있습니다.",
+        detail="14시까지 재고 점검을 끝내 두세요.\n진열도 이때 바꾸세요.",
+        evidence="평일 lowHour 14시",
+    )
+
+    assert result["시간대_누적금액_직접인용_없음"] is True
+
+
+def test_evidence_에만_금액이_있으면_통과한다():
+    """evidence 는 화면에 안 나온다(2026-10-02 FE 확정) — 점주가 오인할 일이 없다."""
+    result = _three_cards(
+        summary="평일 14시가 하루 중 가장 비어 있습니다.",
+        detail="14시까지 재고 점검을 끝내 두세요.",
+        evidence="평일 14시 30,000원, 18시 210,000원",
+    )
+
+    assert result["시간대_누적금액_직접인용_없음"] is True

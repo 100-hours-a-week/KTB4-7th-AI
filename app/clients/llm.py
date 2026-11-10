@@ -1,5 +1,6 @@
 import logging
 import re
+from collections.abc import Sequence
 
 import anthropic
 import httpx
@@ -77,11 +78,20 @@ def _get_google() -> genai.Client:
 
 
 async def _complete_openai_compatible(
-    client: AsyncOpenAI, model: str, system: str, user: str, **extra
+    client: AsyncOpenAI,
+    model: str,
+    system: str,
+    user: str,
+    shots: Sequence[dict[str, str]] = (),
+    **extra,
 ) -> str:
     res = await client.chat.completions.create(
         model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        messages=[
+            {"role": "system", "content": system},
+            *shots,
+            {"role": "user", "content": user},
+        ],
         **extra,
     )
     return res.choices[0].message.content
@@ -266,7 +276,13 @@ async def resolve_primary_or_fallback() -> tuple[str, str, bool]:
 
 
 async def _complete_once(
-    provider: str, model: str, system: str, user: str, max_tokens: int, timeout: float | None
+    provider: str,
+    model: str,
+    system: str,
+    user: str,
+    max_tokens: int,
+    timeout: float | None,
+    shots: Sequence[dict[str, str]] = (),
 ) -> str:
     try:
         if provider == "anthropic":
@@ -274,7 +290,7 @@ async def _complete_once(
                 model=model,
                 max_tokens=max_tokens,
                 system=system,
-                messages=[{"role": "user", "content": user}],
+                messages=[*shots, {"role": "user", "content": user}],
                 **({"timeout": timeout} if timeout else {}),
             )
             return res.content[0].text
@@ -294,17 +310,29 @@ async def _complete_once(
             body = thinking_off_body()
             if body:
                 extra["extra_body"] = body
-            return await _complete_openai_compatible(_get_openai(), model, system, user, **extra)
+            return await _complete_openai_compatible(
+                _get_openai(), model, system, user, shots, **extra
+            )
         if provider == "upstage":
             return await _complete_openai_compatible(
                 _get_upstage(),
                 model,
                 system,
                 user,
+                shots,
                 max_tokens=max_tokens,
                 **({"timeout": timeout} if timeout else {}),
             )
         if provider == "google":
+            if shots:
+                # google 은 contents 가 role/parts 구조라 openai·anthropic 처럼 턴을 그냥
+                # 끼울 수 없다. 운영은 openai(vLLM) + anthropic 폴백이라 안 엮었다.
+                # 조용히 버리면 같은 요청이 provider 에 따라 다른 품질로 나간다.
+                raise ApiError(
+                    502,
+                    "PROVIDER_ERROR",
+                    "google provider 는 few-shot 예시를 아직 지원하지 않는다",
+                )
             config_kwargs: dict[str, object] = {
                 "system_instruction": system,
                 "max_output_tokens": max_tokens,
@@ -361,7 +389,11 @@ def _primary_timeout(timeout: float | None) -> float | None:
 
 
 async def complete(
-    system: str, user: str, max_tokens: int = 2000, timeout: float | None = None
+    system: str,
+    user: str,
+    max_tokens: int = 2000,
+    timeout: float | None = None,
+    shots: Sequence[dict[str, str]] = (),
 ) -> str:
     """단발 생성. 솔루션·인사이트용. 스트리밍이 필요한 챗봇은 별도 경로를 쓴다.
 
@@ -383,7 +415,9 @@ async def complete(
     attempt_timeout = timeout if use_fallback else _primary_timeout(timeout)
 
     try:
-        result = await _complete_once(provider, model, system, user, max_tokens, attempt_timeout)
+        result = await _complete_once(
+            provider, model, system, user, max_tokens, attempt_timeout, shots
+        )
     except ApiError as exc:
         if use_fallback or not settings.llm_fallback_provider or not is_fallback_eligible(exc):
             # 이미 fallback을 쓰고 있었거나(더 넘어갈 데 없음), 기능이 꺼져 있거나,
@@ -399,6 +433,7 @@ async def complete(
             user,
             max_tokens,
             timeout,
+            shots,
         )
 
     if not use_fallback:

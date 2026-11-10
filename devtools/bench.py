@@ -59,7 +59,11 @@ SOLUTION_CASES = [
     (
         "기본",
         {
-            "salesSummary": {"netSales": 1183600, "vsPrevPeriod": -0.12},
+            "salesSummary": {
+                "netSales": 1183600,
+                "vsPrevPeriod": -0.12,
+                "period": "2026-10-14~2026-10-20",
+            },
             "predictedSalesToday": 1250000,
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 14, "amount": 30000},
@@ -75,7 +79,11 @@ SOLUTION_CASES = [
     (
         "시간대격차큼",
         {
-            "salesSummary": {"netSales": 2470300, "vsPrevPeriod": 0.034},
+            "salesSummary": {
+                "netSales": 2470300,
+                "vsPrevPeriod": 0.034,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 9, "amount": 8200},
                 {"dayType": "WEEKDAY", "hour": 12, "amount": 412000},
@@ -94,7 +102,11 @@ SOLUTION_CASES = [
         # 집계를 못 보내는 경우가 계약상 가능한데(2026-09-16) 아직 측정된 적이 없다.
         "시간대없음",
         {
-            "salesSummary": {"netSales": 842000, "vsPrevPeriod": -0.287},
+            "salesSummary": {
+                "netSales": 842000,
+                "vsPrevPeriod": -0.287,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [],
             "categoryBreakdown": [
                 {"name": "커피", "share": 0.71, "vsPrevPeriod": -0.31},
@@ -111,7 +123,11 @@ SOLUTION_CASES = [
         # 1.0 까지 가므로, 다른 축이 조금만 뚜렷해도 밀린다. 그 동작을 숫자로 남긴다.
         "날씨있음",
         {
-            "salesSummary": {"netSales": 1102000, "vsPrevPeriod": -0.04},
+            "salesSummary": {
+                "netSales": 1102000,
+                "vsPrevPeriod": -0.04,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 11, "amount": 88000},
                 {"dayType": "WEEKDAY", "hour": 14, "amount": 72000},
@@ -132,6 +148,42 @@ SOLUTION_CASES = [
                 "precipitationMm": 7.5,
                 "isNotable": True,
             },
+            # 2026-11-04: conditionPatterns 가 케이스 어디에도 없어서 날씨 카드가 항상
+            # "오늘 예보"만 보고 쓰였다 — 같은 동네 모든 카페가 같은 예보를 받으니
+            # 어느 매장에나 통하는 말밖에 못 나온다(judge specific 0/10). 이 매장의 과거
+            # 강수일 실측이 바로 그걸 가르는 입력인데 입력에 없었다.
+            # _condition_score 가 salesSummary.period 를 요구해서 period 도 같이 넣었다.
+            "conditionPatterns": [
+                {
+                    "condition": "RAIN",
+                    "basisWeeks": 12,
+                    "thresholdMm": 1.0,
+                    "sampleDays": 14,
+                    "baselineDays": 46,
+                    "sampleWeekdayRatio": 0.71,
+                    "baselineWeekdayRatio": 0.70,
+                    "avgNetSales": 138200,
+                    "baselineAvgNetSales": 159600,
+                    "menus": [
+                        {
+                            "menuName": "아이스 아메리카노",
+                            "avgQuantity": 12,
+                            "baselineAvgQuantity": 20,
+                            "vsBaseline": -0.40,
+                            "avgSales": 50400,
+                            "baselineAvgSales": 84000,
+                        },
+                        {
+                            "menuName": "핫 아메리카노",
+                            "avgQuantity": 9,
+                            "baselineAvgQuantity": 6,
+                            "vsBaseline": 0.50,
+                            "avgSales": 37800,
+                            "baselineAvgSales": 25200,
+                        },
+                    ],
+                }
+            ],
         },
     ),
     (
@@ -139,7 +191,11 @@ SOLUTION_CASES = [
         # 적혀 있다(app/services/solution_focus.py). 실제로 어떤 카드가 나오는지 본다.
         "메뉴변화큼",
         {
-            "salesSummary": {"netSales": 1980000, "vsPrevPeriod": 0.02},
+            "salesSummary": {
+                "netSales": 1980000,
+                "vsPrevPeriod": 0.02,
+                "period": "2026-10-14~2026-10-20",
+            },
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 10, "amount": 120000},
                 {"dayType": "WEEKDAY", "hour": 13, "amount": 180000},
@@ -170,13 +226,104 @@ SOLUTION_CASES = [
             ],
         },
     ),
+    # 2026-11-06: menuRankings 를 배정하는 케이스가 `메뉴변화큼` 하나뿐이어서 메뉴 축
+    # 판정 표본이 n=15 에서 arm 당 15 장이 최대였다. 11/4 에 V5 예시가 그 축을 60% → 10%
+    # 로 깎은 걸 못 닫고 있던 이유다. 두 개를 더해 45 장으로 만든다.
+    # 값은 예시(devtools/fewshot_shots.py)와 겹치지 않게 둔다 — 겹치면 예시가 답을 흘린다
+    # (같은 날 카테고리 예시에서 실제로 그랬다).
+    (
+        # 1 위가 조금 빠지고 중위권 하나가 크게 뛴다. "둘 중 어느 쪽에 손을 대야 하는가" 를
+        # 가르는 모양 — 11/4 에 V4(메뉴 예시 없음)가 60% 로 잘했고 V5(단일 품목 예시)가
+        # 10% 로 떨어진 그 판단이다.
+        "메뉴신상승",
+        {
+            "salesSummary": {
+                "netSales": 2140000,
+                "vsPrevPeriod": 0.06,
+                "period": "2026-10-14~2026-10-20",
+            },
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 11, "amount": 96000},
+                {"dayType": "WEEKDAY", "hour": 14, "amount": 61000},
+                {"dayType": "WEEKDAY", "hour": 19, "amount": 174000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.47, "vsPrevPeriod": 0.03},
+                {"name": "논커피", "share": 0.31, "vsPrevPeriod": 0.09},
+                {"name": "디저트", "share": 0.22, "vsPrevPeriod": -0.02},
+            ],
+            "menuRankings": [
+                {
+                    "rank": 1,
+                    "menuName": "아이스 라떼",
+                    "menuSales": 3160000,
+                    "quantity": 632,
+                    "ratio": 0.23,
+                    "vsPrevPeriod": -0.05,
+                },
+                {
+                    "rank": 4,
+                    "menuName": "흑임자 라떼",
+                    "menuSales": 1480000,
+                    "quantity": 296,
+                    "ratio": 0.11,
+                    "vsPrevPeriod": 0.78,
+                },
+            ],
+        },
+    ),
+    (
+        # 둘 다 빠지는데 비중이 큰 쪽과 변화율이 큰 쪽이 다르다. 예시가 보여주지 않는
+        # 모양이라 일반화를 본다 — 변화율이 큰 자몽에이드(-61%)에 손대는 게 아니라
+        # 전체에서 더 많이 빠진 카페라떼(비중 19%)가 먼저다.
+        "메뉴동반하락",
+        {
+            "salesSummary": {
+                "netSales": 1620000,
+                "vsPrevPeriod": -0.09,
+                "period": "2026-10-14~2026-10-20",
+            },
+            "hourlyProfile": [
+                {"dayType": "WEEKDAY", "hour": 10, "amount": 52000},
+                {"dayType": "WEEKDAY", "hour": 13, "amount": 148000},
+                {"dayType": "WEEKDAY", "hour": 16, "amount": 71000},
+            ],
+            "categoryBreakdown": [
+                {"name": "커피", "share": 0.58, "vsPrevPeriod": -0.06},
+                {"name": "디저트", "share": 0.24, "vsPrevPeriod": -0.11},
+                {"name": "논커피", "share": 0.18, "vsPrevPeriod": -0.03},
+            ],
+            "menuRankings": [
+                {
+                    "rank": 2,
+                    "menuName": "카페라떼",
+                    "menuSales": 2240000,
+                    "quantity": 448,
+                    "ratio": 0.19,
+                    "vsPrevPeriod": -0.34,
+                },
+                {
+                    "rank": 9,
+                    "menuName": "자몽에이드",
+                    "menuSales": 336000,
+                    "quantity": 56,
+                    "ratio": 0.03,
+                    "vsPrevPeriod": -0.61,
+                },
+            ],
+        },
+    ),
     (
         # 축 다섯이 한꺼번에 경쟁하는, 지금 운영 입력에 가장 가까운 모양이다.
         # businessHours 는 축이 아니라 필터다 — 22 시 마감이라 23 시 행이 시간대 점수·
         # 배수 계산에서 빠져야 한다(#183). 안 빠지면 "18 시가 23 시의 N 배" 가 나온다.
         "전부있음",
         {
-            "salesSummary": {"netSales": 1540000, "vsPrevPeriod": -0.11},
+            "salesSummary": {
+                "netSales": 1540000,
+                "vsPrevPeriod": -0.11,
+                "period": "2026-10-14~2026-10-20",
+            },
             "predictedSalesToday": 1610000,
             "hourlyProfile": [
                 {"dayType": "WEEKDAY", "hour": 8, "amount": 30000},

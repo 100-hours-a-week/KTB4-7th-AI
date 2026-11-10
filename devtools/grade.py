@@ -185,6 +185,34 @@ _VAGUE_ACTION = re.compile(
     r"|(?:추천|이벤트|관리|메뉴|매출|비중|고객층|경험)[^.。\n]{0,10}?"
     r"(?:강화|개선|활성화|제고|증대|도모|최적화|극대화)"
 )
+# 사람을 쓰라는 조언(2026-11-03). 지표에 직원 수·근무 시간·교대가 **하나도 없다** —
+# `Metrics` 에 그런 필드가 없고 BE 도 보내지 않는다. 그러니 "인력을 늘리세요" 는 근거
+# 없는 말이고, 혼자 일하는 매장에는 애초에 할 수 없는 일이다. `_FABRICATED_AMOUNT` 는
+# "직원 2명 추가" 처럼 **수를 말할 때만** 잡아서 수 없는 형태가 전부 통과했다 — 실측에서
+# 카드의 32~42% 가 이 조언을 담고 있었고(네 arm, 334 장), 원인은 프롬프트가
+# `app/prompts/solution.py:190` 에서 "인력을 늘리세요" 를 좋은 표현의 본보기로
+# 보여주고 있던 것이다.
+#
+# "인건비" 는 넣지 않는다 — 순이익 지표(v2)가 들어오면 할 수 있는 말이 된다.
+_STAFFING = re.compile(r"인력|직원|알바|아르바이트|점원|캐시어|교대|근무\s*(?:시간|조|인원)")
+
+
+# "매출이 15% 증가합니다" 처럼 지표에 없는 결과를 수치로 약속하는 문장(2026-11-03).
+# 옛 `기대효과_정성적` 은 이걸 "마지막 문장에 금액·%가 있으면 탈락" 으로 막았다. 마지막
+# 문장이 기대효과라는 전제가 깨지면서(3문장 고정 해제) 그 자리에 해악만 직접 잡는다 —
+# 실행 문장에 있어도 똑같이 약속이고, 이 매장 지표를 인용하는 건 막지 않는다.
+# 2026-11-06: 시제를 안 보고 있었다. "디저트는 8% 증가했으나" 는 지표에 있는 과거 변화인데
+# 비교 기준 단어가 문장에 없으면 약속으로 셌다 — 두 arm 의 위반 전부(J 1건·M 10건)가 이
+# 오탐이었다. 약속은 "증가합니다"·"증가할 수 있습니다" 처럼 현재·미래형이다.
+_RESULT_CLAIM = re.compile(r"\d+\.?\d*\s*%\s*(?:증가|상승|향상|개선|성장)(?!했|한|해)")
+# 과거 사실("이전 기간 대비 64% 늘었습니다")과 구분하는 비교 기준.
+_COMPARISON_BASIS = re.compile(r"이전 기간|지난|전주|전월|대비|보다|에서")
+
+
+def _promises_result(text: str) -> bool:
+    return bool(_RESULT_CLAIM.search(text)) and not _COMPARISON_BASIS.search(text)
+
+
 # 날짜 없이 기간을 가리키는 말. app/services/solution.py::_VAGUE_PERIOD 와 같은 패턴.
 _VAGUE_PERIOD = re.compile(r"(?:현재|이번|해당|지금)\s*기간")
 # weatherContext 는 오늘 예보 스냅샷이라 과거 매출과의 인과를 뒷받침할 지표가 없다
@@ -742,6 +770,34 @@ def _quantity_numbers(metrics) -> set[str]:
     return out
 
 
+# hourlyProfile[].amount 는 분석 기간 동안 그 요일 유형·시간대에 발생한 **합계**다
+# (2026-11-05 BE 확인). 하루치가 아니라서 그대로 인용하면 점주가 읽는 크기가 기간 일수
+# 만큼 커진다 — 운영 데이터(83 일)면 84 배다. 지금은 프롬프트가 이걸 말해주지 않으므로
+# (app/prompts/solution.py 는 제나 영역) 규칙 위반이 아니라 **측정값**으로 둔다. 쓰지
+# 말라고 들은 적 없는 걸 결함으로 세면 전항목(출하 판정)이 틀린 이유로 떨어진다.
+# 프롬프트에 규칙이 들어오면 `_없음` 쪽으로 뒤집고 MEASURE_ONLY 에서 뺀다.
+_PERIOD_MARK = re.compile(
+    r"분석\s*기간|집계\s*기간|기간\s*(?:동안|합계|전체|누적)|누적|\d+\s*일\s*(?:간|동안|치)"
+)
+
+
+def _hourly_amounts(metrics) -> set[str]:
+    """hourlyProfile[].amount 에만 있는 금액.
+
+    다른 축에도 같은 값이 있으면 뺀다 — 그 축을 근거로 쓴 카드를 오탐한다.
+    """
+    if not isinstance(metrics, dict):
+        return set()
+    points = metrics.get("hourlyProfile") or []
+    mine = {
+        str(point["amount"])
+        for point in points
+        if isinstance(point, dict) and isinstance(point.get("amount"), int)
+    }
+    others = {key: value for key, value in metrics.items() if key != "hourlyProfile"}
+    return mine - _metric_numbers(others)
+
+
 # 지표 비율을 백분율로 적을 때 한 자리까지 반올림하는 건 환각이 아니다 — 프롬프트가
 # 0.0885 → 8.85% 로 바꿔 쓰라고 하고, _metric_numbers 가 정수 반올림("9")까지는 이미
 # 허용 집합에 넣는다. 한 자리("8.9")가 비면 반올림을 날조로 오판한다.
@@ -928,8 +984,9 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["detail_1000자"] = all(len(d) <= 1000 for d in details)
     result["evidence_있음"] = all(e.strip() for e in evidences)
 
-    # 실행 방법 두 문장 + 기대효과 한 문장 = 줄바꿈 2개 (2026-10-01 재설계)
-    result["detail_3문장"] = all(d.count("\n") == 2 for d in details)
+    # 세 문장 고정(2026-10-01)은 지표가 한 가지만 말해주는 카드에서 나머지 칸을 메우게
+    # 만들었다. 예시 6장을 세어보니 세 문장을 버는 건 1장이었다(2026-11-03). 상한만 둔다.
+    result["detail_최대3문장"] = all(d.count("\n") <= 2 for d in details)
 
     # summaryText 가 쓴 지표 수치를 title·detailText 가 다시 쓰면 안 된다. evidence 는 예외.
     # 지표에 없는 수(시각·인원·할인율)는 실행 지시라 중복 대상이 아니다.
@@ -960,14 +1017,15 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
     result["evidence_수치_정확"] = not any(_ungrounded(e, metrics) for e in evidences)
     result["detail_수치_정확"] = not any(_ungrounded(d, metrics) for d in details)
 
-    # 기대효과(detailText 마지막 문장)는 정성적으로만 — "매출 15% 증가" 같은 날조 금지
-    # 실행 문장(detailText 앞 두 문장)과 title 만 본다 — 기대효과 문장은 "매출을 늘릴 수
-    # 있습니다" 가 허용이라 같은 잣대로 보면 오탐이 난다.
-    actions = titles + [line for d in details for line in d.split("\n")[:2]]
+    # 2026-11-03 까지는 마지막 문장을 기대효과로 보고 두 검사에서 뺐고(`[:2]`), 그 문장에
+    # 금액·%가 있으면 따로 떨어뜨렸다(`기대효과_정성적`). 기대효과 칸이 의무가 아니게 되면서
+    # 둘 다 근거가 없어졌다 — 마지막 문장도 실행 문장이다. 문장을 가리지 않고 본다.
+    # 공허함을 재는 지표가 가장 공허한 문장을 빼고 세던 문제도 이걸로 없어진다.
+    actions = titles + [line for d in details for line in d.split("\n")]
     result["실행수치_날조_없음"] = not any(_FABRICATED_AMOUNT.search(t) for t in actions)
     result["공허한_조언_없음"] = not any(_VAGUE_ACTION.search(t) for t in actions)
-
-    result["기대효과_정성적"] = not any(_DISPLAY_NUM.search(d.split("\n")[-1]) for d in details)
+    result["효과_수치_약속_없음"] = not any(_promises_result(t) for t in visible)
+    result["인력_조언_없음"] = not any(_STAFFING.search(t) for t in visible)
 
     # 카드끼리 같은 지표를 근거로 쓰면 "서로 다른 지표" 지시 위반이다. 문장이 달라도 중복이다.
     index = _metric_paths(metrics)
@@ -984,6 +1042,19 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 
     result["기간_날짜_명시"] = not any(_VAGUE_PERIOD.search(t) for t in visible + evidences)
 
+    # 2026-11-06(PR #275): 프롬프트가 "hourlyProfile.amount 를 직접 인용하지 마세요" 를
+    # 명시했다. 그래서 금액 인용 자체가 위반이다 — 기간을 밝혔는지는 보지 않는다.
+    # evidence 는 보지 않는다. 화면에 안 나오므로(2026-10-02 FE 확정) 점주가 하루치로
+    # 오인할 일이 없고, 근거를 적는 칸을 막으면 접지를 확인할 길이 없어진다.
+    hourly_amounts = _hourly_amounts(metrics)
+    quoted = [text for text in visible if _numbers_in(text) & hourly_amounts]
+    result["시간대_누적금액_직접인용_없음"] = not quoted
+
+    # 측정값(MEASURE_ONLY). 규칙이 들어오기 전에 재던 지표를 그대로 둔다 — 11/4·11/6
+    # 숫자와 이어서 읽으려면 같은 잣대가 필요하다. 위 위반 항목이 이쪽을 포함한다
+    # (기간을 밝혀도 위반이므로 `직접인용_없음` 이 False 인 행의 부분집합이다).
+    result["시간대_금액_기간없이_인용됨"] = any(not _PERIOD_MARK.search(text) for text in quoted)
+
     result["cards"] = cards
     return result
 
@@ -994,6 +1065,9 @@ def grade_solution(raw: str, metrics: dict, expected_cards: int = MAX_CARDS) -> 
 # 그대로 넣으면 상시 0% 가 나온다(#209 리뷰 Important #2, #178 카드_개수_일치 사고와
 # 같은 모양). per_key 표에는 그대로 찍고 전항목에서만 뺀다.
 # 상권_분기_날조_없음은 넣지 않는다 — 인용했는데 값이 틀린 건 진짜 결함이다.
+# 시간대_금액_기간없이_인용됨도 측정값이다 — 프롬프트가 금액 인용을 금지하기 전(PR #275)
+# 에 재던 잣대라 11/4·11/6 숫자와 이어 읽는 데만 쓴다. 규칙이 생긴 뒤의 위반 항목은
+# 시간대_누적금액_직접인용_없음 이고 그건 전항목에 들어간다.
 # 키가 태어나는 곳에 둔다(원래 devtools/bench.py 에 있었다) — 등록을 잊었는지는
 # tests/test_bench.py 가 grade_insight 결과와 대조해 잡는다.
 #
@@ -1052,6 +1126,7 @@ MEASURE_ONLY = {
     "매장피크_언급됨",
     "매장피크_정확함",
     "매장피크_불명확",
+    "시간대_금액_기간없이_인용됨",
 }
 
 
